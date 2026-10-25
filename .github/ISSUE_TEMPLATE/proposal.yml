@@ -1,0 +1,40 @@
+name: Proposal
+description: An idea, a feature, or a change worth discussing before anyone writes it.
+labels: ["proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the right first step for anything large. An accepted proposal
+        becomes a `ROADMAP.md` item and then a design doc (`docs/README.md`).
+
+        Worth checking before you write: `CLAUDE.md` has a **"Rejected — don't
+        re-propose"** section listing things that were investigated and settled.
+        If your idea is there, new evidence is what reopens it.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The situation you are in, not the solution you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What do you propose?
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: What does it change about who can reach what?
+      description: >-
+        New inputs, new trust boundaries, new ways for a decision to be made.
+        "Nothing" is a fine answer if you can say why.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What else did you consider?
+      description: >-
+        Including "live with it". Knowing which alternatives you rejected, and
+        why, is most of the review.

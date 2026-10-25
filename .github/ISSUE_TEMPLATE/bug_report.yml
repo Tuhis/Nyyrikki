@@ -1,0 +1,38 @@
+name: Bug report
+description: Something behaves differently than it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the bug lets a request through that should have been denied, or
+        leaks a token or session, it is a **vulnerability**: don't file it
+        here. Follow SECURITY.md instead.
+
+        Confirmed, unfixed defects are listed in BUGS.md.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release tag, image tag, or commit.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Include the policy and route involved, and whether an escalation was in play.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs and audit records
+      description: Redact tokens, cookies and session IDs before pasting.
+      render: text
