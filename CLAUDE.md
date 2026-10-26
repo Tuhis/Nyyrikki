@@ -58,7 +58,7 @@ put it in the doc and link to it.
 
 ## Architecture (locked in by R1, 2026-10-26)
 Decisions and their reasons only. The detail, the owner decisions
-(OD1–OD15) and the measurements are in
+(OD1–OD16) and the measurements are in
 [`docs/01`](docs/01-foundations.md). Don't restate more of it here.
 
 - **Go**, floor `go 1.26.0`, one module, two binaries: `nyyrikkid`
@@ -90,8 +90,9 @@ Decisions and their reasons only. The detail, the owner decisions
   apart (D24, OD15).
 - **MCP harnesses sign in through their own OAuth flow, or through a
   repository `.mcp.json` whose `headersHelper` runs
-  `nyyrikki mcp-headers`.** No long-lived token in an environment
-  variable (D25).
+  `nyyrikki mcp-headers`; each `nyyrikki login --mcp` registers its
+  own client, so it is its own agent.** No long-lived token in an
+  environment variable (D25, OD16).
 - **Every call validates the JWT locally, in Nyyrikki's own middleware
   (the go-sdk's takes only `Bearer`); run and elevate also
   introspect.** Keycloak unreachable means deny. A DPoP-bound token is
@@ -126,8 +127,8 @@ of order, however small.
   doesn't answer has denied.
 - **No approval, no request.** Every privileged request is covered either
   by a one-off approval of that exact request, or by a live elevation
-  window for this agent, this human and this target. There is no third
-  path, and no standing allow.
+  window for this agent, this human and this target, presented with its
+  handle. There is no third path, and no standing allow.
 - **The agent is untrusted.** Assume it is already steered by an attacker
   through a poisoned issue, log line or web page. Its requests and its
   stated reasons are input to check, never evidence that an action is

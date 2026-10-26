@@ -32,7 +32,7 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 
 | # | Item | Status |
 |---|------|--------|
-| R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 📝 designing 2026-10-26: [docs/01](docs/01-foundations.md) drafted, OD1–OD15 decided; open: FD1–FD3 (skeleton, gates, measurements) |
+| R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 📝 designing 2026-10-26: [docs/01](docs/01-foundations.md) drafted, OD1–OD16 decided; open: FD1–FD3 (skeleton, gates, measurements) |
 | R2 | [Gateway core: MCP and CLI, identity, targets, one decision point](#r2--gateway-core) | 💡 proposed 2026-10-26 |
 | R3 | [Audit log](#r3--audit-log) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
 | R4 | [Pass-through, identity propagation and credential custody](#r4--pass-through-identity-propagation-and-credential-custody) | 💡 proposed 2026-10-26 |
@@ -146,15 +146,18 @@ a raw API request or a CLI line (R4's doc).
 **Includes**: the elevate operation through MCP and the CLI; elevations
 of at most 30 minutes, on one or more named targets, for one agent and
 human, each with a handle that requests must carry
-([docs/01](docs/01-foundations.md) D24) (R2); the elevation approval message, and ending an elevation
-early from the chat if R5's doc decides approvers can (R5); cutting
+([docs/01](docs/01-foundations.md) D24) (R2); the elevation approval
+message, and ending an elevation early from the chat if R5's doc
+decides approvers can (R5); cutting
 streaming and long-lived requests when an elevation ends (R4).
 
 **Done when**: after one tap, the agent's requests to the named targets
 run without asking again, each one audited. A request after expiry, to
 a target the elevation doesn't name, from another agent, or without the
-elevation's handle goes back to one-off escalation or is denied. An open stream (exec, watch) is cut at
-expiry. Asking for more than 30 minutes gives 30. If R5's doc allows
+elevation's handle goes back to one-off escalation, and one with a
+handle never issued to its agent is denied, as
+[docs/01](docs/01-foundations.md) D24 says. An open stream (exec,
+watch) is cut at expiry. Asking for more than 30 minutes gives 30. If R5's doc allows
 ending early from the chat, that works and ends the elevation at once.
 Each has a test.
 

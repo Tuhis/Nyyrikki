@@ -83,8 +83,13 @@ says so:
   humans' identities and have no other rights.
 - The CLI's client in the authorization server requires DPoP-bound
   tokens (docs/01 D7).
-- Each CLI agent has its own login file, readable by no other agent:
-  whoever can read it is that agent (docs/01 §5.4).
+- Each agent has its own login file (`nyyrikki login`, and separately
+  `nyyrikki login --mcp`), readable by no other agent: whoever can read
+  it is that agent (docs/01 §5.4, D25).
+- An agent's elevation handles are readable by no other agent: its
+  harness transcripts and its stdout (which become pod logs) are not
+  readable by other agents, and `NYYRIKKI_ELEVATION` is never set in a
+  pod spec, ConfigMap or anything else shared (docs/01 D24).
 - Anything that terminates TLS in front of Nyyrikki (an Ingress) logs
   neither the `Authorization` nor the `DPoP` header.
 - The NetworkPolicy shipped with the chart is enforced by the cluster's
@@ -96,12 +101,12 @@ says so:
 
 | # | Invariant | Designed in |
 |---|---|---|
-| INV-01 | No request reaches a target unless a one-off approval of exactly that request, or a live elevation for this agent, human and target, covers it. Listing targets is the only operation that needs neither. | R2 |
+| INV-01 | No request reaches a target unless a one-off approval of exactly that request, or a live elevation for this agent, human and target, carrying its handle (docs/01 D24), covers it. Listing targets is the only operation that needs neither. | R2 |
 | INV-02 | A request is parsed once into a canonical form. The approver is shown that form, the approval binds to it, and exactly that form is forwarded. | R4, R5 |
 | INV-03 | An elevation lasts at most 30 minutes by the server's clock, covers only its named targets, one agent key (docs/01 D8) and one human, and only requests that carry its handle (docs/01 D24). It is never widened. Long-lived requests under it are cut when it ends. | R2, R4 |
 | INV-04 | An approval counts only if it comes from a configured approver's Telegram account, in their private chat with the bot, before it expires, and only once. No MCP tool or CLI command approves, denies or ends anything. | R5 |
 | INV-05 | Requests run on the target as the human the agent is bound to, taken from the human registry, never from anything in the request. | R4 |
-| INV-06 | Only access tokens from the configured issuer, with Nyyrikki as audience, unexpired, for a known human are accepted. Run and elevate also need the session to be live by introspection. No token is passed on to a target. | docs/01 D9, R2 |
+| INV-06 | Only access tokens from the configured issuer, with Nyyrikki as audience, unexpired, for a known human are accepted, and a DPoP-bound or CLI token only with a valid proof (docs/01 D9). Run and elevate also need the session to be live by introspection. No token is passed on to a target. | docs/01 D9, R2 |
 | INV-07 | Any error, timeout or unreachable dependency ends in deny. | every doc |
 | INV-08 | Nyyrikki's own credentials never reach the agent: not in a response, an error, a log or a Telegram message. | R4 |
 | INV-09 | Logs and audit records are treated as readable by the agent: no credential, no secret value, no approval material in them. | docs/01 D16, R3 |
@@ -120,12 +125,15 @@ These kinds of issue are always in scope:
   and what is forwarded, extra requests riding along, redirects to
   another target, or a change between check and forwarding.
 - Using an elevation beyond its scope: on a target it doesn't name, for
-  another agent or human, after it expired or was ended, through a
-  streaming connection that outlives it, or for longer than 30 minutes.
+  another agent or human, without its handle, after it expired or was
+  ended, through a streaming connection that outlives it, or for longer
+  than 30 minutes.
 - Any path where an error, timeout or malformed response leads to allow
   instead of deny.
-- An agent posing as another agent, acting for a human it isn't bound
-  to, or getting Nyyrikki to impersonate a different user on the target.
+- An agent posing as another agent (beyond the accepted case of MCP
+  sessions sharing an agent key, under Accepted risks), acting for a
+  human it isn't bound to, or getting Nyyrikki to impersonate a
+  different user on the target.
 - Temporary credentials that Nyyrikki issued outliving their purpose
   (not revoked after an error, a timeout or a crash) or being wider than
   needed.
@@ -166,6 +174,7 @@ These kinds of issue are always in scope:
   with another agent's client ID. Elevation handles keep such sessions
   from using each other's elevations, but the joining agent's requests
   are shown and audited under the other agent's name (docs/01 OD15).
+  Each `nyyrikki login --mcp` is its own agent (docs/01 OD16).
   CLI sign-ins are separate as long as each login file is private to
   its agent (docs/01 OD14).
 - **One replica.** When Nyyrikki is down, nothing privileged runs.

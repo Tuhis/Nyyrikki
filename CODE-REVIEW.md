@@ -79,8 +79,9 @@ long text).
 
 **An approval is bound to exactly one thing.** A one-off approval names
 the exact request; an elevation names its targets, its agent and human,
-and its expiry, and covers only requests that carry its handle. Each also names the approver it came from. Check all of
-them, and accept a callback once. A replayed, expired, forwarded or
+and its expiry, and covers only requests that carry its handle. Each
+also names the approver it came from. Check all of them, and accept a
+callback once. A replayed, expired, forwarded or
 foreign-chat callback is rejected, with a test for each.
 
 **Secrets never leave their lane.** Nyyrikki's own credentials, the
