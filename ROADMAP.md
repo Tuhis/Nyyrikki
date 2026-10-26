@@ -42,8 +42,126 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 | R8 | [AI risk assessment](#r8--ai-risk-assessment) | ⏸️ deferred 2026-10-26 (owner decision: not in the first version) |
 | R9 | [Optional response redaction](#r9--optional-response-redaction) | ⏸️ deferred 2026-10-26 (owner decision: future, and optional) |
 
-R2–R5 together make the first usable version. Before R5 lands, nothing
-privileged can run, because nothing can be approved.
+## Milestones to the first version
+
+Adopted 2026-10-26 (owner decision). The R items above split the work
+by subsystem. The milestones below cut across them into the order in
+which it gets **built**: each one is a vertical slice that runs end to
+end and can be demonstrated. Implementation follows the milestones,
+one at a time, in order; design docs for a later milestone may be
+written earlier. **M4 done means the first version is done.** A
+milestone's status changes like an R item's: dated, and saying what is
+still open.
+
+The milestones don't replace design docs. Code for a milestone starts
+only once the design docs it draws from have their relevant decisions
+approved and their chunks defined (`docs/README.md`). A milestone's
+"done when" is met by those docs' acceptance criteria, verified,
+including the manual ones. Where a milestone needs only part of an R
+item, the doc's chunks say which part.
+
+| # | Milestone | Draws from | Status |
+|---|---|---|---|
+| M0 | [Decisions locked](#m0--decisions-locked) | R1 | not started 2026-10-26 |
+| M1 | [Walking skeleton that only says no](#m1--walking-skeleton-that-only-says-no) | R2, R3 | not started 2026-10-26 |
+| M2 | [One-off escalation, end to end, on one target](#m2--one-off-escalation-end-to-end-on-one-target) | R2, R4, R5 | not started 2026-10-26 |
+| M3 | [Time-boxed elevation](#m3--time-boxed-elevation) | R2, R4, R5 | not started 2026-10-26 |
+| M4 | [Running against a real target](#m4--running-against-a-real-target) | R6 (minimal) | not started 2026-10-26 |
+
+**Not in the first version**, so no milestone covers it: a second target
+type; temporary credentials issued on targets, unless the first target
+can't impersonate; the operator surface (R7); AI risk assessment (R8);
+response redaction (R9).
+
+### M0 — Decisions locked
+
+**Goal**: nothing in M1–M4 is blocked on an architectural question.
+
+**Includes**: R1's design doc, approved by the owner. It settles the
+language and runtime, the MCP transport and spec revision, how an agent
+authenticates and how it is bound to a human, where Nyyrikki's
+credentials live, the threat model (which fills in `SECURITY.md`), the
+gates and CI, and **the first target type**. Recommendation: Kubernetes.
+Its impersonation is built in, so no credential issuing is needed, and
+most of the facts in `docs/measured.md` and `docs/gotchas.md` are about
+it.
+
+**Done when**: the owner has approved R1's doc, `CLAUDE.md` lists what
+it locked in, and CI runs the gates on an empty skeleton.
+
+### M1 — Walking skeleton that only says no
+
+**Goal**: prove the single decision point and the audit log before
+anything privileged exists.
+
+**Includes**: the Nyyrikki API; the MCP server and the CLI as thin
+clients of it; agent authentication and the agent-to-human binding; the
+target registry; the list-targets operation; and the decision point, at
+this stage with no way to allow anything (R2). The audit log, recording
+every request and every deny (R3).
+
+**Done when**: an agent lists its targets through MCP and through the
+CLI. Every run and every elevation request is denied, through both, and
+each deny is in the audit log with the agent and the human. An
+unauthenticated client, an agent asking for a target it may not use,
+and every dependency failure all end in deny, each with a test.
+
+### M2 — One-off escalation, end to end, on one target
+
+**Goal**: the core of the product. An agent gets one privileged request
+done, approved by a human.
+
+**Includes**: pass-through for the first target: the request form, the
+canonical parse, forwarding exactly the approved form, acting as the
+exact human through impersonation, and returning the response as sent
+(R4). The Telegram bot with one-off approvals: the message shows the
+exact request and who it runs as, the agent's reason is marked as its
+claim, the callback is bound and checked, and timeout means deny (R5).
+The decision point now allows a request covered by a one-off approval
+(R2).
+
+**Done when**: an agent runs, for example, `nyyrikki run prod-k8s --
+delete pod api-7f -n shop`. The approver gets the exact request on
+Telegram. After the tap it runs on the target as the bound human, the
+target's own logs show that human, and the response comes back to the
+agent (on stdout for the CLI). A refusal, no answer, a replayed or
+foreign callback, and a request that differs from what was approved all
+end in deny, each with a test. Every step is audited.
+
+**Open questions it needs answered** (in R2 and R4 docs): whether the
+human an agent works for may approve that agent's requests; whether the
+request is a raw API request or a CLI line.
+
+### M3 — Time-boxed elevation
+
+**Goal**: an agent can do a burst of work without a tap per request.
+
+**Includes**: the elevate operation through MCP and the CLI; elevations
+of at most 30 minutes, on one or more named targets, for one agent and
+human (R2); the elevation approval message, and ending an elevation
+early from the chat (R5); cutting streaming and long-lived requests
+when an elevation ends (R4).
+
+**Done when**: after one tap, the agent's requests to the named targets
+run without asking again, each one audited. A request after expiry, to
+a target the elevation doesn't name, or from another agent goes back to
+one-off escalation or is denied. An open stream (exec, watch) is cut at
+expiry. Asking for more than 30 minutes gives 30. Ending early works
+from the chat. Each has a test.
+
+### M4 — Running against a real target
+
+**Goal**: the owner uses Nyyrikki for real work.
+
+**Includes**: the minimal part of R6: an image and a way to deploy it;
+granting Nyyrikki its rights on the target (for Kubernetes, the right
+to impersonate) and nothing more; provisioning and rotating its
+credentials; enrolling agents and approvers; versioned releases.
+
+**Done when**: Nyyrikki runs in front of a real target, an agent on its
+own machine (holding nothing but its Nyyrikki token) completes real
+tasks through both one-off escalation and an elevation, and the owner
+has run the manual checks from M2 and M3 against that deployment.
 
 ---
 

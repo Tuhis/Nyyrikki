@@ -39,6 +39,7 @@ has one authoritative home. Read it there.
 | You want | Read | Never |
 |---|---|---|
 | Status of every roadmap item | `ROADMAP.md` status table | copy status here |
+| What to build next, and in what order | `ROADMAP.md` milestones (M0–M4) | implement a milestone before the previous one is done |
 | Design and decisions for an item | its `docs/NN-*.md` | summarise it here |
 | How to write a design doc | `docs/README.md` and `docs/TEMPLATE.md` | restate it here |
 | What each design doc covers | `docs/README.md` (the index) | keep a second list |
