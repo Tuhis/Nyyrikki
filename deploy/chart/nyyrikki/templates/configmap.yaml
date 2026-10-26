@@ -1,0 +1,44 @@
+{{- /* The config file of docs/02 §5.6. Paths are fixed by the chart's mounts; no secret is in it (docs/01 D12). */ -}}
+{{- $targets := list -}}
+{{- range .Values.targets -}}
+{{- $k := dict -}}
+{{- if .inCluster -}}{{- $_ := set $k "in_cluster" true -}}
+{{- else -}}
+{{- $_ := set $k "server" (required (printf "targets[%s].server is required" .name) .server) -}}
+{{- $_ := set $k "ca_file" (printf "/etc/nyyrikki/targets/%s/ca.crt" .name) -}}
+{{- $_ := set $k "token_file" (printf "/etc/nyyrikki/targets/%s/token" .name) -}}
+{{- end -}}
+{{- $t := dict "name" .name "description" (.description | default "") "humans" (list $.Values.human.id) "kubernetes" $k -}}
+{{- if .clients }}{{- $_ := set $t "clients" .clients -}}{{- end -}}
+{{- $targets = append $targets $t -}}
+{{- end -}}
+{{- $cfg := dict
+  "server" (dict
+    "canonical_url" (required "canonicalURL is required" .Values.canonicalURL)
+    "listen" ":8443" "health_listen" ":8081"
+    "tls_cert_file" "/etc/nyyrikki/tls/tls.crt" "tls_key_file" "/etc/nyyrikki/tls/tls.key"
+    "state_dir" "/var/lib/nyyrikki" "runtime_dir" "/run/nyyrikki")
+  "auth" (dict
+    "issuer" (required "auth.issuer is required" .Values.auth.issuer)
+    "cli_client_id" .Values.auth.cliClientID "scope" .Values.auth.scope
+    "introspection_client_id" .Values.auth.introspectionClientID
+    "introspection_secret_file" "/etc/nyyrikki/keycloak/client-secret")
+  "approval" (dict "timeout" .Values.approval.timeout)
+  "run" (dict "default_timeout" .Values.run.defaultTimeout "max_timeout" .Values.run.maxTimeout
+    "max_interactive" .Values.run.maxInteractive "max_output" .Values.run.maxOutput)
+  "humans" (list (dict
+    "id" .Values.human.id
+    "subject" (required "human.subject is required" .Values.human.subject)
+    "kubernetes" (dict "user" (required "human.kubernetes.user is required" .Values.human.kubernetes.user) "groups" .Values.human.kubernetes.groups)
+    "telegram_user_id" (required "human.telegramUserID is required" .Values.human.telegramUserID | int64)))
+  "targets" $targets
+  "telegram" (dict "bot_token_file" "/etc/nyyrikki/telegram/bot-token" "api_url" .Values.telegram.apiURL)
+-}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nyyrikki.name" . }}
+  labels: {{- include "nyyrikki.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+{{ toYaml $cfg | indent 4 }}

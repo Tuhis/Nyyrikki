@@ -22,11 +22,18 @@ approve, or one under an elevation you grant, runs with your rights, so
 it can read whatever you can read;
 see [SECURITY.md](SECURITY.md).)
 
-The project is in design. No code has been written yet. What is planned,
-and in what order, is in [ROADMAP.md](ROADMAP.md).
+The first target is Kubernetes. An agent sends a kubectl command line,
+the approver sees that command line, and Nyyrikki runs exactly it as the
+person, through Kubernetes impersonation. Interactive `exec` and `attach`
+work through the CLI.
+
+The server, `nyyrikkid`, runs in Kubernetes from a Helm chart. Agents
+sign in through an OAuth authorization server (Keycloak is the reference).
+Status and plans are in [ROADMAP.md](ROADMAP.md).
 
 ## Documentation
 
+- [docs/setup/](docs/setup/README.md): installing Nyyrikki and signing agents in
 - [ROADMAP.md](ROADMAP.md): what's planned and the status of each item
 - [docs/](docs/README.md): one design doc per roadmap item, and how they are written
 - [CONTRIBUTING.md](CONTRIBUTING.md): how changes are made

@@ -1,0 +1,12 @@
+# Setting up Nyyrikki
+
+In order:
+
+1. [Keycloak](keycloak.md): the realm, the clients and the audience scope.
+2. [Telegram](telegram.md): the bot, and the approver's account.
+3. [Install](install.md): Secrets, values, the chart, remote targets.
+4. [Agents](agents.md): signing agents in through the CLI or an MCP harness.
+
+Before going live, check the deployment requirements in
+[SECURITY.md](../../SECURITY.md#deployment-requirements). Nyyrikki's guarantees
+hold only if they are true.

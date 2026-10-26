@@ -1,0 +1,95 @@
+# Values for the Nyyrikki chart (docs/06). The chart creates no Secret:
+# create the ones named under `secrets` yourself (docs/06 D2).
+
+image:
+  repository: ghcr.io/tuhis/nyyrikki
+  # Defaults to the chart's appVersion. Prefer pinning `digest`.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# Nyyrikki's canonical https URL, as agents reach it (docs/01 D9, D10).
+canonicalURL: ""
+
+auth:
+  issuer: ""                       # e.g. https://keycloak.example.com/realms/nyyrikki
+  cliClientID: nyyrikki-cli
+  scope: nyyrikki                  # the optional scope whose Audience mapper sets aud
+  introspectionClientID: nyyrikki-introspect
+
+approval:
+  timeout: 3m
+
+run:
+  defaultTimeout: 60s
+  maxTimeout: 10m
+  maxInteractive: 30m
+  maxOutput: 1MiB
+
+# The one human of this version (docs/02 D4). They are also the approver.
+human:
+  id: owner
+  subject: ""                      # the token `sub` of the human in the authorization server
+  kubernetes:
+    user: ""                       # the Kubernetes user requests run as (impersonated)
+    groups: []
+  telegramUserID: 0                # send /start to the bot to learn it
+
+# Targets (docs/02 D5, docs/04 D9). A remote target names a Secret in this
+# namespace with keys `ca.crt` and `token` (deploy/remote-target/).
+targets:
+  - name: this-cluster
+    description: The cluster Nyyrikki runs in
+    inCluster: true
+    clients: []
+  # - name: lab
+  #   description: Lab cluster
+  #   server: https://lab.example.com:6443
+  #   secretName: nyyrikki-target-lab
+  #   clients: []
+
+telegram:
+  apiURL: https://api.telegram.org
+
+secrets:
+  tls: nyyrikki-tls                # type kubernetes.io/tls
+  telegram:
+    name: nyyrikki-telegram
+    key: bot-token
+  introspection:
+    name: nyyrikki-keycloak
+    key: client-secret
+
+# Impersonate the human's user and groups, nothing else (docs/06 D3).
+rbac:
+  create: true
+
+networkPolicy:
+  enabled: true
+  # Namespaces allowed to reach :8443; empty means every namespace.
+  ingressNamespaces: []
+  egress:
+    # When true, egress is limited to DNS and the CIDRs below (the
+    # authorization server, Telegram, the API servers).
+    restrict: false
+    cidrs: []
+
+persistence:
+  size: 1Gi
+  storageClass: ""
+
+service:
+  type: ClusterIP
+  port: 8443
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

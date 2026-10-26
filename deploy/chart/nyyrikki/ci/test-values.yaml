@@ -1,0 +1,17 @@
+canonicalURL: https://nyyrikki.example.com
+auth:
+  issuer: https://keycloak.example.com/realms/nyyrikki
+human:
+  subject: 0b0e5f0c-1111-2222-3333-444455556666
+  kubernetes:
+    user: owner@example.com
+    groups: [admins]
+  telegramUserID: 123456789
+targets:
+  - name: this-cluster
+    inCluster: true
+  - name: lab
+    server: https://lab.example.com:6443
+    secretName: nyyrikki-target-lab
+networkPolicy:
+  ingressNamespaces: [agents]

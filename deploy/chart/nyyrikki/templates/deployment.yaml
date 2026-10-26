@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nyyrikki.name" . }}
+  labels: {{- include "nyyrikki.labels" . | nindent 4 }}
+spec:
+  # One replica, never two pods on one database (docs/01 D11).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {{- include "nyyrikki.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "nyyrikki.selector" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      serviceAccountName: {{ include "nyyrikki.name" . }}
+      automountServiceAccountToken: {{ eq (include "nyyrikki.inCluster" .) "true" }}
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nyyrikkid
+          image: {{ include "nyyrikki.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--config", "/etc/nyyrikki/config/config.yaml"]
+          ports:
+            - name: https
+              containerPort: 8443
+            - name: health
+              containerPort: 8081
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          # Credentials are files from Secrets, never env vars (docs/01 D15).
+          volumeMounts:
+            - {name: config, mountPath: /etc/nyyrikki/config, readOnly: true}
+            - {name: tls, mountPath: /etc/nyyrikki/tls, readOnly: true}
+            - {name: telegram, mountPath: /etc/nyyrikki/telegram, readOnly: true}
+            - {name: keycloak, mountPath: /etc/nyyrikki/keycloak, readOnly: true}
+            - {name: state, mountPath: /var/lib/nyyrikki}
+            - {name: runtime, mountPath: /run/nyyrikki}
+            - {name: tmp, mountPath: /tmp}
+            {{- range .Values.targets }}{{ if not .inCluster }}
+            - {name: target-{{ .name }}, mountPath: /etc/nyyrikki/targets/{{ .name }}, readOnly: true}
+            {{- end }}{{ end }}
+      volumes:
+        - name: config
+          configMap: {name: {{ include "nyyrikki.name" . }}}
+        - name: tls
+          secret: {secretName: {{ .Values.secrets.tls }}, defaultMode: 0400}
+        - name: telegram
+          secret:
+            secretName: {{ .Values.secrets.telegram.name }}
+            defaultMode: 0400
+            items: [{key: {{ .Values.secrets.telegram.key }}, path: bot-token}]
+        - name: keycloak
+          secret:
+            secretName: {{ .Values.secrets.introspection.name }}
+            defaultMode: 0400
+            items: [{key: {{ .Values.secrets.introspection.key }}, path: client-secret}]
+        - name: state
+          persistentVolumeClaim: {claimName: {{ include "nyyrikki.name" . }}}
+        # Per-run kubeconfigs live in memory only (docs/04 D9).
+        - name: runtime
+          emptyDir: {medium: Memory, sizeLimit: 16Mi}
+        - name: tmp
+          emptyDir: {medium: Memory, sizeLimit: 16Mi}
+        {{- range .Values.targets }}{{ if not .inCluster }}
+        - name: target-{{ .name }}
+          secret:
+            secretName: {{ required (printf "targets[%s].secretName is required" .name) .secretName }}
+            defaultMode: 0400
+            items: [{key: ca.crt, path: ca.crt}, {key: token, path: token}]
+        {{- end }}{{ end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

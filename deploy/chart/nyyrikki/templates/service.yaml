@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nyyrikki.name" . }}
+  labels: {{- include "nyyrikki.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector: {{- include "nyyrikki.selector" . | nindent 4 }}
+  # Only the HTTPS port; the health port is for the kubelet (docs/01 D10).
+  ports:
+    - name: https
+      port: {{ .Values.service.port }}
+      targetPort: https

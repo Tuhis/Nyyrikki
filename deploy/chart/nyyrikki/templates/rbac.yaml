@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "nyyrikki.name" . }}
+  labels: {{- include "nyyrikki.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+{{- if .Values.rbac.create }}
+---
+# Impersonate the human's user and groups and nothing else (docs/06 D3).
+# An empty resourceNames would mean "any", so the groups rule is left out
+# when there are no groups.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "nyyrikki.name" . }}-impersonate
+  labels: {{- include "nyyrikki.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [users]
+    verbs: [impersonate]
+    resourceNames: [{{ required "human.kubernetes.user is required" .Values.human.kubernetes.user | quote }}]
+  {{- if .Values.human.kubernetes.groups }}
+  - apiGroups: [""]
+    resources: [groups]
+    verbs: [impersonate]
+    resourceNames: {{- toYaml .Values.human.kubernetes.groups | nindent 6 }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "nyyrikki.name" . }}-impersonate
+  labels: {{- include "nyyrikki.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "nyyrikki.name" . }}-impersonate
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "nyyrikki.name" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
