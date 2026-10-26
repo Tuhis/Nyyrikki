@@ -23,12 +23,38 @@ func redactedMarker(v []byte) string {
 func (c *Canonical) redactedArgv() []string {
 	out := make([]string, 0, len(c.argv))
 	out = append(out, c.path...)
+	secretPatch := c.patchesSecret()
 	for _, f := range c.flags {
 		for _, v := range f.values {
-			out = append(out, "--"+f.name+"="+redactFlagValue(f.name, v))
+			if secretPatch && f.name == "patch" {
+				v = redactedMarker([]byte(v))
+			} else {
+				v = redactFlagValue(f.name, v)
+			}
+			out = append(out, "--"+f.name+"="+v)
 		}
 	}
 	return append(out, c.argv[len(out):]...)
+}
+
+// patchesSecret reports whether the command is a patch naming a Secret,
+// whose --patch then carries secret values (docs/04 D14).
+func (c *Canonical) patchesSecret() bool {
+	if len(c.path) != 1 || c.path[0] != "patch" {
+		return false
+	}
+	pos := c.positionals
+	if c.dash >= 0 && c.dash <= len(pos) {
+		pos = pos[:c.dash]
+	}
+	for _, a := range pos {
+		kind, _, _ := strings.Cut(strings.ToLower(a), "/")
+		kind, _, _ = strings.Cut(kind, ".") // secret.v1, secrets.v1.
+		if kind == "secret" || kind == "secrets" {
+			return true
+		}
+	}
+	return false
 }
 
 func redactFlagValue(name, v string) string {

@@ -86,30 +86,33 @@ type cli struct {
 	stdout, stderr io.Writer
 }
 
-// fail prints Nyyrikki's own message, prefixed so it can be told apart from
-// the target's output, and maps it to an exit code.
+// fail prints Nyyrikki's own outcome as the last stderr line,
+// "nyyrikki: error: <code>: <message>" (docs/02 §5.5), and maps it to an
+// exit code.
 func (c *cli) fail(err error) int {
-	fmt.Fprintf(c.stderr, "nyyrikki: %v\n", err)
+	code, exit := codes.Unavailable, exitUnavailable
 	var te *client.ToolError
 	switch {
 	case errors.Is(err, client.ErrNotSignedIn):
-		return exitNotSignedIn
+		code, exit = codes.Unauthenticated, exitNotSignedIn
 	case errors.As(err, &te):
+		code = te.Code
 		switch te.Code {
 		case codes.InvalidRequest:
-			return exitUsage
+			exit = exitUsage
 		case codes.Unauthenticated:
-			return exitNotSignedIn
+			exit = exitNotSignedIn
 		case codes.Expired, codes.Withdrawn:
-			return exitNoAnswer
+			exit = exitNoAnswer
 		case codes.Denied, codes.TargetNotAllowed, codes.HandleUnknown, codes.SessionInactive, codes.IntrospectionFailed:
-			return exitDenied
+			exit = exitDenied
 		}
-		return exitUnavailable
 	case strings.Contains(err.Error(), "401"):
-		return exitNotSignedIn
+		code, exit = codes.Unauthenticated, exitNotSignedIn
 	}
-	return exitUnavailable
+	msg := strings.TrimPrefix(err.Error(), string(code)+": ")
+	fmt.Fprintf(c.stderr, "nyyrikki: error: %s: %s\n", code, msg)
+	return exit
 }
 
 func (c *cli) flags(name string) *flag.FlagSet {

@@ -219,9 +219,10 @@ targets:
 - **§5.4**: bare `rollout` and `set` are refused (they only print help).
 - **D14** also redacts the `last-applied-configuration` annotation of a
   Secret and Secrets inside a `List`. stdin that doesn't decode but
-  mentions "secret" is shown only as its size and hash. Secret values in
-  argv (`patch secret x -p '{"data":…}'`) are not redacted: an open
-  question for the owner (§9).
+  mentions "secret" is shown only as its size and hash. `patch`'s
+  `--patch` is redacted whenever a positional names a Secret
+  (`secret`, `secrets`, `secret/<name>`, `secret.v1`), after review of the
+  docs PR.
 - **`debug --profile`** is refused, because it shares the name of the
   denied global `--profile`. A per-command rule could allow it later.
 - **D7, cut runs**: a cut returns the partial output and `expired`, with

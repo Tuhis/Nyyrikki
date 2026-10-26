@@ -508,3 +508,39 @@ func FuzzParse(f *testing.F) {
 		_ = c.DisplayStdin()
 	})
 }
+
+// TestDisplayRedactsSecretPatch: a patch to a Secret carries its values
+// in --patch, which must not reach Telegram or the audit log (docs/04
+// D14, found in review of the docs PR). Patches to anything else stay
+// visible in full.
+func TestDisplayRedactsSecretPatch(t *testing.T) {
+	const value = "c3VwZXJzZWNyZXQ="
+	for _, args := range [][]string{
+		{"patch", "secret", "db", "-p", `{"data":{"pw":"` + value + `"}}`},
+		{"patch", "secrets", "db", "--type=json", "-p", `[{"op":"replace","path":"/data/pw","value":"` + value + `"}]`},
+		{"patch", "secret/db", "-n", "shop", "--patch", `{"stringData":{"pw":"` + value + `"}}`},
+	} {
+		c, err := Parse(args, nil, false)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		shown := c.DisplayArgv() + " " + strings.Join(c.Audit().Argv, " ")
+		if strings.Contains(shown, value) {
+			t.Errorf("%v: secret value shown: %s", args, shown)
+		}
+		if !strings.Contains(c.DisplayArgv(), "redacted") {
+			t.Errorf("%v: no redaction marker: %s", args, c.DisplayArgv())
+		}
+		// What runs is unchanged.
+		if !strings.Contains(strings.Join(c.Argv(), " "), value) {
+			t.Errorf("%v: the forwarded argv lost the value", args)
+		}
+	}
+	c, err := Parse([]string{"patch", "deployment", "api", "-p", `{"spec":{"replicas":3}}`}, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c.DisplayArgv(), "replicas") {
+		t.Errorf("a non-Secret patch was redacted: %s", c.DisplayArgv())
+	}
+}
