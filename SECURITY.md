@@ -3,7 +3,8 @@
 Nyyrikki is a gateway that forwards AI agents' privileged requests to
 target systems: its whole job is to make sure only requests a human
 approved run, as the right user, with credentials Nyyrikki never hands to
-the agents (see Accepted risks for what an approved request can still read). It holds
+the agents (see Accepted risks for what an approved request, or one under
+an elevation, can still read). It holds
 high-privilege access to every system behind it, which makes it a
 high-value target in its own right. It is maintained by one person,
 on a best-effort basis.
@@ -72,7 +73,8 @@ on purpose.
 
 ### Deployment requirements
 
-Nyyrikki's guarantees hold only if these are true, and its documentation
+Nyyrikki's guarantees hold only if these are true (and see the accepted
+risks of docs/04 OD3 for what the human's own rights expose), and its documentation
 says so:
 
 - Agents can't read Secrets, can't create, change or delete anything in
@@ -115,6 +117,10 @@ says so:
 | INV-09 | Logs and audit records are treated as readable by the agent: no credential, no secret value, no approval material in them. | docs/01 D16, R3 |
 | INV-10 | Every request, decision, approval, elevation and dependency failure is audited. A failed audit write doesn't turn into an allow. | R3 |
 | INV-11 | Nyyrikki listens only on its HTTPS port and its health port, and the health port serves no data. | docs/01 D10, R6 |
+
+INV-01, -02 and -10 stop holding for a target, for as long as a stolen or
+minted credential lives, in the two cases under Accepted risks (docs/04
+OD3). They are what Nyyrikki guarantees for requests that pass through it.
 
 ### In scope
 
@@ -176,12 +182,15 @@ These kinds of issue are always in scope:
   as long as the stolen credential lives:
   - a **target token** (a remote target's, or one minted for Nyyrikki's
     ServiceAccount) gives direct API access that can impersonate the
-    human with no Nyyrikki in the path: INV-01, INV-03 and INV-10 no
-    longer hold for that target;
+    human with no Nyyrikki in the path: INV-01 and INV-10 no longer hold
+    for that target, and the 30-minute bound of INV-03 means nothing
+    there;
   - the **Telegram bot token** lets the agent edit Nyyrikki's pending
     messages, so the approver could see a harmless command while the
-    buttons settle the real request (INV-02), or strip the "End now"
-    button from a live elevation; calling `getUpdates` or setting a
+    buttons settle the real request, or relabel the buttons so that
+    tapping "Deny" approves (the edit returns the buttons' callback data);
+    both break INV-02. It can also strip the "End now" button from a live
+    elevation; calling `getUpdates` or setting a
     webhook with it stops Nyyrikki's poller (fail closed: every
     escalation is denied). A tap still counts only from the approver's
     own chat, once, in time (INV-04 holds);
@@ -194,7 +203,13 @@ These kinds of issue are always in scope:
   `nyyrikki-system` on remote targets); no `nodes/proxy`; no node
   debugging; no privileged or `hostPath` pods anywhere (for example Pod
   Security `restricted` on every namespace the human can write to); no
-  RBAC `bind`, `escalate` or `impersonate`; no admission webhooks. What
+  RBAC `bind`, `escalate` or `impersonate`; no admission webhooks or
+  mutating admission policies; no `persistentvolumes` write (a `hostPath`
+  PV bound to a PVC reaches the node); no CSR approval
+  (`certificatesigningrequests/approval`, `signers` `approve`), which can
+  issue a client certificate for Nyyrikki's ServiceAccount. The list is
+  best effort: a controller the human can feed objects to (GitOps, an
+  operator) acts with its own rights. What
   closes it is running Nyyrikki on a cluster the human doesn't
   administer, with remote targets only.
 - **One approved request, or a request under an elevation, can mint a

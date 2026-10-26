@@ -77,11 +77,14 @@ mounted, `rbac.impersonate` (users, groups), `networkPolicy`, `image`,
   OD3, accepted risk). A human who can reach Nyyrikki's credentials can,
   through one approved request or any request under an elevation, hand
   them to the agent. The setup docs give the rights that narrow it, best
-  effort (SECURITY.md, Accepted risks: no write and no Secret read in
-  Nyyrikki's namespace, no `nodes/proxy`, no node debugging, no
-  privileged or `hostPath` pods, no RBAC `bind`/`escalate`/`impersonate`,
-  no admission webhooks), and the option that closes it: Nyyrikki on a
-  cluster the human doesn't administer.
+  effort (SECURITY.md, Accepted risks, which is the full list: no write
+  and no Secret read in Nyyrikki's namespace, and in the namespace
+  `deploy/remote-target/` creates on remote targets; no `nodes/proxy`,
+  no node debugging, no privileged or `hostPath` pods, no RBAC
+  `bind`/`escalate`/`impersonate`, no admission webhooks or mutating
+  admission policies, no `persistentvolumes` write, no CSR approval),
+  and the option that closes it: Nyyrikki on a cluster the human doesn't
+  administer.
 
 ## 7. Acceptance criteria
 

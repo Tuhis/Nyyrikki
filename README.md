@@ -18,7 +18,8 @@ agent works for, so the target's own logs show that person rather than a
 shared service account. When it needs to, Nyyrikki creates short-lived
 credentials on the target. Those stay inside Nyyrikki, like all the
 others: Nyyrikki never hands a credential to the agent. (A request you
-approve runs with your rights, so it can read whatever you can read;
+approve, or one under an elevation you grant, runs with your rights, so
+it can read whatever you can read;
 see [SECURITY.md](SECURITY.md).)
 
 The project is in design. No code has been written yet. What is planned,

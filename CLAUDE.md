@@ -6,7 +6,8 @@ own, such as `kubectl delete pod`. An agent reaches Nyyrikki through an
 **MCP server** or an equivalent **CLI**: both offer the same operations,
 and the CLI lets an agent pipe output through its shell. Nyyrikki holds high-privilege credentials for the target
 systems, and never hands them to the agent (a request the agent gets
-approved can still read them if the human can: `docs/04` OD3). Where a target supports it,
+approved, or runs under an elevation, can still read them if the human
+can: `docs/04` OD3). Where a target supports it,
 Nyyrikki uses impersonation or delegation so that the target system sees
 the **exact human** the agent acts for, not Nyyrikki. When needed,
 Nyyrikki also creates temporary credentials on a target system. Those
