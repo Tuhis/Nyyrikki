@@ -1,25 +1,37 @@
-# Project: Nyyrikki — AI-native identity-aware proxy
+# Project: Nyyrikki — privilege escalation gateway for AI agents
 
 ## Purpose & Context
-Nyyrikki is an identity-aware proxy (IAP) that gives AI agents
-time-limited, human-approved access to the admin interfaces of self-hosted
-infrastructure: the Kubernetes API, SSH, and admin HTTP APIs such as
-Keycloak's. The agent runs on its own VM without standing admin rights.
+Nyyrikki lets AI agents carry out privileged actions they can't do on their
+own, such as `kubectl delete pod`. An agent connects to Nyyrikki as an
+**MCP server**. Nyyrikki holds high-privilege credentials for the target
+systems, and the agent never sees them. Where a target supports it,
+Nyyrikki uses impersonation or delegation so that the target system sees
+the **exact human** the agent acts for, not Nyyrikki. When needed,
+Nyyrikki also creates temporary credentials on a target system. Those
+stay inside Nyyrikki too.
 
-When it needs more, it asks Nyyrikki for a grant. A human approver
-approves or denies it from Telegram, and the request waits for that
-answer or fails. While the grant lasts, Nyyrikki holds the real
-credentials and mediates every operation, **escalating** the ones policy
-holds back for another tap.
+The agent's requests **pass through** Nyyrikki to the target's own API.
+Nyyrikki doesn't offer one tool per action. Every privileged request
+needs a human's approval on Telegram, given in one of two ways:
 
-The "AI-native" part, a model that reads each operation in context (who,
-what, how unusual) and can escalate it, is R4. Human sign-in through an
-identity provider is deferred (R12). Both scoping decisions are in
-`docs/01` (OD1, OD2).
+- **One-off escalation**: the approver sees that exact request and
+  approves or denies it. The tool call waits for the answer or fails.
+- **Time-boxed elevation**: the approver grants the agent a window of at
+  most 30 minutes on one or more named target systems. Within that
+  window, the agent's requests to those systems run without asking again.
 
-Nyyrikki is a security component. A bug that grants access it shouldn't
+Listing the available target systems needs no approval. Nothing else runs
+without one.
+
+Nyyrikki is a security component. A bug that runs a request it shouldn't
 is the worst outcome, worse than any outage. Rules, reviews and design docs
 follow from that.
+
+Re-planned on 2026-10-26 by owner decision. This replaced the plan
+adapted from the Warden design on 2026-10-25. Nothing had been built, so
+its design docs were removed; they are in git history. See also
+"Explicitly set aside" below. AI assessment of requests is deferred, not
+dropped: it is the last roadmap item, ⏸️ until the owner picks it up.
 
 ## Where the detail lives: read these, don't mirror them here
 This file holds only what a session **cannot** derive from the repo:
@@ -45,11 +57,13 @@ contradicted itself. If you find yourself writing roadmap narrative here,
 put it in the doc and link to it.
 
 ## Architecture (nothing locked in yet)
-No language, framework, deployment shape or identity provider has been
-locked in. Those decisions belong to R1 (`ROADMAP.md`) and its design doc
-`docs/01-foundations.md`, which proposes them. When the owner approves
-R1, record **only the decisions and the reasons for them** here, in the
-shape of a "locked in" list, and link to the doc (docs/01 FN3).
+No language, framework, MCP transport, agent or human identity scheme,
+credential store, impersonation or credential-issuing mechanism,
+pass-through request format, or first target system type has been
+chosen. Those decisions belong to R1
+(`ROADMAP.md`) and its design doc, `docs/01-*.md`. When R1 locks them in,
+record **only the decisions and the reasons for them** here, in the
+shape of a "locked in" list, and link to the doc.
 
 Until then, **do not write application code.** The repository holds
 process and design documents only. A code change without a design doc
@@ -57,24 +71,53 @@ behind it is out of order, however small.
 
 ## Key constraints / principles to respect
 - **Fail closed.** Any error, timeout, unparseable response or unreachable
-  dependency (IdP, policy store, model, Telegram) ends in deny, never allow.
-  "The model didn't answer" is a deny or an escalation, not a pass.
-- **The model advises; policy decides.** What the model may decide on its
-  own, and what always needs a human, is a policy question settled in a
-  design doc. It is never left implicit in a prompt.
-- **The agent VM is untrusted.** Never put an approval surface, the
-  Telegram bot token or a standing credential on it, and never log in to
-  Telegram on anything the agent can control. Any of these lets the agent
-  approve itself (`SECURITY.md`, "the central assumption").
-- **Everything the model reads is untrusted input.** Request paths,
-  headers, bodies and user-supplied fields can carry prompt injection.
-  The same applies to Telegram updates: a callback is not an approval
-  until it is checked against the approver, the request and its expiry.
-- **Every decision is auditable.** Allow, deny and escalation outcomes are
-  recorded with the identity, the request, the reason and who or what
-  decided.
-- **Secrets never reach logs, prompts or Telegram messages.** That covers
-  tokens, cookies, session IDs and authorization headers.
+  dependency (identity, Telegram, credential store, credential issuance,
+  target system, audit sink) ends in deny, never allow. An approver who
+  doesn't answer has denied.
+- **No approval, no request.** Every privileged request is covered either
+  by a one-off approval of that exact request, or by a live elevation
+  window for this agent, this human and this target. There is no third
+  path, and no standing allow.
+- **The agent is untrusted.** Assume it is already steered by an attacker
+  through a poisoned issue, log line or web page. Its requests and its
+  stated reasons are input to check, never evidence that an action is
+  safe.
+- **Approvals come from outside the agent's reach.** Never put an
+  approval surface, the Telegram bot token or any credential on the
+  machine the agent runs on, and never log in to Telegram on anything the
+  agent can control. Any of these lets the agent approve itself. No MCP
+  tool approves, denies or ends anything.
+- **An approval covers exactly what it says.** A one-off approval covers
+  one request, forwarded exactly as the approver saw it. An elevation
+  covers the named targets, for the named agent and human, until its
+  expiry, and never longer than 30 minutes. Neither is widened afterwards.
+- **What the approver sees is the request itself.** The Telegram message
+  shows the request as it will be forwarded, plus the agent's stated
+  reason, clearly marked as the agent's claim. It never shows a
+  paraphrase.
+- **Telegram updates are untrusted.** A callback is not an approval until
+  it is checked against the approver, the request or elevation, and its
+  expiry.
+- **Nyyrikki holds the credentials; the agent never does.** That
+  includes the temporary credentials Nyyrikki creates on target systems.
+  None of them is ever handed to an agent, directly or in a tool result.
+  Issued credentials are scoped as narrowly and live as briefly as works,
+  and they are revoked on every path.
+- **The target sees the real user.** Wherever the target can impersonate
+  or delegate, requests run as the human the agent is bound to. That also
+  caps an elevation's blast radius at that human's own permissions. Who to
+  act as comes from the authenticated binding, never from the agent.
+- **Nyyrikki is the crown jewel.** It holds high-privilege access to
+  everything behind it, so its own compromise is the worst case. Its
+  attack surface, its dependencies and the blast radius of each
+  credential are first-class design concerns, not afterthoughts.
+- **Every decision is auditable.** Every request is recorded with the
+  agent, the human it acts for, the target, the exact request, what
+  covered it (which approval or elevation), and what it did. Requests
+  made under an elevation are recorded one by one, like any others.
+- **Secrets never reach logs, Telegram messages or tool results.** That
+  covers tokens, kubeconfigs, API keys and the contents of secret
+  resources.
 - **Bug fixes are test-first**: write the failing test, watch it fail, then
   fix. See `CODE-REVIEW.md`. Every rule there exists because its absence
   cost a real bug.
@@ -84,16 +127,19 @@ When an approach is investigated and settled against, add it here with
 one line of why and a link to the doc that has the reasoning. Re-deriving
 a settled question costs a whole cycle.
 
+These four were settled on 2026-10-25 under the earlier Warden plan.
+Their reasoning holds for the current plan too, so they stand.
+
 - **Passkey (WebAuthn) approval**, either always or only for high-risk
-  profiles. The owner chose one Telegram tap for every decision, for UX
-  (`docs/01` OD2, 2026-10-25).
+  requests. The owner chose one Telegram tap for every decision, for UX
+  (owner decision, 2026-10-25).
 - **Approval inside the coding tool's UI**, such as a button in the T3
-  Code thread. It renders on the agent VM, which the agent controls
-  (`docs/01` rejected alternatives).
-- **Admin credentials or "checking" wrapper CLIs on the agent VM.** Any
-  process there can read or bypass them (`docs/01`).
+  Code thread. It renders on the agent's machine, which the agent
+  controls.
+- **Admin credentials or "checking" wrapper CLIs on the agent's
+  machine.** Any process there can read or bypass them.
 - **Telegram webhooks.** An inbound endpoint is a second way to inject
-  updates. Long polling only (`docs/04` D2).
+  updates. Long polling only.
 
 ## Conventions
 - **Design doc before code.** Every roadmap item is designed in its own
@@ -104,7 +150,7 @@ a settled question costs a whole cycle.
   verified-by table, and a per-chunk "done when" column. A doc that lists
   proposed changes without them is how a critical review finding gets
   missed: nothing forces the "does this actually reach production?" question.
-- **Chunk prefixes are two letters** from the start (e.g. `PX1`, `TG1`).
+- **Chunk prefixes are two letters** from the start (e.g. `GW1`, `TG1`).
   `gawk` used up single letters A–Z and had to switch mid-way.
 - **Decisions are revised in place with a dated note**, never silently
   rewritten. The doc is a record of what was decided and why.
@@ -120,5 +166,19 @@ a settled question costs a whole cycle.
   `BUGS.md` entries when they are fixed.
 
 ## Explicitly set aside (don't suggest reintroducing without discussion)
-- Human sign-in through OIDC (R12, deferred by `docs/01` OD1).
-- Moderated mode and a live session view (R7, `docs/02` D12).
+- **The Warden-based plan** (2026-10-25): profile-based grants of up to
+  hours, with the agent holding a per-grant token and
+  running unmodified `kubectl` or `ssh` against protocol proxies, and
+  impersonating a fixed per-profile user. Replaced on 2026-10-26 by owner
+  decision with the plan in `ROADMAP.md`: requests passed through via
+  MCP, one-off approvals or elevations of at most 30 minutes, acting as
+  the exact human.
+- **An HTTP identity-aware proxy in front of web services for people in
+  browsers** (OIDC sign-in, sessions, per-route rules). The project's
+  first framing, set aside before the Warden plan.
+- **A fixed catalogue of typed tools, one per action** (e.g. a
+  `delete_pod` tool). Set aside on 2026-10-26 by owner decision in favour
+  of passing the agent's requests through to the target's API.
+- **A model judging each request in the first version.** Deferred on
+  2026-10-26 by owner decision: the first version is a plain escalation
+  gateway. The item is kept in `ROADMAP.md` as ⏸️ deferred.

@@ -7,7 +7,7 @@ Type and scope table: CONTRIBUTING.md.
 ## What and why
 
 <!-- The diff says how. Say what changes, and what made it worth changing.
-Link the design doc and the chunk (e.g. docs/02 PX3). -->
+Link the design doc and the chunk (e.g. docs/02 GW3). -->
 
 ## Verification
 
@@ -19,8 +19,8 @@ and why.
 
 ## Security
 
-<!-- Does this touch the decision path, a trust boundary, the model's input
-or output, Telegram handling, or what gets logged? If so, which failure
+<!-- Does this touch the decision path, a trust boundary, elevations,
+credentials, Telegram handling, or what gets logged? If so, which failure
 cases did you test, and do they deny? If not, say "no decision-path change". -->
 
 ## Checklist

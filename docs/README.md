@@ -17,21 +17,7 @@ Not a design doc, but in this directory:
 
 | Doc | Item |
 |---|---|
-| [01](01-foundations.md) | R1 — Foundations: architecture, threat model, toolchain |
-| [02](02-grant-core.md) | R2 — Grant core: agent identity, grants, policy, one decision point |
-| [03](03-audit-log.md) | R3 — Audit log and session recordings |
-| [04](04-telegram-escalation.md) | R5 — Telegram escalation |
-| [05](05-agent-integration.md) | R8 — Agent integration (`nyyrikki-mcp`) |
-| [06](06-http-proxy.md) | R9 — HTTP admin-API proxy |
-| [07](07-kubernetes-proxy.md) | R10 — Kubernetes API proxy |
-| [08](08-ssh-proxy.md) | R11 — SSH proxy |
-| [09](09-packaging-and-deployment.md) | R6 — Packaging, deployment and operations |
-
-Docs 01–09 were written together on 2026-10-25, when an earlier design
-("Warden") was adapted into this repository. They are numbered in build
-order (see `ROADMAP.md`), so a doc number doesn't always match its `R`
-number. Claimed chunk prefixes: `FN`, `GC`, `AU`, `TG`, `AG`, `HP`, `KP`,
-`SH`, `DP`.
+| — | No design docs yet. R1 will be `01`. |
 
 ## The process
 
@@ -73,8 +59,8 @@ number. Claimed chunk prefixes: `FN`, `GC`, `AU`, `TG`, `AG`, `HP`, `KP`,
 - Every doc defines **explicit acceptance criteria**: a goal → verified-by
   table and a per-chunk "done when" column. A doc that lists proposed
   changes without them is how a critical review finding gets missed.
-- Chunk prefixes are two letters, unique across all docs (e.g. `PX` for the
-  proxy core, `TG` for Telegram). Claim the prefix in the doc's header.
+- Chunk prefixes are two letters, unique across all docs (e.g. `GW` for the
+  gateway core, `TG` for Telegram). Claim the prefix in the doc's header.
 - Decisions are revised in place with a dated note, never silently
   rewritten. Keep the old decision visible when the reasoning matters.
 - Every doc has a **Security considerations** section, even when its

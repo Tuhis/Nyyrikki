@@ -71,9 +71,12 @@ Required, even when the answer is short.
 - New trust boundaries and inputs, who controls each, and where it is
   validated.
 - How each new dependency failure ends in deny.
-- What reaches the model, the audit log and Telegram, and what is
+- What reaches the audit log, Telegram and the agent, and what is
   redacted.
-- New ways to reach an upstream, and how they pass the decision point.
+- New ways for a request to reach a target, and how they pass the
+  decision point.
+- Which identity the action runs as on the target, and which credentials
+  it uses or issues: their scope, their lifetime and how they are revoked.
 
 ## 7. Acceptance criteria
 

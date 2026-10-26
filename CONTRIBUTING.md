@@ -47,19 +47,19 @@ This makes the history readable now and lets release automation
 rewriting anything.
 
 ```
-feat(proxy): deny requests whose session predates the IdP logout
+feat(gateway): deny tool calls from an agent whose binding was revoked
 fix(escalation): reject a Telegram callback after the grant expired
 docs(roadmap): propose R8, per-route approval quorum
-docs(r4): lock OD3, the model never allows admin routes alone
-chore(deps): bump the OIDC client library
+docs(r5): lock OD2, an elevation can be ended early from the chat
+chore(deps): bump the MCP SDK
 ```
 
 `feat` is a minor bump, `fix` a patch, and `!` or `BREAKING CHANGE:` a
 major. `docs`, `chore`, `test`, `refactor` and `ci` release nothing.
 
-Scopes: a component name once components exist (`proxy`, `policy`, `ai`,
-`escalation`, `audit`, `deploy`), a roadmap item for its design doc
-(`r4`), or `roadmap`, `docs` or `deps`.
+Scopes: a component name once components exist (`gateway`, `elevation`,
+`passthrough`, `credentials`, `escalation`, `audit`, `deploy`), a
+roadmap item for its design doc (`r5`), or `roadmap`, `docs` or `deps`.
 
 ## Where things live
 
