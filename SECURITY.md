@@ -83,6 +83,10 @@ says so:
   humans' identities and have no other rights.
 - The CLI's client in the authorization server requires DPoP-bound
   tokens (docs/01 D7).
+- Each CLI agent has its own login file, readable by no other agent:
+  whoever can read it is that agent (docs/01 §5.4).
+- Anything that terminates TLS in front of Nyyrikki (an Ingress) logs
+  neither the `Authorization` nor the `DPoP` header.
 - The NetworkPolicy shipped with the chart is enforced by the cluster's
   network plugin.
 - The approver's Telegram account uses 2-Step Verification and a
@@ -94,7 +98,7 @@ says so:
 |---|---|---|
 | INV-01 | No request reaches a target unless a one-off approval of exactly that request, or a live elevation for this agent, human and target, covers it. Listing targets is the only operation that needs neither. | R2 |
 | INV-02 | A request is parsed once into a canonical form. The approver is shown that form, the approval binds to it, and exactly that form is forwarded. | R4, R5 |
-| INV-03 | An elevation lasts at most 30 minutes by the server's clock, covers only its named targets, one agent (one sign-in) and one human, and is never widened. Long-lived requests under it are cut when it ends. | R2, R4 |
+| INV-03 | An elevation lasts at most 30 minutes by the server's clock, covers only its named targets, one agent key (docs/01 D8) and one human, and only requests that carry its handle (docs/01 D24). It is never widened. Long-lived requests under it are cut when it ends. | R2, R4 |
 | INV-04 | An approval counts only if it comes from a configured approver's Telegram account, in their private chat with the bot, before it expires, and only once. No MCP tool or CLI command approves, denies or ends anything. | R5 |
 | INV-05 | Requests run on the target as the human the agent is bound to, taken from the human registry, never from anything in the request. | R4 |
 | INV-06 | Only access tokens from the configured issuer, with Nyyrikki as audience, unexpired, for a known human are accepted. Run and elevate also need the session to be live by introspection. No token is passed on to a target. | docs/01 D9, R2 |
@@ -155,8 +159,13 @@ These kinds of issue are always in scope:
 - **An agent's displayed name is its own claim.** Agents are told
   apart by their sign-in, not by what they call themselves (docs/01
   D8).
-- **Two MCP sign-ins may be one agent.** Sign-ins of the same MCP
-  client registration in one browser session can share Keycloak's
-  session ID, and then share an elevation. CLI sign-ins are always
-  separate, because each has its own DPoP key (docs/01 OD14).
+- **MCP sessions can share an agent.** Every harness session using one
+  MCP sign-in is the same agent, and two sign-ins of one MCP client
+  registration in one browser session may be too. A steered agent can
+  cause the second case on purpose, by getting the owner to sign in
+  with another agent's client ID. Elevation handles keep such sessions
+  from using each other's elevations, but the joining agent's requests
+  are shown and audited under the other agent's name (docs/01 OD15).
+  CLI sign-ins are separate as long as each login file is private to
+  its agent (docs/01 OD14).
 - **One replica.** When Nyyrikki is down, nothing privileged runs.

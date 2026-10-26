@@ -92,6 +92,23 @@ the doc.
   `{"type":"password","value":"…"}`**, with `value` at the root, so
   redacting only `credentials[].value` leaks it.
   ([docs/03](https://github.com/Tuhis/Nyyrikki/blob/0ea8b56/docs/03-audit-log.md) §5.9)
+- **`sid` is the browser's SSO session, not one sign-in.** Every sign-in
+  in the same browser session shares it, and very likely so does a
+  sign-in that made the user authenticate again (`prompt=login`, or no
+  Cookie authenticator). Keying an agent on it merges sign-ins.
+  ([docs/01](01-foundations.md) OD14)
+
+**MCP**
+
+- **The go-sdk's `auth.RequireBearerToken` accepts only the `Bearer`
+  scheme**, and turns any verifier error that isn't `ErrInvalidToken`
+  into a 500. DPoP-bound tokens need your own middleware.
+  ([docs/01](01-foundations.md) M2)
+- **Claude Code reads credential-like variables as empty in a remote
+  server's `url` and `headers`, and strips variables whose names contain
+  `TOKEN`, `SECRET`, `PASSWORD`, `KEY` or `AUTH` from a project
+  `.mcp.json`'s `headersHelper`.** Name the helper's variables
+  accordingly. ([docs/01](01-foundations.md) M14)
 
 **Tooling and dependencies**
 

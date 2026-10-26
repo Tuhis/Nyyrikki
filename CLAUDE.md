@@ -58,7 +58,7 @@ put it in the doc and link to it.
 
 ## Architecture (locked in by R1, 2026-10-26)
 Decisions and their reasons only. The detail, the owner decisions
-(OD1–OD14) and the measurements are in
+(OD1–OD15) and the measurements are in
 [`docs/01`](docs/01-foundations.md). Don't restate more of it here.
 
 - **Go**, floor `go 1.26.0`, one module, two binaries: `nyyrikkid`
@@ -80,12 +80,23 @@ Decisions and their reasons only. The detail, the owner decisions
 - **Human = token `sub` from the configured issuer, looked up in the
   human registry. Agent = one sign-in: (issuer, `azp`, `cnf.jkt`) for
   the CLI, whose tokens are DPoP-bound to a key made per
-  `nyyrikki login`; (issuer, `azp`, `sid`) for MCP clients.** Keycloak's
-  `sid` is the browser's SSO session, so it alone doesn't separate
-  sign-ins. Nothing the client says identifies it (D7, D8, OD5, OD12,
-  OD14).
-- **Every call validates the JWT locally; run and elevate also
-  introspect.** Keycloak unreachable means deny (D9, OD13).
+  `nyyrikki login`; (issuer, `azp`, `sid`) for MCP clients, which may
+  merge several sign-ins (accepted risk).** Keycloak's `sid` is the
+  browser's SSO session, so it alone doesn't separate sign-ins. Nothing
+  the client says identifies it (D7, D8, OD5, OD12, OD14).
+- **An elevation covers a request only if the request carries its
+  handle**, a secret returned by `elevate`, stored hashed, never logged.
+  This is what keeps the elevations of sessions sharing one agent key
+  apart (D24, OD15).
+- **MCP harnesses sign in through their own OAuth flow, or through a
+  repository `.mcp.json` whose `headersHelper` runs
+  `nyyrikki mcp-headers`.** No long-lived token in an environment
+  variable (D25).
+- **Every call validates the JWT locally, in Nyyrikki's own middleware
+  (the go-sdk's takes only `Bearer`); run and elevate also
+  introspect.** Keycloak unreachable means deny. A DPoP-bound token is
+  never accepted as `Bearer`, and which rule applies is decided by the
+  token's claims, not the client's chosen scheme (D9, OD13).
 - **Listeners: `:8443` HTTPS (`/mcp`, protected-resource metadata), TLS
   terminated in-process; `:8081` health only, no data** (D10).
 - **SQLite (WAL, `modernc.org/sqlite`) on a PVC, one replica,
@@ -134,8 +145,9 @@ of order, however small.
   decision point.
 - **An approval covers exactly what it says.** A one-off approval covers
   one request, forwarded exactly as the approver saw it. An elevation
-  covers the named targets, for the named agent and human, until its
-  expiry, and never longer than 30 minutes. Neither is widened afterwards.
+  covers the named targets, for the named agent and human, and only
+  requests carrying its handle, until its expiry, and never longer than
+  30 minutes. Neither is widened afterwards.
 - **What the approver sees is the request itself.** The Telegram message
   shows the request as it will be forwarded, plus the agent's stated
   reason, clearly marked as the agent's claim. It never shows a
