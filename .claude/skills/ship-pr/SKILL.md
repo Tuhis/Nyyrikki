@@ -80,8 +80,8 @@ then fix it all in one batch, so one push follows one round of findings:
 
 ```sh
 gh pr checks <N>                                          # check states for the head SHA
-gh api repos/{owner}/{repo}/pulls/<N>/comments            # inline review comments
-gh api repos/{owner}/{repo}/issues/<N>/comments           # summary + @claude replies
+gh api --paginate repos/{owner}/{repo}/pulls/<N>/comments   # inline review comments
+gh api --paginate repos/{owner}/{repo}/issues/<N>/comments  # summary + @claude replies
 gh api graphql -f query='query{repository(owner:"Tuhis",name:"Nyyrikki"){pullRequest(number:<N>){
   reviewThreads(first:100){nodes{id isResolved comments(first:20){nodes{author{login} body path line}}}}}}}'
 ```
