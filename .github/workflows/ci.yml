@@ -33,6 +33,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ matrix.go }}
+          # The latest patch, not a cached one: govulncheck flags fixed
+          # standard-library vulnerabilities in older patches (docs/01 D1).
+          check-latest: true
       - name: Build static binaries
         env:
           CGO_ENABLED: "0"
@@ -52,6 +55,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
+          check-latest: true
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: ${{ env.HELM_VERSION }}
