@@ -187,7 +187,7 @@ understanding the agent's intent.
 | INV-07 | Revoke, expiry and release cancel every in-flight request and open connection of the grant within 2 s, and refuse new ones. | docs/02 §5.17, all proxies | docs/02 G10, docs/07 G11, docs/08 G9 |
 | INV-08 | Policy is default-deny. An operation proceeds only if a rule matches with `allow`, or with `confirm` and the hold is approved. | docs/02 §5.8 | docs/02 G7 |
 | INV-09 | Grant credentials are per grant, and stop working the instant the grant leaves `active`. | docs/02 §5.12 | docs/02 G4 |
-| INV-10 | The audit log is append-only and tamper-evident (hash chain plus signed anchors). An audit write that fails never becomes an allow, and access is still removable while audit is down. | docs/03, docs/02 D4 | docs/03 G1, G2, docs/02 G6 |
+| INV-10 | The audit log is append-only and hash-chained. Its signed anchors make it tamper-evident against an attacker on G only once they are copied off G (docs/03 D3). An audit write that fails never becomes an allow, and access is still removable while audit is down. | docs/03, docs/02 D4 | docs/03 G1, G2, docs/02 G6 |
 | INV-11 | No Telegram message or audit event contains a token, credential, cookie, `Authorization` value, unredacted body, decision reference or pairing code. Callback data alone authorizes nothing. | docs/04 §5.7, docs/03 §5.3, §5.9 | docs/04 G8, docs/03 G6 |
 | INV-12 | Target identity is verified, never trusted on first use: pinned SSH host keys or a host CA; TLS against a configured trust store. | docs/06 §5.6, docs/07 §5.12, docs/08 §5.3 | docs/06 G5, docs/07 G10, docs/08 G5 |
 | INV-13 | SSH logins to targets use ephemeral certificates (valid ≤ 3 min) minted per session from G's SSH user CA. | docs/08 §5.9 | docs/08 G4 |

@@ -36,6 +36,10 @@ the doc.
   self-review rules, and `spec.namespace` is required, so a RoleBinding
   in a namespace you didn't ask about is invisible.
   ([docs/07](07-kubernetes-proxy.md) M10, D11)
+- **A RoleBinding can name a ServiceAccount as `kind: User`**, with the
+  username `system:serviceaccount:<ns>:<name>`. An audit that looks only
+  for `kind: ServiceAccount` subjects misses it.
+  ([docs/09](09-packaging-and-deployment.md) §5.4)
 
 **Go: TLS and HTTP**
 

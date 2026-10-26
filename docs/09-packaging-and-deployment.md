@@ -51,7 +51,7 @@ shape:
 | # | Question | Decision |
 |---|---|---|
 | OD1 | Where does G run: which hypervisor and OS? | *Open.* Recommendation: a dedicated small VM (2 vCPU, 2 GiB RAM, 20 GiB disk, encrypted at rest) on a different physical host from A if one is available, and in no cluster it manages. A current Debian stable or Ubuntu LTS. Nothing else runs on it. |
-| OD2 | Where do audit anchors and the audit log go off G (docs/03 §5.5)? | *Open.* Recommendation: object storage with object lock or retention, if the owner has it. Otherwise syslog over TLS to a separate host that G can append to but not delete from. Without either, docs/03 D3 protects only against non-root tampering. |
+| OD2 | Where do audit anchors and the audit log go off G (docs/03 §5.5)? | *Open.* Recommendation: object storage with object lock or retention, if the owner has it. Otherwise syslog over TLS to a separate host that G can append to but not delete from. Without either, the anchors add nothing over file permissions (docs/03 D3). |
 
 ## 4. Decisions
 
@@ -184,13 +184,15 @@ For every target:
 **Kubernetes binding audit.** G's own self-check can't see a RoleBinding
 in a namespace it doesn't query (docs/07 D11). So, once per cluster at
 setup and again after any RBAC change, the operator lists with
-cluster-admin every binding whose subjects include G's identity or a
-group it inherits:
+cluster-admin every binding whose subjects include G's identity, whether
+named as a ServiceAccount or by its username as a `User`, or a group it
+inherits:
 
 ```sh
 kubectl get clusterrolebindings,rolebindings -A -o json | jq -r '
   .items[] | select(any(.subjects[]?;
       (.kind == "ServiceAccount" and .namespace == "nyyrikki-system" and .name == "nyyrikki")
+   or (.kind == "User" and .name == "system:serviceaccount:nyyrikki-system:nyyrikki")
    or (.kind == "Group" and (.name == "system:authenticated"
         or .name == "system:serviceaccounts"
         or .name == "system:serviceaccounts:nyyrikki-system")))) |

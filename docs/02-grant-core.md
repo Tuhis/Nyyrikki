@@ -6,7 +6,7 @@ decisions of its own; [docs/01](01-foundations.md) OD1 and OD2 apply.
 Decisions D1–D18 await the owner's approval. Revised 2026-10-26 after
 review in PR #1: D9 (token minted at delivery, release without token),
 D15 (teardown order matches §5.17), allowances bound to their rule
-(§5.5), shadowed denies fail validation (§5.15.6), what reload
+(§5.5), shadowed denies and holds fail validation (§5.15.6), what reload
 re-resolves (§5.15.7), pending steps on restart (§5.17).
 
 Chunks **GC1–GC8** (`GC` = grant core; unused).
@@ -457,8 +457,12 @@ Edge cases the tests MUST also cover:
 - The `k8s-node-maint` rules with `* secrets → deny` moved after
   `get,list,watch **` fail validation as a shadowed deny (§5.15.6). This
   is the regression vector for the ordering mistake found in review of
-  PR #1. The same rules with `get secrets -n shop app-config → allow`
-  placed first still validate.
+  PR #1. So does `get,list,watch ** -n kube-system → allow` placed
+  before `* secrets → deny`. The same rules with `get secrets -n shop
+  app-config → allow` placed first still validate, because that rule is
+  a subset of the deny.
+- `POST /realms/acme/** → allow` before `POST /realms/acme/users →
+  confirm` fails validation as a shadowed hold.
 
 ### 5.9 The decision point (gate)
 
@@ -728,7 +732,7 @@ clients:
   - id: cl_agent_vm_a
     display_name: agent-vm-a
     enabled: true
-    source_cidrs: ["10.20.0.5/32"]   # required if the client may request an ssh profile
+    source_cidrs: ["10.20.0.5/32"]   # single addresses; required for ssh profiles
 ```
 
 #### 5.15.5 `profiles`
@@ -781,9 +785,11 @@ write empty sections.
   - names are unique and match the §5.2 pattern;
   - every ID in `clients` exists;
   - every client named by a profile with an `ssh` section has
-    `source_cidrs`. The SSH listener has no client certificate, so the
+    `source_cidrs`, and every entry is a single address (`/32` or
+    `/128`). The SSH listener has no client certificate, so the
     per-grant key alone authenticates, and the address is its only
-    binding to A (docs/08 D2, SECURITY.md RR-1);
+    binding to A (docs/08 D2, SECURITY.md RR-1). `0.0.0.0/0` would meet
+    a bare "required" without binding anything;
   - `approvals_required` ≥ 1 and ≤ the number of paired-or-configured
     approvers;
   - `ttl.default` ≤ `ttl.max` ≤ `ttl.max_total` ≤ 24h;
@@ -791,26 +797,35 @@ write empty sections.
   - every cluster, upstream and target referenced exists;
   - every rule parses (§5.8.2);
   - a profile that allows nothing logs a warning.
-- **Shadowed denies**: with first match wins, an earlier `allow` or
-  `confirm` takes precedence over a later `deny` for every operation they
-  both match. G checks each `deny` against the rules before it and fails
-  validation, naming both rules, when an earlier non-deny rule:
-  - shares at least one verb (k8s) or method (http) with it, or is the
-    same SSH request type; and
-  - is at least as broad in every other field. A field is at least as
-    broad when it is equal, a bare wildcard (`**` resource, `*`
-    namespace, name, command or host), omitted (`-n`, name), or a path
-    ending in `/**` whose literal prefix the later path starts with.
+- **Shadowed denies and holds**: with first match wins, an earlier
+  `allow` or `confirm` takes precedence over a later `deny` for every
+  operation they both match, and an earlier `allow` does the same to a
+  later `confirm`. The approver would be shown a deny or a hold that is
+  never enforced. G compares each `deny` with every earlier non-deny
+  rule, and each `confirm` with every earlier `allow`, field by field:
+  - **subset**: the earlier rule's verbs (k8s) or method (http) are
+    among the later rule's, or the same SSH request type, and in every
+    other field the later rule is at least as broad. A field is at
+    least as broad as another when it is equal, a bare wildcard (`*`
+    verbs or method, `**` resource, `*` namespace, name, command or
+    host), omitted (`-n`, name), or a path ending in `/**` whose literal
+    prefix the other path starts with;
+  - **overlap**: the verbs or methods intersect (or the SSH type is the
+    same), and in every other field one side is at least as broad as the
+    other;
+  - **undecided**: a field pair that neither rule covers by the above,
+    because of partial globs or `re:`.
 
-  The approver would otherwise be shown a deny that isn't enforced:
-  `get,list,watch ** → allow` before `* secrets → deny` allows `get
-  secrets`. An earlier
-  rule that is narrower in some field, such as `get secrets -n shop
-  app-config → allow` before `* secrets → deny`, is a deliberate
-  exception and passes. A rule of any action that an earlier rule fully
-  covers logs a warning. This check is a lint, not a proof: overlap
-  through partial globs or `re:` isn't detected, which is why the §5.8.6
-  vectors exist.
+  The earlier rule passes if it is a **subset** of the later one: that
+  is a deliberate carve-out, such as `get secrets -n shop app-config →
+  allow` before `* secrets → deny`. Any other **overlap** fails
+  validation, naming both rules. So `get,list,watch ** → allow` before
+  `* secrets → deny` fails, because it allows `get secrets`. So does
+  `get,list,watch ** -n kube-system → allow` before the same deny:
+  being narrower in one field doesn't make a rule a subset.
+  **Undecided** pairs log a warning. The lint is not a proof, which is
+  why the §5.8.6 vectors
+  exist.
 - **Protocol-specific rules** live in docs/06–08.
 - **Secrets**: a value ending in `_file` is a path, `_env` is an
   environment variable, and `_ref` is a `secret://<name>` reference
@@ -1013,7 +1028,7 @@ admin socket is the exception (§5.14).
 
 | Goal | Verified by |
 |---|---|
-| G1. Config validation rejects every malformed case in §5.15.6, unknown keys and shadowed denies included, and G refuses to start | table-driven test with one fixture per rule (`internal/config`) |
+| G1. Config validation rejects every malformed case in §5.15.6, unknown keys and shadowed denies and holds included, and G refuses to start | table-driven test with one fixture per rule (`internal/config`) |
 | G2. Only enrolled, enabled, in-CIDR clients with an unrevoked certificate connect. A revoked certificate is rejected on a resumed TLS session and on a kept-alive connection (INV-06) | integration tests: revoke mid-connection, then the next request is 401; resume after revoke is rejected |
 | G3. Enrolment tokens are single-use and expire. The key never leaves A (INV-01) | integration test (concurrent double use → one success); a test asserting the server API never accepts a private key |
 | G4. Grant tokens are stored hashed, bound to the client certificate, and unusable after the grant leaves `active` (INV-06, INV-09) | integration tests: wrong client certificate with a valid token → 401; after release, revoke or expiry → 401 |

@@ -5,7 +5,8 @@
 and OD2 (dual control in v1). Decisions D1–D14 await the owner's
 approval. Revised 2026-10-26 after review in PR #1: `409` stops polling
 (§5.1), sibling refs are consumed only on decision prompts (§5.4),
-allowance variants follow the holding rule (§5.5).
+allowance variants follow the holding rule and hidden values are
+flagged (§5.5), ref lifetimes by what the button does (§5.10).
 
 Chunks **TG1–TG5** (`TG` = Telegram; unused).
 
@@ -288,10 +289,8 @@ on]`, and revoking one grant from `/grants` leaves the other grants'
 compare-and-set on its object (docs/02 D3), so a button whose object
 has moved on is a no-op (`already_decided`). When a tap changes what the
 prompt should offer, step 9 edits the keyboard and mints fresh refs only
-for the new buttons, such as `[Step mode: turn off]`. Refs on control
-and list prompts expire when the object they act on ends, rather than
-at the request window: at the grant's `max_total` cap, which no
-extension can pass, or at the end of the mute.
+for the new buttons, such as `[Step mode: turn off]`. How long each ref
+lives is in §5.10.
 
 ### 5.5 Step prompts, allowances and grant controls
 
@@ -314,7 +313,28 @@ are never taken from A.
 |---|---|---|
 | k8s | same verb and resource, same namespace, any name | same verb and resource, any namespace |
 | http | same method, the exact path: the same call again | the pattern of the rule that held the operation, when it differs from the narrow variant |
+
+The wide variant is offered only when the hold came from a `confirm`
+rule, and never when its pattern has verbs or method `*`, a `**`
+resource, or a path ending in `/**`. A hold that came from step mode,
+under an `allow` rule, offers the narrow variant only. Otherwise one tap
+on "allow" would turn step mode off for everything that rule allows: the
+step-mode-off transition, which only the step-off control may perform
+(grant controls, below), arriving through a different button.
 | ssh | none: commands are matched exactly or not at all (guardrail, RR-4) | none |
+
+**When the approver can't see everything**, the step prompt says so on
+a trusted line of its own, before the body:
+
+- `⚠ 3 values hidden by redaction` when docs/03 §5.9 replaced anything;
+- `⚠ body not shown (<content type>, <size>)` when the body was
+  reduced to a digest;
+- `⚠ body truncated` when it was cut to fit (§5.7).
+
+Such a hold offers `[Approve]` and `[Deny]` only, with no allowance
+variants. The approver decides this one operation knowing what they
+can't see, and an operation they couldn't fully read never becomes a
+pattern that skips later holds.
 
 Every allowance is also **bound to the rule that held the operation**
 (docs/02 §5.5): it covers an operation only if that same rule is the
@@ -346,7 +366,7 @@ an `[Unmute]` button.
 
 | Command | Effect |
 |---|---|
-| `/grants` | lists pending and active grants with their expiry, each with a `[Revoke]` or `[Deny]` button, plus `[Revoke all]` |
+| `/grants` | lists pending and active grants with their expiry, each with a `[Revoke]` or `[Deny]` button and, where the profile allows it, `[Step mode: turn off]`; active mutes with `[Unmute]`; and `[Revoke all]`. Every button gets a fresh ref (§5.10). The command alone changes nothing |
 | `/revoke_all` | replies with a `[Revoke all N active grants]` button. The button revokes; the command alone does not |
 | `/help` | the command list |
 | anything else | `/help` text |
@@ -387,7 +407,10 @@ Nothing a secret could be in ever reaches a message:
 - unredacted bodies;
 - the decision refs themselves, which travel only as callback data.
 
-The redaction rules live in docs/03 §5.9 (INV-11).
+The redaction rules live in docs/03 §5.9 (INV-11). Redaction can hide
+the content an approver needs, such as a ConfigMap's `data` or an `env`
+value. A step prompt then says so instead of showing the operation as if
+it were complete (§5.5).
 
 ### 5.8 Failure handling
 
@@ -463,8 +486,16 @@ Sending a prompt goes in this order:
 2. Call `sendMessage`.
 3. Set `message_id` from the response.
 
-A ref expires with its object's decision window. Refs on
-`grant_controls` prompts expire with the grant.
+How long a ref lives depends on what it does:
+
+| Refs | Expire |
+|---|---|
+| Decision prompts: `grant`, `extension`, `step` | at the end of the object's decision window |
+| Controls that remove access: `revoke`, `step_on`, `revoke_all`, and `deny` on a `/grants` list | when the object can no longer change: an active grant's `max_total` cap, which no extension can pass, or a pending grant's request window. `revoke_all`: 24 h, the longest any grant can live (docs/02 §5.15.6) |
+| Controls that add access: `step_off`, `unmute` | `timers.request` (15 min) after they are minted, like a decision (INV-02). After that the button answers "Expired: send /grants for a fresh one" |
+
+So `[Revoke]` keeps working through every extension, and a button that
+adds access is never more than 15 minutes old.
 
 ### 5.11 Configuration
 
@@ -531,7 +562,7 @@ Validation:
 | G9. Telegram unreachable, `429`, `5xx`, `401` or `409`: decisions don't happen, requests and steps expire, and nothing is allowed. `409` stops polling instead of backing off (D11) | one fault-injection test per failure |
 | G10. No text command escalates (D7) | a test that enumerates the command table, plus a test that `/revoke_all` alone revokes nothing |
 | G11. Deny + mute denies new requests for 1 h without prompting. Unmute requires its button | integration test |
-| G12. Allowance buttons create exactly the matcher shown, bound to the holding rule, and nothing broader. An allowance from one rule never skips a hold from another (INV-17) | broker plus Telegram integration test; a two-`confirm`-rule profile where an allowance from the first is presented to the second |
+| G12. Allowance buttons create exactly the matcher shown, bound to the holding rule, and nothing broader. An allowance from one rule never skips a hold from another. A hold from step mode offers no wide variant, and no wide variant has `*` verbs or method, a `**` resource or a `/**` tail. A hold whose values were hidden offers none (INV-17) | broker plus Telegram integration test; a two-`confirm`-rule profile where an allowance from the first is presented to the second; a `step: required` profile with `* /realms/acme/** → allow` |
 | G13. M16 is measured with a real bot on the official Android and iOS clients, and the result is recorded in §2 | manual, by the owner, before TG5 closes |
 
 ## 8. Chunks

@@ -4,7 +4,7 @@
 lives in [`ROADMAP.md`](../ROADMAP.md). There are no open owner
 decisions. Decisions D1–D11 await the owner's approval. Revised 2026-10-26 after
 review in PR #1: D3 (what anchors prove before they leave G) and §5.9
-(root-level `value`, unparseable and large bodies).
+(root-level `value`, JSON Patch, unparseable and large bodies).
 
 Chunks **AU1–AU4** (`AU` = audit; unused).
 
@@ -285,14 +285,26 @@ completely. Anything else is reduced to its digest:
   `"<redacted len=N sha256=8hex>"` (case-insensitive), keeping the keys:
   - `password`, `secret`, `token`, `clientSecret`, `client_secret`,
     `privateKey`, `private_key`, `tls.key`;
+  - `apiKey`, `api_key`, `secretData`, `credentialData`;
   - `value`. That covers Keycloak's `CredentialRepresentation`, which
     `PUT …/users/{id}/reset-password` sends bare, with the new password
     at the root (`{"type":"password","value":"…"}`), as well as
-    `credentials[].value`, Kubernetes `env[].value` and JSON Patch
-    values. Losing a few harmless values (a toleration's, say) is the
-    price of not having to know every API that calls a secret `value`;
-  - `data` and `stringData` (Kubernetes Secrets);
-  - and any key ending in `Token`, `Password` or `Secret`.
+    `credentials[].value` and Kubernetes `env[].value`. Losing a few
+    harmless values (a toleration's, say) is the price of not having to
+    know every API that calls a secret `value`;
+  - `data` and `stringData` (Kubernetes Secrets, and ConfigMaps too);
+  - and any key ending in `Token`, `Password`, `Secret`, `Credential`
+    (Keycloak's LDAP `bindCredential`) or `ApiKey`.
+- **JSON Patch** (`application/json-patch+json`) is the exception to
+  the `value` rule. There, `value` is the content of the change, so
+  hiding it would hide what the approver is approving
+  (`{"op":"replace","path":"…/image","value":"evil:latest"}`). An
+  operation's `value` is replaced only when a segment of its `path` is
+  one of the keys above (`/data/password`, `…/env/3/value`).
+  Otherwise it is kept, and the key rules apply inside it.
+- **What the approver is told**: `Digest` reports how many values were
+  replaced and whether the body was reduced to a digest, so the step
+  prompt can say what is hidden (docs/04 §5.5).
 - **Kubernetes `Secret` objects** keep only their metadata and their key
   names.
 - **Headers** never reach events at all. Each proxy records method, path
@@ -350,7 +362,7 @@ recordings:
 | G3. Back-pressure returns `busy`, and never drops a line | load test with a stalled writer |
 | G4. A PTY session produces a `.cast` that `asciinema play` (both 2.x and 3.x) accepts. Non-PTY exec produces `.jsonl`. SFTP produces `.meta.json` | e2e: replay through both CLI versions in containers |
 | G5. A session whose recording can't be opened is refused. A write error closes the session (D8) | integration test |
-| G6. No event or recording metadata contains any of the planted canary secrets (INV-11) | `internal/redact` table tests, one per content type and rule in §5.9; the canary scan over the full e2e audit output (shared with docs/04 G8). The planted canaries include a Keycloak `reset-password` body, a Kubernetes Secret, a form-encoded `client_secret`, a JSON Patch `value`, an unparseable JSON body and a 2 MiB JSON body with a canary past the first 64 KiB |
+| G6. No event or recording metadata contains any of the planted canary secrets (INV-11) | `internal/redact` table tests, one per content type and rule in §5.9; the canary scan over the full e2e audit output (shared with docs/04 G8). The planted canaries include a Keycloak `reset-password` body, an LDAP `bindCredential`, a Kubernetes Secret, a form-encoded `client_secret`, a JSON Patch `value` under `/data/…` and under `…/env/N/value`, an unparseable JSON body and a 2 MiB JSON body with a canary past the first 64 KiB. A JSON Patch that changes an image keeps the image visible |
 | G7. Retention deletes recordings after the configured age, and never deletes audit lines when the retention is 0 | janitor test with a fake clock |
 | G8. Every key in §5.10 changes behaviour at its call site | one test per knob |
 

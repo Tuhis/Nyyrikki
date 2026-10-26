@@ -107,6 +107,8 @@ past a check that a literal form would fail (M4):
    - is empty (this covers `//` and a trailing `/`);
    - is `.` or `..`, in any encoding: `%2e`, `%2E%2e`, `.%2E`, `%2e.`;
    - contains `/` or `\` (an encoded `%2F` or `%5C`);
+   - is not valid UTF-8, which rejects overlong forms such as `%c0%ae`
+     that some decoders read as `.`;
    - contains a control character (C0 including NUL, C1, or DEL);
    - contains `%` (a raw `%25`). That rejects double encoding such as
      `%252e%252e`, which an upstream that decodes twice would read as
@@ -291,7 +293,7 @@ Validation:
 | Goal | Verified by |
 |---|---|
 | G1. Only configured upstreams in the grant's scope are reachable. No request field changes the scheme, host or port (INV-18) | tests with off-scope names, absolute-form targets, and `Host` header games |
-| G2. Every rejection in §5.2 fires, and the resolved URL never escapes `base_url` (INV-14) | table test of the normalization matrix, which includes `..`, `%2e%2e`, `%2E%2e`, `.%2E`, `%2e.`, `%2e`, `%252e%252e`, `%2F`, `%5C`, `%00` and `//`; the same cases seed the fuzzer, which asserts that no forwarded path contains a `.` or `..` segment |
+| G2. Every rejection in §5.2 fires, and the resolved URL never escapes `base_url` (INV-14) | table test of the normalization matrix, which includes `..`, `%2e%2e`, `%2E%2e`, `.%2E`, `%2e.`, `%2e`, `%252e%252e`, `%c0%ae%c0%ae`, `%2F`, `%5C`, `%00` and `//`, plus `..;x`, which must be forwarded with `;` escaped so a servlet-style upstream can't read it as `..`; the same cases seed the fuzzer, which asserts that no forwarded path contains a `.` or `..` segment |
 | G3. The headers listed in §5.4 never reach the upstream, including when they are named in `Connection` (INV-14, M1) | stub upstream that records the headers it receives |
 | G4. No upstream credential, OAuth2 token or Keycloak secret ever reaches A, in any response, header or error (INV-04) | capture every byte returned to A in the e2e suite and scan for canaries |
 | G5. An upstream with an untrusted certificate fails with no request sent. Disabling verification is rejected at config load (INV-12) | integration test, config test |
