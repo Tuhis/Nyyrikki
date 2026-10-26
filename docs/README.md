@@ -18,7 +18,7 @@ Not a design doc, but in this directory:
 
 | Doc | Item |
 |---|---|
-| — | No design docs yet. R1 will be `01`. |
+| [01](01-foundations.md) | R1 — Foundations: architecture, threat model, toolchain |
 
 The replaced Warden plan (2026-10-25) also had docs numbered 01–09.
 Nothing was built from them, so they were removed and numbering starts
