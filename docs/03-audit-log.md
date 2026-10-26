@@ -4,7 +4,8 @@
 lives in [`ROADMAP.md`](../ROADMAP.md). There are no open owner
 decisions. Decisions D1–D11 await the owner's approval. Revised 2026-10-26 after
 review in PR #1: D3 (what anchors prove before they leave G) and §5.9
-(root-level `value`, JSON Patch, unparseable and large bodies).
+(root-level `value`, JSON Patch, `last-applied-configuration`,
+unparseable and large bodies).
 
 Chunks **AU1–AU4** (`AU` = audit; unused).
 
@@ -306,7 +307,16 @@ completely. Anything else is reduced to its digest:
   replaced and whether the body was reduced to a digest, so the step
   prompt can say what is hidden (docs/04 §5.5).
 - **Kubernetes `Secret` objects** keep only their metadata and their key
-  names.
+  names. The `kubectl.kubernetes.io/last-applied-configuration`
+  annotation is not kept, even though it is metadata (below).
+- **`kubectl.kubernetes.io/last-applied-configuration`**, on any object,
+  is replaced with its digest. Client-side `kubectl apply` and `create
+  --save-config` store the whole object in it as a JSON **string**, with
+  a Secret's `data` and `stringData` and a Deployment's `env` values.
+  Key rules match keys and never look inside strings, so without this
+  rule the annotation would carry those values past every other rule.
+  The same applies when an update sends the annotation in a
+  strategic-merge patch.
 - **Headers** never reach events at all. Each proxy records method, path
   and status only.
 
@@ -362,7 +372,7 @@ recordings:
 | G3. Back-pressure returns `busy`, and never drops a line | load test with a stalled writer |
 | G4. A PTY session produces a `.cast` that `asciinema play` (both 2.x and 3.x) accepts. Non-PTY exec produces `.jsonl`. SFTP produces `.meta.json` | e2e: replay through both CLI versions in containers |
 | G5. A session whose recording can't be opened is refused. A write error closes the session (D8) | integration test |
-| G6. No event or recording metadata contains any of the planted canary secrets (INV-11) | `internal/redact` table tests, one per content type and rule in §5.9; the canary scan over the full e2e audit output (shared with docs/04 G8). The planted canaries include a Keycloak `reset-password` body, an LDAP `bindCredential`, a Kubernetes Secret, a form-encoded `client_secret`, a JSON Patch `value` under `/data/…` and under `…/env/N/value`, an unparseable JSON body and a 2 MiB JSON body with a canary past the first 64 KiB. A JSON Patch that changes an image keeps the image visible |
+| G6. No event or recording metadata contains any of the planted canary secrets (INV-11) | `internal/redact` table tests, one per content type and rule in §5.9; the canary scan over the full e2e audit output (shared with docs/04 G8). The planted canaries include a Keycloak `reset-password` body, an LDAP `bindCredential`, a Kubernetes Secret, the same Secret applied twice with client-side `kubectl apply` (create, then patch, both carrying `last-applied-configuration`), a form-encoded `client_secret`, a JSON Patch `value` under `/data/…` and under `…/env/N/value`, an unparseable JSON body and a 2 MiB JSON body with a canary past the first 64 KiB. A JSON Patch that changes an image keeps the image visible |
 | G7. Retention deletes recordings after the configured age, and never deletes audit lines when the retention is 0 | janitor test with a fake clock |
 | G8. Every key in §5.10 changes behaviour at its call site | one test per knob |
 

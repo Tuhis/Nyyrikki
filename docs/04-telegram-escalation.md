@@ -6,7 +6,8 @@ and OD2 (dual control in v1). Decisions D1–D14 await the owner's
 approval. Revised 2026-10-26 after review in PR #1: `409` stops polling
 (§5.1), sibling refs are consumed only on decision prompts (§5.4),
 allowance variants follow the holding rule and hidden values are
-flagged (§5.5), ref lifetimes by what the button does (§5.10).
+flagged (§5.5), ref lifetimes by what the button does (§5.10), and no
+allowance from a step-mode hold that would cover its whole rule (§5.5).
 
 Chunks **TG1–TG5** (`TG` = Telegram; unused).
 
@@ -299,29 +300,38 @@ A held operation (docs/02 §5.4) produces:
 ```
 ⏸ Hold · k8s-node-maint · gr_01JB…
 create pods/eviction -n shop web-0
-body: Eviction {deleteOptions: {gracePeriodSeconds: 30}}   (redacted digest)
+body: Eviction {deleteOptions: {gracePeriodSeconds: 30}}
 Decide by 13:52 UTC (in 5 min)
 [ Approve ] [ Deny ]
 [ Approve + allow "create pods/eviction -n shop *" 15 min ]
 [ Approve + allow "create pods/eviction -n *" 15 min ]
 ```
 
-The allowance variants are computed by G from the parsed operation. They
+Nothing in this body was redacted, so the prompt has no `⚠` line and
+offers allowance variants (see "When the approver can't see everything",
+below). The variants are computed by G from the parsed operation. They
 are never taken from A.
 
 | Kind | Narrow variant | Wide variant |
 |---|---|---|
 | k8s | same verb and resource, same namespace, any name | same verb and resource, any namespace |
 | http | same method, the exact path: the same call again | the pattern of the rule that held the operation, when it differs from the narrow variant |
+| ssh | none: commands are matched exactly or not at all (guardrail, RR-4) | none |
 
 The wide variant is offered only when the hold came from a `confirm`
 rule, and never when its pattern has verbs or method `*`, a `**`
-resource, or a path ending in `/**`. A hold that came from step mode,
-under an `allow` rule, offers the narrow variant only. Otherwise one tap
-on "allow" would turn step mode off for everything that rule allows: the
-step-mode-off transition, which only the step-off control may perform
-(grant controls, below), arriving through a different button.
-| ssh | none: commands are matched exactly or not at all (guardrail, RR-4) | none |
+resource, a path ending in `/**`, or a `re:` field (a regex can stand
+for any of these).
+
+A hold that came from step mode, under an `allow` rule, offers the
+narrow variant only, and only if it is strictly narrower than that rule:
+a subset of it by the docs/02 §5.15.6 test that isn't also equal to it.
+Under `delete pods -n shop → allow`, the narrow variant `delete pods -n
+shop` (any name) is the whole rule, so no allowance is offered.
+Otherwise one tap on "allow" would turn step mode off for everything the
+rule allows: the step-mode-off transition, which only the step-off
+control may perform (grant controls, below), arriving through a
+different button.
 
 **When the approver can't see everything**, the step prompt says so on
 a trusted line of its own, before the body:
@@ -558,11 +568,11 @@ Validation:
 | G5. A set webhook stops G from starting (D2). A `getMe` username mismatch stops G from starting | startup tests |
 | G6. Pairing accepts only the configured user, in a private chat, with a valid code. Every mismatch burns the code (§5.2) | pairing tests |
 | G7. Untrusted text is escaped and neutralized. It can't create tags, break out of the blockquote, or hide characters. Messages never exceed 4096 characters. Every send sets `protect_content` and disables link previews (INV-15, D8) | golden-file tests of rendered HTML from adversarial inputs; the fake Bot API asserts the send parameters |
-| G8. No message, and no audit event, contains a token, credential, cookie, `Authorization` value, ref or pairing code (INV-11) | a test that scans every fake-Bot-API payload and audit line during the e2e suite for planted canary secrets. The suite holds a Keycloak `reset-password` step, so the step prompt for a password change is scanned too |
+| G8. No message, and no audit event, contains a token, credential, cookie, `Authorization` value, ref or pairing code (INV-11) | a test that scans every fake-Bot-API payload and audit line during the e2e suite for planted canary secrets. The suite holds a Keycloak `reset-password` step and a held client-side `kubectl apply` of a Secret, so those step prompts are scanned too |
 | G9. Telegram unreachable, `429`, `5xx`, `401` or `409`: decisions don't happen, requests and steps expire, and nothing is allowed. `409` stops polling instead of backing off (D11) | one fault-injection test per failure |
 | G10. No text command escalates (D7) | a test that enumerates the command table, plus a test that `/revoke_all` alone revokes nothing |
 | G11. Deny + mute denies new requests for 1 h without prompting. Unmute requires its button | integration test |
-| G12. Allowance buttons create exactly the matcher shown, bound to the holding rule, and nothing broader. An allowance from one rule never skips a hold from another. A hold from step mode offers no wide variant, and no wide variant has `*` verbs or method, a `**` resource or a `/**` tail. A hold whose values were hidden offers none (INV-17) | broker plus Telegram integration test; a two-`confirm`-rule profile where an allowance from the first is presented to the second; a `step: required` profile with `* /realms/acme/** → allow` |
+| G12. Allowance buttons create exactly the matcher shown, bound to the holding rule, and nothing broader. An allowance from one rule never skips a hold from another. A hold from step mode offers no wide variant, and no narrow variant that equals its rule. No wide variant has `*` verbs or method, a `**` resource, a `/**` tail or a `re:` field. A hold whose values were hidden offers none (INV-17) | broker plus Telegram integration test; a two-`confirm`-rule profile where an allowance from the first is presented to the second; a `step: required` profile with `* /realms/acme/** → allow`, and one with `delete pods -n shop → allow` |
 | G13. M16 is measured with a real bot on the official Android and iOS clients, and the result is recorded in §2 | manual, by the owner, before TG5 closes |
 
 ## 8. Chunks

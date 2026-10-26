@@ -463,6 +463,8 @@ Edge cases the tests MUST also cover:
   a subset of the deny.
 - `POST /realms/acme/** → allow` before `POST /realms/acme/users →
   confirm` fails validation as a shadowed hold.
+- `get,list,watch re:.* → allow` before `* secrets → deny` fails
+  validation as an undecided pair.
 
 ### 5.9 The decision point (gate)
 
@@ -823,7 +825,11 @@ write empty sections.
   `* secrets → deny` fails, because it allows `get secrets`. So does
   `get,list,watch ** -n kube-system → allow` before the same deny:
   being narrower in one field doesn't make a rule a subset.
-  **Undecided** pairs log a warning. The lint is not a proof, which is
+  **Undecided** pairs fail validation too, because a partial glob or a
+  `re:` is otherwise an easy way past the check (`get,list,watch re:.*
+  → allow` before `* secrets → deny`). The fix is to reorder the rules,
+  usually by moving the deny up, or to write the earlier rule so it is
+  a subset. There is no override. The lint is not a proof, which is
   why the §5.8.6 vectors
   exist.
 - **Protocol-specific rules** live in docs/06–08.

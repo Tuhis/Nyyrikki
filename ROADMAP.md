@@ -14,6 +14,7 @@ Status values: 💡 proposed · 📝 designing · 🔧 designed / in progress ·
 ✅ done · ⏸️ deferred · ❌ rejected. Note the date on every status change
 and say what is still open. "Implemented, but the manual verification
 hasn't been run" is a different status from "done".
+
 | # | Item | Status |
 |---|------|--------|
 | R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 📝 designing 2026-10-25: [docs/01](docs/01-foundations.md) drafted. OD1 and OD2 decided; OD3 (licence) and the owner's approval of the decisions are open |

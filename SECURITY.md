@@ -139,7 +139,8 @@ understanding the agent's intent.
   Not removed. The HTTP token also needs A's client key. The per-grant
   SSH key doesn't, because the SSH listener has no mTLS. Copied off A, it
   works from any address that `source_cidrs` and G's firewall admit,
-  which is why `source_cidrs` is required for SSH clients (docs/08 D2).
+  which is why SSH clients must set `source_cidrs`, with single
+  addresses only (docs/08 D2).
 - **RR-2. G is the TCB.** Compromising G compromises everything. G is a
   dedicated, minimal host (docs/09).
 - **RR-3. The approver's Telegram account is the approval factor.**

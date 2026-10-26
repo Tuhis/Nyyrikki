@@ -258,8 +258,8 @@ experience is:
   The agent can still `cat` the files. Leaking them is bounded:
   - the token is useless without the client key;
   - the SSH key works on its own, so it is bound to A's address instead:
-    `source_cidrs` is required for SSH clients (docs/02 §5.15.6), and
-    G's firewall admits only A;
+    `source_cidrs` is required for SSH clients, with single addresses
+    only (docs/02 §5.15.6), and G's firewall admits only A;
   - both die with the grant (INV-09).
 - **What reaches Telegram and the audit log**: `reason` and `label`,
   which are untrusted, escaped and labelled (docs/04 §5.7).

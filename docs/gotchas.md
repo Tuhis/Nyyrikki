@@ -40,6 +40,10 @@ the doc.
   username `system:serviceaccount:<ns>:<name>`. An audit that looks only
   for `kind: ServiceAccount` subjects misses it.
   ([docs/09](09-packaging-and-deployment.md) §5.4)
+- **Client-side `kubectl apply` copies the whole object into the
+  `kubectl.kubernetes.io/last-applied-configuration` annotation**, as a
+  JSON string. Redacting a Secret's `data` but keeping its metadata
+  still leaks the values through it. ([docs/03](03-audit-log.md) §5.9)
 
 **Go: TLS and HTTP**
 

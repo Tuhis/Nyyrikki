@@ -202,8 +202,11 @@ For mutating resource requests, the body goes through `redact.Body`
 (docs/03 §5.9) into `op.start`, and into the step summary in step mode.
 Kubernetes-specific redaction:
 
-- `Secret` objects: only metadata and key names survive;
+- `Secret` objects: only metadata and key names survive, minus the
+  annotation below;
 - `data` and `stringData` anywhere;
+- the `kubectl.kubernetes.io/last-applied-configuration` annotation on
+  any object, which holds a copy of the whole object as a string;
 - `TokenRequest` bodies.
 
 All of these are implemented in docs/03's package. Response bodies are
