@@ -15,165 +15,203 @@ Status values: 💡 proposed · 📝 designing · 🔧 designed / in progress ·
 and say what is still open. "Implemented, but the manual verification
 hasn't been run" is a different status from "done".
 
+**Re-planned 2026-10-26 (owner decision).** This roadmap replaces the
+plan adapted from the Warden design on 2026-10-25 (items R1–R12, design
+docs 01–09). Nothing had been built, so that plan and its docs were
+removed rather than kept; they are in git history. The R numbers below
+are new and don't refer to the Warden items.
+
+Nyyrikki is now an MCP gateway that lets AI agents run privileged
+requests against target systems, each covered by a human approval on
+Telegram (see `CLAUDE.md`, "Explicitly set aside"). Agents' requests pass
+through to the target's own API, and Nyyrikki acts as the human the
+agent works for. The first version has no model in the loop: AI risk
+assessment is R8 and deferred. The facts measured for it (Kubernetes, SSH,
+Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
+`docs/gotchas.md`. Each is re-checked before a new decision leans on it.
+
 | # | Item | Status |
 |---|------|--------|
-| R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 📝 designing 2026-10-25: [docs/01](docs/01-foundations.md) drafted. OD1 and OD2 decided; OD3 (licence) and the owner's approval of the decisions are open |
-| R2 | [Grant core: agent identity, grants, policy, one decision point](#r2--grant-core) | 📝 designing 2026-10-25: [docs/02](docs/02-grant-core.md) drafted; decisions await approval |
-| R3 | [Audit log and session recordings](#r3--audit-log-and-session-recordings) | 📝 designing 2026-10-25: [docs/03](docs/03-audit-log.md) drafted; decisions await approval |
-| R4 | [AI risk assessment](#r4--ai-risk-assessment) | 💡 proposed 2026-10-25 |
-| R5 | [Telegram escalation](#r5--telegram-escalation) | 📝 designing 2026-10-25: [docs/04](docs/04-telegram-escalation.md) drafted; OD1 (what Telegram may see) and OD2 (dual control) open |
-| R6 | [Packaging and deployment](#r6--packaging-and-deployment) | 📝 designing 2026-10-25: [docs/09](docs/09-packaging-and-deployment.md) drafted; OD1 (where G runs) and OD2 (anchor sink) open |
+| R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
+| R2 | [Gateway core: MCP and CLI, identity, targets, one decision point](#r2--gateway-core) | 💡 proposed 2026-10-26 |
+| R3 | [Audit log](#r3--audit-log) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
+| R4 | [Pass-through, identity propagation and credential custody](#r4--pass-through-identity-propagation-and-credential-custody) | 💡 proposed 2026-10-26 |
+| R5 | [Telegram escalation: one-off approvals and time-boxed elevation](#r5--telegram-escalation) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
+| R6 | [Packaging and deployment](#r6--packaging-and-deployment) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
 | R7 | [Operator surface](#r7--operator-surface) | 💡 proposed 2026-10-25 |
-| R8 | [Agent integration (`nyyrikki-mcp`)](#r8--agent-integration) | 📝 designing 2026-10-25: [docs/05](docs/05-agent-integration.md) drafted; decisions await approval |
-| R9 | [HTTP admin-API proxy](#r9--http-admin-api-proxy) | 📝 designing 2026-10-25: [docs/06](docs/06-http-proxy.md) drafted; decisions await approval |
-| R10 | [Kubernetes API proxy](#r10--kubernetes-api-proxy) | 📝 designing 2026-10-25: [docs/07](docs/07-kubernetes-proxy.md) drafted; OD1 (clusters older than 1.35) open |
-| R11 | [SSH proxy](#r11--ssh-proxy) | 📝 designing 2026-10-25: [docs/08](docs/08-ssh-proxy.md) drafted; decisions await approval |
-| R12 | [Human access through OIDC](#r12--human-access-through-oidc) | ⏸️ deferred 2026-10-25: [docs/01](docs/01-foundations.md) OD1 put agents first |
+| R8 | [AI risk assessment](#r8--ai-risk-assessment) | ⏸️ deferred 2026-10-26 (owner decision: not in the first version) |
+| R9 | [Optional response redaction](#r9--optional-response-redaction) | ⏸️ deferred 2026-10-26 (owner decision: future, and optional) |
 
-**Build order** (decided 2026-10-25, when the Warden design was adapted
-into this repository): R1 → R2 → R3 → R5 → R8 → R9 → R10 → R11 → R6, then
-R4 and R7. R12 is deferred.
-
-- R3's audit writer (docs/03 AU1) lands before R2's grant lifecycle
-  (docs/02 GC4), because nothing may run unaudited.
-- R5 comes before any proxy, because in an agent-first design nothing
-  happens without an approval.
-- R9 is the first end-to-end slice: an agent creates a Keycloak user
-  after a Telegram tap.
-- R4 moved after the proxies, because it assesses operations that only
-  exist once they do.
+R2–R5 together make the first usable version. Before R5 lands, nothing
+privileged can run, because nothing can be approved.
 
 ---
 
 ## R1 — Foundations
 
 **Why**: every later item depends on decisions nobody has made yet:
-language and runtime, how the gateway is deployed relative to the agent
-and the services it protects, who the requester is, how approvals reach
-a human, and what Nyyrikki defends against.
+language and runtime; which MCP transports Nyyrikki serves (local stdio,
+remote HTTP, or both) and which MCP spec revision it targets; how an
+agent proves who it is and which human it acts for; where Nyyrikki's
+high-privilege credentials live and how they are protected; which kind
+of target system comes first (for example Kubernetes); and what Nyyrikki
+defends against, starting with its own compromise, since it holds access
+to everything behind it.
 
 **Scope**: the architecture and its rejected alternatives, the threat
 model (which also fills in `SECURITY.md`), repository layout, the gates and
-CI, the dependency licence policy. The design doc ends by populating the
-"Architecture (locked in)" section of `CLAUDE.md`.
+CI, the dependency licence policy. Claims about the MCP specification
+and client behaviour are measured, not assumed (`docs/README.md`, step 3).
+The design doc ends by populating the "Architecture" section of
+`CLAUDE.md` with what was locked in.
 
 **Done when**: the owner has approved the doc. The repository has CI
 running the gates on an empty skeleton.
 
-## R2 — Grant core
+## R2 — Gateway core
 
-**Why**: every protocol needs the same things underneath: who A is, what
-it was approved for, until when, and a single place that says yes or no
-to each operation. The AI path, when it comes, has to sit on something
-that already denies correctly.
+**Why**: every request has to pass one place that decides correctly,
+before anything can run.
 
-**Scope**: client identity (mTLS, enrolment), profiles, grants and their
-lifecycle, default-deny policy, step mode and allowances, the one
-decision point every proxied operation passes through, the control API,
-the admin socket, and fail closed on every dependency error.
+**Scope**: three operations, offered both as MCP tools and as commands
+of a CLI. Some agents work better with a CLI, and a CLI lets them pipe
+and filter output with their shell tools. Both are thin clients of the
+same API and reach the same decision point:
 
-*Revised 2026-10-25*: this item originally read "OIDC sign-in, sessions,
-per-route allow and deny rules". docs/01 OD1 made agents the v1
-requesters, so human sign-in moved to R12. Per-route rules became the
-policy engine here.
+- **List targets**: the target systems this agent may ask for, with no
+  approval needed.
+- **Run one request with a one-off escalation**: one request to one
+  target, which waits for a human's answer unless an elevation already
+  covers it.
+- **Request time-boxed elevation**: a window of up to 30 minutes on one
+  or more targets. Once it is approved, the agent's requests to those
+  targets run without asking again until it expires.
 
-## R3 — Audit log and session recordings
+Also: agent authentication and binding each agent to the human it acts
+for; the target registry (which targets exist, and which agents and
+humans may ask for each); the elevation model (scope, expiry, the 30
+minute hard cap, ending early); and one decision point that every
+request passes. A request is allowed only by a one-off approval of
+exactly that request, or by a live elevation that matches agent, human
+and target. Everything else is denied, including on any dependency
+error. MCP features beyond these tools (resources, prompts, sampling)
+are off. The CLI writes the target's response to stdout and Nyyrikki's
+own messages to stderr, has exit codes that tell denied, timed out and
+failed apart, and blocks while an approval is pending. How it
+authenticates as the agent, and that it holds no target credential and
+can't approve anything, is settled here too.
 
-**Why**: once something other than a human acts with admin rights, "why
-was this allowed?" has to be answerable after the fact. This lands
-before R4 so that the first AI decision is already recorded.
+## R3 — Audit log
 
-**Scope**: an append-only record of every decision, with identity,
-request, outcome, reason and decider. Tamper evidence, redaction,
-retention and where the log lives. Recordings of terminal and exec
-streams.
+**Why**: once requests run on real systems, "who asked for this, who
+approved it, and what did it do?" has to be answerable after the fact.
+This lands before R4 so that the first request that runs is already
+recorded.
 
-## R4 — AI risk assessment
+**Scope**: an append-only record of every request: agent, human
+principal, target, the exact request, the identity it ran as on the
+target, what covered it (which one-off approval or elevation), outcome
+and result. It also records every elevation (asked for, granted, ended,
+expired) and every temporary credential issued and revoked. Requests
+under an elevation are recorded individually. Because the target's own
+logs show the human, this log is what ties each request back to the
+agent that made it. Includes redaction, retention and where the log
+lives.
 
-**Why**: the reason Nyyrikki exists. Static rules can't tell a routine
-operation inside a grant from an unusual one made with the same
-credentials.
+## R4 — Pass-through, identity propagation and credential custody
 
-**Scope**: what context the model sees, the response schema (allow,
-deny, escalate, with a reason), which decisions the model may make alone
-and which need a human (a policy question, settled here),
-prompt-injection defences, latency budget, caching, cost, behaviour when
-the model is unavailable (fail closed), and the evaluation set that
-measures it. docs/02 §5.10 marks where it plugs into the decision point:
-there, the model may move a decision toward human review, and this item
-decides whether it may ever do more.
+**Why**: this is what agents come to Nyyrikki for. It is also where a
+mistake does damage, so it gets its own design instead of riding along
+with R2.
+
+**Scope**:
+
+- **Pass-through**: the form an agent's request takes (for example a
+  raw Kubernetes API request, or a CLI command line), how Nyyrikki
+  parses it into the canonical form that approvals bind to, and how it
+  forwards exactly that and nothing else. No shell, no interpolation.
+  Streaming and long-lived requests (watch, exec, port-forward) are cut
+  when what covers them expires.
+- **Identity propagation**: acting as the exact human through
+  impersonation or delegation (for example Kubernetes impersonation)
+  wherever the target allows it, and what attribution looks like where
+  it doesn't.
+- **Credential custody**: how Nyyrikki stores the high-privilege
+  credentials it holds, and how each one's blast radius is limited.
+- **Issued credentials**: creating temporary credentials on a target
+  when needed (an elevation window is a natural lease): scope, lifetime,
+  revocation on every path, cleanup after a crash, and keeping them
+  inside Nyyrikki.
+- **Responses**: the target's response goes back to the agent as it
+  came, unredacted (redaction is R9, deferred). Nyyrikki's own
+  credentials and leases never appear in a response or an error. Also
+  timeouts, and what happens when a request partly succeeds.
 
 ## R5 — Telegram escalation
 
-**Why**: "escalate" needs a human who can answer within seconds from a
-phone.
+**Why**: every privileged request needs a human who can answer within
+seconds from a phone, while the agent's call waits.
 
-**Scope**: the approver bot, an approve or deny message carrying enough
-context to decide without leaking secrets, grants bound to request, scope
-and expiry, replay protection, timeout as deny, approver allow-list, and
-what the waiting requester sees. It also covers step-mode holds,
-extensions and revoke.
+**Scope**: the approver bot; two message kinds, a one-off request
+(showing the exact request as it will be forwarded) and an elevation
+(showing targets, duration, agent and human); the agent's stated reason
+shown as the agent's claim, never as fact; grants bound to the exact
+request or elevation, the agent and an expiry; replay protection;
+timeout as deny; the approver allow-list; whether the human an agent
+acts for may approve that agent's requests; what the approver sees while
+an elevation is live, and whether they can end it early from the chat;
+and what the waiting agent sees (MCP progress or a timeout, decided
+against what clients support; for the CLI, what it prints while it
+blocks).
 
 ## R6 — Packaging and deployment
 
-**Why**: Nyyrikki is meant to run in front of real self-hosted services,
-not just in tests.
+**Why**: Nyyrikki is meant to run next to real clusters and services,
+used by real agents, not just in tests.
 
-**Scope**: images, deployment manifests or charts, secrets handling,
-versioning and release automation, an upgrade path. docs/09 settles on a
-dedicated VM with systemd and tarballs, and covers bootstrap, backup,
-rotation and break-glass.
+**Scope**: images, deployment manifests or charts, how Nyyrikki's
+high-privilege credentials are provisioned, granted on each target
+(including the right to impersonate or issue credentials) and rotated,
+how agents are given access, versioning and release automation, an
+upgrade path.
 
 ## R7 — Operator surface
 
-**Why**: editing policy and reviewing audit and escalations through files
-and logs alone won't scale past the first few services.
+**Why**: editing targets and policy, and reviewing audit, approvals and
+live elevations, through files and logs alone won't scale past the
+first few agents and targets.
 
-**Scope**: decided when R2–R5 show what operators actually need.
-Candidates already known: moderated mode and a live session view
-(deferred from docs/02 D12), and a recording viewer.
+**Scope**: decided when R2–R6 show what operators actually need.
 
-## R8 — Agent integration
+## R8 — AI risk assessment
 
-**Why**: the agent must be able to ask for elevation from the thread
-it's working in, and use the result with the tools it already knows.
+**Deferred 2026-10-26 (owner decision)**: the first version is a plain
+escalation gateway, with a human approving every privileged request. A
+model is not planned until the owner picks this item up again.
 
-**Scope**: `nyyrikki-mcp`, a stdio MCP server on A with tools to list,
-request, wait, check, extend and release grants (and none to approve).
-Enrolment, credential files for `kubectl`, `curl` and `ssh`, and
-registration in Claude Code, Codex and T3 Code.
+**Why it may come back**: with a human approving every request,
+approvals could get routine enough to be rubber-stamped. A model could
+pre-screen requests, flag unusual ones, or decide routine ones under
+policy.
 
-## R9 — HTTP admin-API proxy
+**Scope, if picked up**: what the model sees; a strict response schema;
+which requests it may decide alone (a policy question, settled in the
+doc); prompt-injection defences against the agent and against what the
+agent read; latency and cost; fail closed when the model is unavailable;
+and the evaluation set that measures it.
 
-**Why**: admin APIs such as Keycloak's are guarded by all-or-nothing
-client secrets that must not live on A.
+## R9 — Optional response redaction
 
-**Scope**: fixed upstreams, strict path normalization, method and path
-rules, credential injection on G (OAuth2 client credentials, bearer,
-basic, header), Keycloak as the reference upstream.
+**Deferred 2026-10-26 (owner decision)**: in the first version, the
+response to an approved request reaches the agent as the target sent it.
+Redaction is a possible future enhancement, and even then optional, on
+by configuration per target.
 
-## R10 — Kubernetes API proxy
+**Why it may come back**: an approved request can return secret material
+(for example `kubectl get secret`), which then sits in the agent's
+context and, through it, at the model provider.
 
-**Why**: imperative `kubectl` and node maintenance need cluster rights
-that today would mean a powerful kubeconfig on A.
-
-**Scope**: a reverse proxy that parses requests as the apiserver does,
-impersonates a fixed per-profile user (RBAC stays the hard boundary),
-records exec, and handles the WebSocket and SPDY streaming paths.
-
-## R11 — SSH proxy
-
-**Why**: SSH admin access is the most absolute and least observable kind
-of access.
-
-**Scope**: a terminating SSH proxy with per-grant keys, per-channel
-policy, ephemeral certificates to targets, host-key pinning, recording
-and instant teardown.
-
-## R12 — Human access through OIDC
-
-**Why**: the original IAP idea. Human users signing in to self-hosted
-services through an identity provider, with the same policy and audit.
-
-**Scope**: to be designed if it is picked up. *Deferred 2026-10-25* by
-docs/01 OD1. Agents come first.
+**Scope, if picked up**: what counts as a secret per target type; how
+redaction is configured and switched on; how the agent and the approver
+can tell a redacted response from an original; and a test asserting the
+redacted form for each target type.
