@@ -205,9 +205,29 @@ targets:
   refusing them, is a possible strengthening of the one defence, the
   approver's tap.
 
-## 10. How it was implemented (YYYY-MM-DD)
+## 10. How it was implemented (2026-10-26)
 
-<!-- Added during implementation. -->
+- **D4** gained four file-reading flags (dated note in the row). Found by
+  reading kubectl's flag set while writing PT1's tests.
+- **§5.3, the digest** also encodes the number of argv elements. Without
+  it the encoding is ambiguous at the argv/stdin boundary; PT1 built a
+  colliding pair to show it.
+- **D2**: building kubectl's command tree writes a package-level global,
+  so `Parse` is serialised behind a mutex. strace shows the build reads
+  no files, opens no connection and starts no process; it only lists the
+  `$PATH` directories for plugin names in help text.
+- **§5.4**: bare `rollout` and `set` are refused (they only print help).
+- **D14** also redacts the `last-applied-configuration` annotation of a
+  Secret and Secrets inside a `List`. stdin that doesn't decode but
+  mentions "secret" is shown only as its size and hash. Secret values in
+  argv (`patch secret x -p '{"data":…}'`) are not redacted: an open
+  question for the owner (§9).
+- **`debug --profile`** is refused, because it shares the name of the
+  denied global `--profile`. A per-command rule could allow it later.
+- **D7, cut runs**: a cut returns the partial output and `expired`, with
+  detail `run_timeout`, `grant_expired` or `grant_ended`.
+- **PT5 (e2e against kind)** isn't done yet: G6 and G8 are verified with
+  a fake apiserver, not a real cluster.
 
 ## 11. Post-implementation review (YYYY-MM-DD)
 

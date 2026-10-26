@@ -1,2 +1,3 @@
 # Modules the licence gate can't classify, reviewed by hand (docs/01 D14).
 # module@version  sha256-of-LICENSE  reason
+github.com/modelcontextprotocol/go-sdk@v1.8.0 af679003d933f045393a6a029f43da113f9ae364eac651d9ae268392985580f5 MIT and Apache-2.0 for code mid-transition, CC-BY-4.0 for docs only (docs/01 M3); reviewed 2026-10-26

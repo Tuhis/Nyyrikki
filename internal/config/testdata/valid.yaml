@@ -1,0 +1,35 @@
+server:
+  canonical_url: https://nyyrikki.example.com
+  tls_cert_file: /etc/nyyrikki/tls/tls.crt
+  tls_key_file: /etc/nyyrikki/tls/tls.key
+auth:
+  issuer: https://keycloak.example.com/realms/nyyrikki
+  cli_client_id: nyyrikki-cli
+  introspection_client_id: nyyrikki-introspect
+  introspection_secret_file: /etc/nyyrikki/keycloak/client-secret
+approval:
+  timeout: 2m
+run:
+  max_output: 512KiB
+humans:
+  - id: owner
+    subject: 0b0e5f0c-1111-2222-3333-444455556666
+    kubernetes:
+      user: owner@example.com
+      groups: [admins]
+    telegram_user_id: 123456789
+targets:
+  - name: prod-k8s
+    description: Production
+    humans: [owner]
+    kubernetes:
+      in_cluster: true
+  - name: lab
+    humans: [owner]
+    clients: [nyyrikki-cli]
+    kubernetes:
+      server: https://lab.example.com:6443
+      ca_file: /etc/nyyrikki/targets/lab/ca.crt
+      token_file: /etc/nyyrikki/targets/lab/token
+telegram:
+  bot_token_file: /etc/nyyrikki/telegram/bot-token
