@@ -81,6 +81,9 @@ says so:
   environment variables or ConfigMap values.
 - Nyyrikki's ServiceAccounts can impersonate only the configured
   humans' identities and have no other rights.
+- The authorization-server realm Nyyrikki trusts never reuses an SSO
+  session for a new sign-in (in Keycloak: no Cookie authenticator in its
+  browser flow), so each sign-in is a separate agent (docs/01 D7, D8).
 - The NetworkPolicy shipped with the chart is enforced by the cluster's
   network plugin.
 - The approver's Telegram account uses 2-Step Verification and a

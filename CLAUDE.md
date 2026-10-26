@@ -79,7 +79,10 @@ Decisions and their reasons only. The detail, the owner decisions
   D7).
 - **Human = token `sub` from the configured issuer, looked up in the
   human registry; agent = (issuer, `azp`, `sid`), one sign-in.**
-  Nothing the client says identifies it (D8, OD5, OD12).
+  Correct only because the trusted realm never reuses an SSO session
+  (no Cookie authenticator), so each sign-in gets a new `sid`; a known
+  `sid` with a different `auth_time` is denied. Nothing the client says
+  identifies it (D7, D8, OD5, OD12).
 - **Every call validates the JWT locally; run and elevate also
   introspect.** Keycloak unreachable means deny (D9, OD13).
 - **Listeners: `:8443` HTTPS (`/mcp`, protected-resource metadata), TLS
@@ -100,8 +103,8 @@ Decisions and their reasons only. The detail, the owner decisions
   pinned to SHAs (D17, D18).
 
 Application code is written only for chunks of a design doc whose
-decisions the owner has approved: R1's chunks FD1–FD3 now, the rest as
-R2–R6 are designed. A code change without a design doc behind it is out
+decisions the owner has approved; `ROADMAP.md` says which are open. A
+code change without a design doc behind it is out
 of order, however small.
 
 ## Key constraints / principles to respect

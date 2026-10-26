@@ -4,8 +4,8 @@
 day. Awaiting the owner's approval of the doc as a whole; merging the PR
 that adds it is that approval. Status lives in
 [`ROADMAP.md`](../ROADMAP.md). Still open after approval: the
-measurements M9–M12, which FD3 makes before R2's and R4's docs lean on
-them (§9).
+measurements M9–M11, which FD3 makes before R2's and R4's docs lean on
+them (§9), and M12, which FD2 makes.
 
 Chunks **FD0–FD3** (`FD` = foundations; unused. The replaced plan's
 `FN` is not reused, because `docs/measured.md` still refers to it).
@@ -61,7 +61,7 @@ All checked on 2026-10-26 unless stated otherwise.
 | M6 | Keycloak's MCP guide lists RFC 8414 metadata, RFC 9207 issuer identification and Dynamic Client Registration as **supported**, and Client ID Metadata Documents (`--features=cimd`) and RFC 8707 resource indicators (`--features=resource-indicators`) as **experimental**. Without RFC 8707, an optional client scope with an Audience mapper puts the MCP server's URL in `aud`. The guide doesn't say which Keycloak version it documents. | [keycloak.org/securing-apps/mcp-authz-server](https://www.keycloak.org/securing-apps/mcp-authz-server) | Confirmed from the guide. Drives OD3's "if Keycloak supports it" and D7. FD3 checks it against a running 26.8.1 (M9) |
 | M7 | Maintained Kubernetes releases are 1.37 (1.37.1), 1.36 (1.36.5) and 1.35 (1.35.9). 1.34 reaches end of life on 2026-10-27. | [kubernetes.io/releases](https://kubernetes.io/releases/) | Confirmed. D13 |
 | M8 | `k8s.io/apiserver` v0.37.1 (2026-09-23) and `modernc.org/sqlite` v1.61.0 (2026-10-21) are the latest releases. Both need Go ≥ 1.26; the SQLite driver builds with `CGO_ENABLED=0` and supports WAL. | proxy.golang.org; the build facts are `docs/measured.md` (foundations M2, M3, 2026-10-25, same versions) | Versions confirmed. The CGO-free build is re-run by FD1's CI |
-| M9 | Keycloak 26.8.1, with only its supported features: Dynamic Client Registration restricted by client registration policies (trusted hosts, loopback redirect URIs); the audience scope of M6; token introspection reporting `active: false` once the session is logged out; a `sid` claim in access tokens that stays the same across refreshes; the device authorization grant for a public client; and a realm with `offline_access` unavailable to these clients | **Not yet measured.** FD3, against Keycloak 26.8.1 in a container | — |
+| M9 | Keycloak 26.8.1, with only its supported features: Dynamic Client Registration restricted by client registration policies (trusted hosts, loopback redirect URIs); the audience scope of M6; token introspection reporting `active: false` once the session is logged out; a `sid` claim in access tokens that stays the same across refreshes; with the realm's browser flow lacking the Cookie authenticator, **two sign-ins from the same browser, by the CLI's device grant and by one DCR-registered MCP client, yield different `sid` values and a fresh `auth_time`**, and `auth_time` stays the same across refreshes; the device authorization grant for a public client; and a realm with `offline_access` unavailable to these clients | **Not yet measured.** FD3, against Keycloak 26.8.1 in a container | — |
 | M10 | Claude Code and Codex, running in a pod with no local browser, can complete that sign-in against Keycloak and call a Streamable HTTP MCP server protected by `auth.RequireBearerToken` | **Not yet measured.** FD3 | — |
 | M11 | Which Kubernetes subresources the owner's agents can reach with their cluster-wide read (in particular `pods/log`, `pods/proxy`, `services/proxy`), and whether a `get` on `services/proxy` or `pods/proxy` reaches Nyyrikki's port despite its NetworkPolicy | **Not yet measured.** FD3, with `kubectl auth can-i --list` as an agent's identity and a probe through the apiserver proxy | — |
 | M12 | Versions and exact flags of the gate tools (staticcheck, govulncheck, go-licenses, gitleaks, helm, kubeconform), and how `go-licenses` classifies the go-sdk (M3) | **Not yet measured.** FD2 | — |
@@ -97,8 +97,8 @@ this doc.
 | D4 | **One external API: MCP over Streamable HTTP at `/mcp`** (OD6). The CLI is an MCP client of that same endpoint (go-sdk client), not a client of a second API. MCP resources, prompts, sampling and elicitation are off; only the tools R2 defines are offered. | "MCP and CLI are thin clients of one API": with one protocol and one endpoint, they can't drift apart, and there is one surface to harden. If R4 finds that a request kind can't go through a tool call (for example an interactive exec stream), its doc adds an endpoint under the same authentication and the same decision point, and records it here as a dated revision. |
 | D5 | **MCP sessions carry no authority.** The server runs the go-sdk's Streamable HTTP handler in `Stateless` mode. Everything that grants anything (approvals, elevations) is keyed by the agent's identity (D8), never by an MCP session ID. | A session ID is a bearer value the client chooses or echoes; tying authority to it would add a second credential. Stateless mode also removes the GET and DELETE methods (M2). |
 | D6 | **Nyyrikki is an OAuth resource server only.** It publishes RFC 9728 metadata at `/.well-known/oauth-protected-resource` naming one authorization server, answers 401 with the `resource_metadata` challenge (M2, M4), and issues no tokens itself. | OD3. Token minting stays out of the crown jewel. |
-| D7 | **Authorization server contract**, met by Keycloak 26.8.1 with supported features only (M6, M9): OAuth 2.1 with PKCE; RFC 8414 or OIDC discovery; RFC 9207 `iss`; Dynamic Client Registration for MCP clients, restricted by client registration policies to loopback redirect URIs; a pre-registered public client for the CLI using the device authorization grant; access tokens whose `aud` is Nyyrikki's canonical URI (Audience mapper on an optional scope); token introspection; a stable session ID claim (`sid`); no `offline_access`. CIMD and RFC 8707 are used once Keycloak promotes them out of experimental, by a dated revision here. | OD3, OD4: "if Keycloak supports everything needed". Experimental features may break between releases (M6), and a security component shouldn't depend on them. |
-| D8 | **Identities.** The **human** is the token's `sub` from the configured issuer, looked up in Nyyrikki's human registry (config), which gives their Kubernetes user and groups and their Telegram user ID. A `sub` not in the registry is denied. The **agent** is the triple (issuer, `azp`, `sid`): one sign-in (OD5). Nothing the client sends (its registered name, an MCP `clientInfo`, a tool argument) identifies it; such values are shown to the approver only as the agent's claim. | OD1, OD5. "Who to act as comes from the authenticated binding, never from the agent." |
+| D7 | **Authorization server contract**, met by Keycloak 26.8.1 with supported features only (M6, M9): OAuth 2.1 with PKCE; RFC 8414 or OIDC discovery; RFC 9207 `iss`; Dynamic Client Registration for MCP clients, restricted by client registration policies to loopback redirect URIs; a pre-registered public client for the CLI using the device authorization grant; access tokens whose `aud` is Nyyrikki's canonical URI (Audience mapper on an optional scope); token introspection; a session ID claim (`sid`) that is new for every sign-in and stable across refreshes, which Keycloak gives when the realm's browser flow has no Cookie authenticator, so that no sign-in reuses an existing SSO session (M9); `auth_time`; no `offline_access`. CIMD and RFC 8707 are used once Keycloak promotes them out of experimental, by a dated revision here. | OD3, OD4: "if Keycloak supports everything needed". Experimental features may break between releases (M6), and a security component shouldn't depend on them. |
+| D8 | **Identities.** The **human** is the token's `sub` from the configured issuer, looked up in Nyyrikki's human registry (config), which gives their Kubernetes user and groups and their Telegram user ID. A `sub` not in the registry is denied. The **agent** is the triple (issuer, `azp`, `sid`): one sign-in (OD5). That holds only because every sign-in creates a new session (D7): in Keycloak `sid` is the SSO session, which a browser shares between sign-ins unless the realm forbids reuse. As a check that fails closed, Nyyrikki records each agent's `auth_time` when it first sees it and denies any later token with the same (issuer, `azp`, `sid`) and a different `auth_time`, since that means a session was reused by a second sign-in. Nothing the client sends (its registered name, an MCP `clientInfo`, a tool argument) identifies it; such values are shown to the approver only as the agent's claim. | OD1, OD5. "Who to act as comes from the authenticated binding, never from the agent." |
 | D9 | **Token checks** (OD13). Every call: signature against the issuer's JWKS, `iss`, `aud` equal to Nyyrikki's canonical URI, `exp` and `nbf` with at most 30 s skew, `sub` in the registry. Run and elevate also introspect the token and require `active: true`; any introspection failure is a deny. Only tokens from the one configured issuer are accepted, and no token is ever forwarded to a target (M4). | Revocation in Keycloak takes effect at once for anything privileged; listing targets stays available without a Keycloak round trip. |
 | D10 | **Listeners**: `:8443`, HTTPS, serving `/mcp` and `/.well-known/oauth-protected-resource`, with TLS terminated in `nyyrikkid` from a mounted certificate; `:8081`, plain HTTP, serving only `/healthz` and `/readyz` with no data, for the kubelet. That is the complete list; a test asserts it. Outbound: the authorization server, the Telegram Bot API (long polling), and the configured targets' API servers. | Least surface. Tokens never cross a plaintext hop, even inside the cluster: an Ingress in front uses TLS passthrough or re-encrypts. |
 | D11 | **Storage**: SQLite in WAL mode through `modernc.org/sqlite` on a PVC (OD11), holding pending approvals, elevations and the audit log. The audit log is also written to stdout as JSON lines. Binaries are built with `CGO_ENABLED=0 -trimpath`. The Deployment has one replica and the `Recreate` strategy, so two pods never write the same database. | Single instance, no extra service, static binaries (M8). Compare-and-set transitions in SQLite have exactly one winner (`docs/measured.md`, grant mechanics M1), which R2 and R5 rely on. |
@@ -178,7 +178,8 @@ run outside the cluster and reach `:8443` through an Ingress.
    `resource_metadata` challenge, audited.
 3. It resolves the human from `sub` and the agent from (issuer, `azp`,
    `sid`) (D8). An unknown `sub`: deny, audited.
-4. For run and elevate it introspects the token (D9). Not active, or
+4. A known agent key with a different `auth_time` is denied (D8).
+   For run and elevate it introspects the token (D9). Not active, or
    Keycloak unreachable: deny, audited.
 5. The decision point (R2) decides, escalating to Telegram (R5) where
    needed. A pending approval keeps the tool call open, with MCP
@@ -199,6 +200,11 @@ run outside the cluster and reach `:8443` through an Ingress.
   owner signs in on another device, and the CLI stores its tokens in a
   file only its user can read. Each `nyyrikki login` is a new sign-in,
   so a new agent (OD5, OD12).
+- **No SSO reuse.** The realm Nyyrikki trusts has a browser flow
+  without the Cookie authenticator, so every sign-in asks the owner to
+  authenticate and creates a new Keycloak session, and so a new `sid`
+  (D7, D8). A dedicated realm for Nyyrikki keeps this from affecting
+  other applications.
 - **Session lifetimes** are set in the realm, and the chart's
   documentation gives the recommended values: no `offline_access` for
   these clients, and a maximum session length after which the owner
@@ -367,6 +373,12 @@ FD0–FD2 have landed (ROADMAP); FD3 is needed by M1 at the latest.
 - **Keycloak can't do part of D7** (M9). Fallbacks, in order: enable the
   experimental feature that covers it, with the version pinned and a
   dated revision of D7; or reopen OD3. The owner decides.
+- **Keycloak reuses a session for a second sign-in despite the flow**
+  (M9). Then (issuer, `azp`, `sid`) doesn't separate sign-ins and OD5
+  doesn't hold. The `auth_time` check (D8) denies the case where the
+  owner authenticated again; the case where they didn't is only
+  prevented by the flow. If M9 finds a gap, D8 is revised to a key that
+  is fresh per sign-in before R2's doc locks, and the owner decides how.
 - **An MCP client can't sign in from a pod** (M10). The CLI's device
   grant still works, so agents use the CLI; or the client gets its
   tokens another way the owner approves. Nothing here weakens D9.
