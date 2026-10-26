@@ -134,9 +134,9 @@ agent (on stdout for the CLI). A refusal, no answer, a replayed or
 foreign callback, and a request that differs from what was approved all
 end in deny, each with a test. Every step is audited.
 
-**Open questions it needs answered** (in R2 and R4 docs): whether the
-human an agent works for may approve that agent's requests; whether the
-request is a raw API request or a CLI line.
+**Open questions it needs answered**: whether the human an agent works
+for may approve that agent's requests (R5's doc); whether the request is
+a raw API request or a CLI line (R4's doc).
 
 ### M3 — Time-boxed elevation
 
@@ -145,15 +145,19 @@ request is a raw API request or a CLI line.
 **Includes**: the elevate operation through MCP and the CLI; elevations
 of at most 30 minutes, on one or more named targets, for one agent and
 human (R2); the elevation approval message, and ending an elevation
-early from the chat (R5); cutting streaming and long-lived requests
-when an elevation ends (R4).
+early from the chat if R5's doc decides approvers can (R5); cutting
+streaming and long-lived requests when an elevation ends (R4).
 
 **Done when**: after one tap, the agent's requests to the named targets
 run without asking again, each one audited. A request after expiry, to
 a target the elevation doesn't name, or from another agent goes back to
 one-off escalation or is denied. An open stream (exec, watch) is cut at
-expiry. Asking for more than 30 minutes gives 30. Ending early works
-from the chat. Each has a test.
+expiry. Asking for more than 30 minutes gives 30. If R5's doc allows
+ending early from the chat, that works and ends the elevation at once.
+Each has a test.
+
+**Open questions it needs answered**: whether an approver can end an
+elevation early from the chat (R5's doc).
 
 ### M4 — Running against a real target
 
