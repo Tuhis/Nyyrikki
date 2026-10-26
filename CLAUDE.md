@@ -1,13 +1,21 @@
 # Project: Nyyrikki — AI-native identity-aware proxy
 
 ## Purpose & Context
-Nyyrikki is an identity-aware proxy (IAP) that sits in front of self-hosted
-services. It authenticates every request against an identity provider and
-authorizes it against policy. The "AI-native" part: a model reads the
-request in context (who, what, from where, how unusual) and either allows
-it, denies it, or **escalates** it. An escalation goes to a human approver
-on Telegram, who approves or denies it from the chat. The request waits
-for that answer or fails.
+Nyyrikki is an identity-aware proxy (IAP) that gives AI agents
+time-limited, human-approved access to the admin interfaces of self-hosted
+infrastructure: the Kubernetes API, SSH, and admin HTTP APIs such as
+Keycloak's. The agent runs on its own VM without standing admin rights.
+
+When it needs more, it asks Nyyrikki for a grant. A human approver
+approves or denies it from Telegram, and the request waits for that
+answer or fails. While the grant lasts, Nyyrikki holds the real
+credentials and mediates every operation, **escalating** the ones policy
+holds back for another tap.
+
+The "AI-native" part, a model that reads each operation in context (who,
+what, how unusual) and can escalate it, is R4. Human sign-in through an
+identity provider is deferred (R12). Both scoping decisions are in
+`docs/01` (OD1, OD2).
 
 Nyyrikki is a security component. A bug that grants access it shouldn't
 is the worst outcome, worse than any outage. Rules, reviews and design docs
@@ -38,10 +46,10 @@ put it in the doc and link to it.
 
 ## Architecture (nothing locked in yet)
 No language, framework, deployment shape or identity provider has been
-chosen. Those decisions belong to R1 (`ROADMAP.md`) and its design doc
-`docs/01-*.md`. When R1 locks them in, record **only the decisions and the
-reasons for them** here, in the shape of a "locked in" list, and link to
-the doc.
+locked in. Those decisions belong to R1 (`ROADMAP.md`) and its design doc
+`docs/01-foundations.md`, which proposes them. When the owner approves
+R1, record **only the decisions and the reasons for them** here, in the
+shape of a "locked in" list, and link to the doc (docs/01 FN3).
 
 Until then, **do not write application code.** The repository holds
 process and design documents only. A code change without a design doc
@@ -54,6 +62,10 @@ behind it is out of order, however small.
 - **The model advises; policy decides.** What the model may decide on its
   own, and what always needs a human, is a policy question settled in a
   design doc. It is never left implicit in a prompt.
+- **The agent VM is untrusted.** Never put an approval surface, the
+  Telegram bot token or a standing credential on it, and never log in to
+  Telegram on anything the agent can control. Any of these lets the agent
+  approve itself (`SECURITY.md`, "the central assumption").
 - **Everything the model reads is untrusted input.** Request paths,
   headers, bodies and user-supplied fields can carry prompt injection.
   The same applies to Telegram updates: a callback is not an approval
@@ -68,9 +80,20 @@ behind it is out of order, however small.
   cost a real bug.
 
 ## Rejected: don't re-propose without new evidence
-Nothing yet. When an approach is investigated and settled against, add it
-here with one line of why and a link to the doc that has the reasoning.
-Re-deriving a settled question costs a whole cycle.
+When an approach is investigated and settled against, add it here with
+one line of why and a link to the doc that has the reasoning. Re-deriving
+a settled question costs a whole cycle.
+
+- **Passkey (WebAuthn) approval**, either always or only for high-risk
+  profiles. The owner chose one Telegram tap for every decision, for UX
+  (`docs/01` OD2, 2026-10-25).
+- **Approval inside the coding tool's UI**, such as a button in the T3
+  Code thread. It renders on the agent VM, which the agent controls
+  (`docs/01` rejected alternatives).
+- **Admin credentials or "checking" wrapper CLIs on the agent VM.** Any
+  process there can read or bypass them (`docs/01`).
+- **Telegram webhooks.** An inbound endpoint is a second way to inject
+  updates. Long polling only (`docs/04` D2).
 
 ## Conventions
 - **Design doc before code.** Every roadmap item is designed in its own
@@ -97,4 +120,5 @@ Re-deriving a settled question costs a whole cycle.
   `BUGS.md` entries when they are fixed.
 
 ## Explicitly set aside (don't suggest reintroducing without discussion)
-Nothing yet.
+- Human sign-in through OIDC (R12, deferred by `docs/01` OD1).
+- Moderated mode and a live session view (R7, `docs/02` D12).
