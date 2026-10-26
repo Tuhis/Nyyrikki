@@ -87,8 +87,10 @@ foreign-chat callback is rejected, with a test for each.
 **Secrets never leave their lane.** Nyyrikki's own credentials, the
 temporary credentials it issues, agent tokens, and secret contents from
 target systems never appear in logs, audit free-text or Telegram
-messages. Nyyrikki's own credentials and leases never appear in a
-response or an error returned to the agent either. Redaction happens at
+messages. Nyyrikki never puts its own credentials or leases in a
+response or an error returned to the agent either. (A target's response
+to a request, approved one-off or under an elevation, that reads them
+because the human can is an accepted risk: docs/04 OD3, SECURITY.md.) Redaction happens at
 the boundary, with a test that asserts the redacted form. The target's
 response to an approved request is the exception: it is returned
 unredacted (`ROADMAP.md` R9).

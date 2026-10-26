@@ -33,11 +33,11 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 | # | Item | Status |
 |---|------|--------|
 | R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 📝 designing 2026-10-26: [docs/01](docs/01-foundations.md) drafted, OD1–OD16 decided; open: FD1–FD3 (skeleton, gates, measurements) |
-| R2 | [Gateway core: MCP and CLI, identity, targets, one decision point](#r2--gateway-core) | 💡 proposed 2026-10-26 |
-| R3 | [Audit log](#r3--audit-log) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
-| R4 | [Pass-through, identity propagation and credential custody](#r4--pass-through-identity-propagation-and-credential-custody) | 💡 proposed 2026-10-26 |
-| R5 | [Telegram escalation: one-off approvals and time-boxed elevation](#r5--telegram-escalation) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
-| R6 | [Packaging and deployment](#r6--packaging-and-deployment) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
+| R2 | [Gateway core: MCP and CLI, identity, targets, one decision point](#r2--gateway-core) | 📝 designing 2026-10-26: [docs/02](docs/02-gateway-core.md) drafted, OD1–OD3 decided; awaiting approval |
+| R3 | [Audit log](#r3--audit-log) | 📝 designing 2026-10-26: [docs/03](docs/03-audit-log.md) drafted; awaiting approval |
+| R4 | [Pass-through, identity propagation and credential custody](#r4--pass-through-identity-propagation-and-credential-custody) | 📝 designing 2026-10-26: [docs/04](docs/04-kubectl-passthrough.md) drafted, OD1–OD2 decided (kubectl 1:1, interactive exec and attach); awaiting approval |
+| R5 | [Telegram escalation: one-off approvals and time-boxed elevation](#r5--telegram-escalation) | 📝 designing 2026-10-26: [docs/05](docs/05-telegram-escalation.md) drafted, OD1–OD2 decided; awaiting approval |
+| R6 | [Packaging and deployment](#r6--packaging-and-deployment) | 📝 designing 2026-10-26: [docs/06](docs/06-packaging-and-deployment.md) drafted (the minimal part for M4); awaiting approval |
 | R7 | [Operator surface](#r7--operator-surface) | 💡 proposed 2026-10-25 |
 | R8 | [AI risk assessment](#r8--ai-risk-assessment) | ⏸️ deferred 2026-10-26 (owner decision: not in the first version) |
 | R9 | [Optional response redaction](#r9--optional-response-redaction) | ⏸️ deferred 2026-10-26 (owner decision: future, and optional) |
@@ -276,8 +276,10 @@ with R2.
   revocation on every path, cleanup after a crash, and keeping them
   inside Nyyrikki.
 - **Responses**: the target's response goes back to the agent as it
-  came, unredacted (redaction is R9, deferred). Nyyrikki's own
-  credentials and leases never appear in a response or an error. Also
+  came, unredacted (redaction is R9, deferred). Nyyrikki never puts its
+  own credentials or leases in a response or an error (a request, one-off
+  or under an elevation, that reads them because the human can is
+  docs/04 OD3's accepted risk). Also
   timeouts, and what happens when a request partly succeeds.
 
 ## R5 — Telegram escalation

@@ -5,7 +5,9 @@ Nyyrikki lets AI agents carry out privileged actions they can't do on their
 own, such as `kubectl delete pod`. An agent reaches Nyyrikki through an
 **MCP server** or an equivalent **CLI**: both offer the same operations,
 and the CLI lets an agent pipe output through its shell. Nyyrikki holds high-privilege credentials for the target
-systems, and the agent never sees them. Where a target supports it,
+systems, and never hands them to the agent (a request the agent gets
+approved, or runs under an elevation, can still read them if the human
+can: `docs/04` OD3). Where a target supports it,
 Nyyrikki uses impersonation or delegation so that the target system sees
 the **exact human** the agent acts for, not Nyyrikki. When needed,
 Nyyrikki also creates temporary credentials on a target system. Those
@@ -156,13 +158,15 @@ of order, however small.
 - **Telegram updates are untrusted.** A callback is not an approval until
   it is checked against the approver, the request or elevation, and its
   expiry.
-- **Nyyrikki holds the target credentials; the agent never does.** That
+- **Nyyrikki holds the target credentials and never hands them to the agent.** That
   covers every credential for a target system or for approving,
   including the temporary credentials Nyyrikki creates on targets. The
   only credential the agent holds is its own token for authenticating to
   Nyyrikki.
-  None of them is ever handed to an agent, directly, in a result or in
-  an error.
+  Nyyrikki never hands one to an agent, directly, in a result or in an
+  error. A request that itself reads them, because the human it runs as
+  can, approved one-off or covered by an elevation, is an accepted risk (owner decision 2026-10-27,
+  `docs/04` OD3, SECURITY.md).
   Issued credentials are scoped as narrowly and live as briefly as works,
   and they are revoked on every path.
 - **The target sees the real user.** Wherever the target can impersonate
@@ -184,7 +188,9 @@ of order, however small.
   it acts for. Redacting secrets in responses is a possible future,
   optional feature (owner decision 2026-10-26, `ROADMAP.md` R9), not part
   of the first version. Nyyrikki's own credentials are a different
-  matter: they never appear in a response or an error.
+  matter: Nyyrikki never puts them in a response or an error itself; a
+  target response that contains them because the human can read them,
+  one-off or under an elevation, is the accepted risk above.
 - **Bug fixes are test-first**: write the failing test, watch it fail, then
   fix. See `CODE-REVIEW.md`. Every rule there exists because its absence
   cost a real bug.

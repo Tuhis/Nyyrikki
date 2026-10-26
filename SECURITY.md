@@ -2,7 +2,9 @@
 
 Nyyrikki is a gateway that forwards AI agents' privileged requests to
 target systems: its whole job is to make sure only requests a human
-approved run, as the right user, with credentials the agents never see. It holds
+approved run, as the right user, with credentials Nyyrikki never hands to
+the agents (see Accepted risks for what an approved request, or one under
+an elevation, can still read). It holds
 high-privilege access to every system behind it, which makes it a
 high-value target in its own right. It is maintained by one person,
 on a best-effort basis.
@@ -62,14 +64,17 @@ weakens one is a security change, whatever else it does.
 - **Anyone on the network path** to Nyyrikki, the authorization server,
   Telegram or the targets.
 
-Out of scope: a malicious cluster administrator or node, a compromised
+Out of scope: a malicious cluster administrator or node (but note that an
+agent with one approval, or under an elevation, borrows the human's own
+rights, which may be an administrator's: Accepted risks), a compromised
 authorization-server administrator acting beyond what is said above,
 Telegram itself turning hostile, and an approver who approves something
 on purpose.
 
 ### Deployment requirements
 
-Nyyrikki's guarantees hold only if these are true, and its documentation
+Nyyrikki's guarantees hold only if these are true (and see the accepted
+risks of docs/04 OD3 for what the human's own rights expose), and its documentation
 says so:
 
 - Agents can't read Secrets, can't create, change or delete anything in
@@ -108,10 +113,14 @@ says so:
 | INV-05 | Requests run on the target as the human the agent is bound to, taken from the human registry, never from anything in the request. | R4 |
 | INV-06 | Only access tokens from the configured issuer, with Nyyrikki as audience, unexpired, for a known human are accepted, and a DPoP-bound or CLI token only with a valid proof (docs/01 D9). Run and elevate also need the session to be live by introspection. No token is passed on to a target. | docs/01 D9, R2 |
 | INV-07 | Any error, timeout or unreachable dependency ends in deny. | every doc |
-| INV-08 | Nyyrikki's own credentials never reach the agent: not in a response, an error, a log or a Telegram message. | R4 |
+| INV-08 | Nyyrikki never puts its own credentials in a response, an error, a log or a Telegram message. (A target's response to a request, approved or under an elevation, that reads them because the human can is an accepted risk below.) | R4 |
 | INV-09 | Logs and audit records are treated as readable by the agent: no credential, no secret value, no approval material in them. | docs/01 D16, R3 |
 | INV-10 | Every request, decision, approval, elevation and dependency failure is audited. A failed audit write doesn't turn into an allow. | R3 |
 | INV-11 | Nyyrikki listens only on its HTTPS port and its health port, and the health port serves no data. | docs/01 D10, R6 |
+
+INV-01, -02 and -10 stop holding for a target, for as long as a stolen or
+minted credential lives, in the two cases under Accepted risks (docs/04
+OD3). They are what Nyyrikki guarantees for requests that pass through it.
 
 ### In scope
 
@@ -138,7 +147,9 @@ These kinds of issue are always in scope:
   (not revoked after an error, a timeout or a crash) or being wider than
   needed.
 - Compromise of Nyyrikki itself, or of where its credentials are stored,
-  which exposes everything behind it.
+  which exposes everything behind it, other than through a request the
+  human could run themselves, approved one-off or under an elevation
+  (Accepted risks).
 - Producing an approval from anything the agent controls: an approval
   surface, a bot token, a Telegram session or a credential on the
   agent's machine. An approval means something only if the agent can't
@@ -148,7 +159,9 @@ These kinds of issue are always in scope:
   something other than what runs (for example with a misleading stated
   reason or a request that renders deceptively).
 - Getting Nyyrikki's credentials or the temporary credentials it issues
-  into the agent's hands, through responses, errors or messages.
+  into the agent's hands, through responses, errors or messages, other
+  than through a request the human could run themselves, approved
+  one-off or under an elevation (Accepted risks).
 - Leaking tokens, kubeconfigs, API keys or secret contents into logs,
   audit records or Telegram messages.
 - Tampering with or suppressing audit records.
@@ -159,6 +172,54 @@ These kinds of issue are always in scope:
 - **Responses are unredacted.** The response to an approved request
   reaches the agent as the target sent it, including any secret
   material it returns. Optional redaction is deferred (`ROADMAP.md` R9).
+- **One approved request, or any request under an elevation on that
+  target, can hand the agent Nyyrikki's own credentials** when the human
+  it runs as can reach them (docs/04 OD3, owner decision 2026-10-27,
+  reconfirmed the same day for elevations). Examples: `get secret -n
+  <nyyrikki-namespace>`, `create token <nyyrikki-serviceaccount>`, `exec`
+  into Nyyrikki's pod, a pod that mounts its ServiceAccount or Secrets,
+  or the node paths below, as a cluster admin can. What that costs, for
+  as long as the stolen credential lives:
+  - a **target token** (a remote target's, or one minted for Nyyrikki's
+    ServiceAccount) gives direct API access that can impersonate the
+    human with no Nyyrikki in the path: INV-01 and INV-10 no longer hold
+    for that target, and the 30-minute bound of INV-03 means nothing
+    there;
+  - the **Telegram bot token** lets the agent edit Nyyrikki's pending
+    messages, so the approver could see a harmless command while the
+    buttons settle the real request, or relabel the buttons so that
+    tapping "Deny" approves (the edit returns the buttons' callback data);
+    both break INV-02. It can also strip the "End now" button from a live
+    elevation; calling `getUpdates` or setting a
+    webhook with it stops Nyyrikki's poller (fail closed: every
+    escalation is denied). A tap still counts only from the approver's
+    own chat, once, in time (INV-04 holds);
+  - the **introspection secret** is lost.
+
+  The defence is the approver's tap: on the exact request, or, under an
+  elevation, on the elevation that covers it, with no message per
+  request. Withholding rights from the human narrows it, best effort:
+  no write of any kind and no Secret read in Nyyrikki's namespace (and in
+  `nyyrikki-system` on remote targets); no `nodes/proxy`; no node
+  debugging; no privileged or `hostPath` pods anywhere (for example Pod
+  Security `restricted` on every namespace the human can write to); no
+  RBAC `bind`, `escalate` or `impersonate`; no admission webhooks or
+  mutating admission policies; no `persistentvolumes` write (a `hostPath`
+  PV bound to a PVC reaches the node); no CSR approval
+  (`certificatesigningrequests/approval`, `signers` `approve`), which can
+  issue a client certificate for Nyyrikki's ServiceAccount. The list is
+  best effort: a controller the human can feed objects to (GitOps, an
+  operator) acts with its own rights. What
+  closes it is running Nyyrikki on a cluster the human doesn't
+  administer, with remote targets only.
+- **One approved request, or a request under an elevation, can mint a
+  standing credential on a target**: `create token <any-sa>
+  --duration=…`, or a CSR created and then approved with `certificate
+  approve`. That gives direct API access with no Nyyrikki in the path,
+  so INV-01 and INV-10 hold for a cluster only while the human can't
+  obtain such a credential there, which in practice means while the
+  human isn't its administrator. INV-03 bounds elevations, not what one
+  request returns. The defence is the approver's tap.
 - **The human approves their own agents' requests.** In the first
   version there is one human, who is also the approver (docs/01 OD1).
   The defence is a message that shows exactly what will run (R5).

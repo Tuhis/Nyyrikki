@@ -52,6 +52,15 @@ the doc.
   JSON string. Redacting a Secret's `data` but keeping its metadata
   still leaks the values through it. ([docs/03](https://github.com/Tuhis/Nyyrikki/blob/0ea8b56/docs/03-audit-log.md) §5.9)
 
+- **kubectl ≥ 1.33 reads a kuberc preferences file** (`~/.kube/kuberc`,
+  or `$KUBERC`) that can define aliases and default flags, so the same
+  argv can mean something else on another machine. Turn it off with
+  `KUBERC=off` and refuse `--kuberc`. ([docs/04](04-kubectl-passthrough.md) M3)
+- **kubectl reads files and URLs from the machine it runs on**: `-f`
+  paths and URLs, `-k`, `--from-file`, `--from-env-file`,
+  `-o jsonpath-file=`, `debug --custom`. Server-side, those are
+  Nyyrikki's disk. ([docs/04](04-kubectl-passthrough.md) M7)
+
 **Go: TLS and HTTP**
 
 - **`tls.Config.VerifyPeerCertificate` is not called on resumed
