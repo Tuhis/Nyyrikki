@@ -328,7 +328,8 @@ func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 	}
 	if ctx.Err() != nil {
 		// Approved, but the call that waited is gone: the approval goes to
-		// nobody (docs/01 D24).
+		// nobody (docs/01 D24), and the chat says so.
+		p.settle(id, stateApproved, stateWithdrawn, nil)
 		return nil, p.deny(ctx, rec, codes.New(codes.Withdrawn, "the call ended before the approval arrived"))
 	}
 	gctx, cancel := context.WithCancel(p.base)
@@ -340,8 +341,10 @@ func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 	rec.CoveredBy = codes.CoveredOneOff
 	if err := p.audit.Append(ctx, rec); err != nil {
 		g.Release()
+		p.settle(id, stateApproved, stateFailed, nil)
 		return nil, codes.Wrap(codes.Unavailable, err, "audit log unavailable")
 	}
+	go p.settlePrompt(id, approval.Outcome{Kind: approval.Approved, At: p.now()})
 	return g, nil
 }
 
@@ -510,7 +513,10 @@ func (p *Point) settle(id, from, to string, inTx func(*sql.Tx) error) bool {
 	_ = p.audit.Append(ctx, audit.Record{Kind: codes.KindApprovalSettled, ApprovalID: id, Code: string(code), Detail: to})
 	kind := map[string]approval.OutcomeKind{stateApproved: approval.Approved, stateDenied: approval.Denied,
 		stateExpired: approval.Expired, stateWithdrawn: approval.Withdrawn, stateFailed: approval.Failed}[to]
-	if to != stateApproved || inTx == nil {
+	// An approved prompt is edited by whoever acts on the approval: the
+	// run once its grant exists, the elevation once it is live. Until then
+	// the chat must not claim more than happened.
+	if to != stateApproved {
 		go p.settlePrompt(id, approval.Outcome{Kind: kind, At: p.now()})
 	}
 	return true
@@ -522,8 +528,16 @@ func (p *Point) settleTx(ctx context.Context, id, from, to string, inTx func(*sq
 		return false, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, "UPDATE approvals SET state = ?, settled_ms = ? WHERE id = ? AND state = ?",
-		to, p.now().UnixMilli(), id, from)
+	now := p.now().UnixMilli()
+	q := "UPDATE approvals SET state = ?, settled_ms = ? WHERE id = ? AND state = ?"
+	args := []any{to, now, id, from}
+	if to == stateApproved {
+		// An approval counts only before it expires (INV-04), checked in
+		// the same statement that settles it.
+		q += " AND expires_ms > ?"
+		args = append(args, now)
+	}
+	res, err := tx.ExecContext(ctx, q, args...)
 	if err != nil {
 		return false, err
 	}

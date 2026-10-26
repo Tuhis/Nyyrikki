@@ -110,20 +110,34 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 	if state != stateApproved {
 		return nil, p.deny(ctx, rec, stateError(state))
 	}
+	return p.deliverElevation(ctx, id, rec, targets)
+}
+
+// deliverElevation hands an approved elevation to the call that asked for
+// it. Whatever goes wrong after the approval won (the call is gone, a query
+// fails, the audit write fails), the elevation ends and its handle is
+// dropped: nobody may hold a live elevation the caller never received
+// (docs/01 D24).
+func (p *Point) deliverElevation(ctx context.Context, approvalID string, rec audit.Record, targets []string) (*Elevation, error) {
+	p.mu.Lock()
+	handle := p.handles[approvalID]
+	delete(p.handles, approvalID)
+	p.mu.Unlock()
+	// The call's context may already be cancelled; the lookup must still
+	// work so that the elevation can be ended.
+	qctx, cancel := context.WithTimeout(p.base, 10*time.Second)
+	defer cancel()
 	var (
 		elevID   string
 		expiresM int64
 	)
-	if err := p.db.QueryRowContext(ctx, "SELECT id, expires_ms FROM elevations WHERE approval_id = ?", id).Scan(&elevID, &expiresM); err != nil {
+	if err := p.db.QueryRowContext(qctx, "SELECT id, expires_ms FROM elevations WHERE approval_id = ?", approvalID).Scan(&elevID, &expiresM); err != nil {
+		p.endElevationByApproval(approvalID)
 		return nil, p.deny(ctx, rec, codes.Wrap(codes.Unavailable, err, "state unavailable"))
 	}
-	p.mu.Lock()
-	handle := p.handles[id]
-	delete(p.handles, id)
-	p.mu.Unlock()
 	if handle == "" || ctx.Err() != nil {
 		// Approved, but the call that asked is gone: nobody can hold the
-		// handle, so the elevation ends at once (docs/01 D24).
+		// handle, so the elevation ends at once.
 		p.endElevation(elevID, stateEnded, "the call ended before the approval arrived")
 		return nil, p.deny(ctx, rec, codes.New(codes.Withdrawn, "the call ended before the approval arrived"))
 	}
@@ -135,6 +149,22 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 		return nil, codes.Wrap(codes.Unavailable, err, "audit log unavailable")
 	}
 	return &Elevation{ID: elevID, Handle: handle, Targets: targets, ExpiresAt: time.UnixMilli(expiresM).UTC()}, nil
+}
+
+// endElevationByApproval ends the in-memory elevation of an approval when
+// its row can't be read: its runs are cut in this process at least.
+func (p *Point) endElevationByApproval(approvalID string) {
+	p.mu.Lock()
+	var id string
+	for eid, le := range p.elevations {
+		if le.approvalID == approvalID {
+			id = eid
+		}
+	}
+	p.mu.Unlock()
+	if id != "" {
+		p.endElevation(id, stateEnded, "state unavailable")
+	}
 }
 
 // approveElevation settles an elevation's approval and creates the live

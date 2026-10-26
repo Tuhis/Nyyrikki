@@ -312,6 +312,16 @@ the elevation half of GW3 and GW6.
   will show whether Keycloak reports it; if not, this is relaxed by a
   dated note.
 
-## 11. Post-implementation review (YYYY-MM-DD)
+## 11. Post-implementation review (2026-10-27)
 
-<!-- Added at close-out. -->
+An adversarial review of the gateway code, before merge, found no path
+that runs a request without cover. Its findings and fixes:
+
+| Finding | Fix | Test |
+|---|---|---|
+| An elevation approved as its call was cancelled stayed live with nobody holding the handle: the lookup after approval used the cancelled context and returned before ending it | `deliverElevation` takes the handle first and queries on the server's context, and every failure after the approval ends the elevation | `TestDeliverElevationCallerGone` |
+| A Telegram 409 or 401 made nyyrikkid exit, so the kubelet restarted it into the retry loop docs/05 D2 forbids | the server keeps serving with the poller stopped; escalations are denied | `TestTelegramConflictKeepsServingAndDenies` |
+| An approve tap could commit just after the expiry | the expiry is part of the approve compare-and-set | none: the window between the check and the commit can't be forced in a test |
+| The chat showed "Approved" for a run that was then withdrawn or failed | a run's prompt is edited only once its grant exists, otherwise to "Withdrawn" or "Failed" | `TestDependencyFailuresDeny/audit_fails_after_approval` |
+| Any token with the audience was accepted, an ID token included | `typ` must be `Bearer` or `DPoP` (docs/01 M9 confirms Keycloak's values) | `TestTokenRejected` |
+| `telegram.api_url` accepted plain http, which would send the bot token in cleartext | https only, except on loopback | `TestTelegramAPIURL` |

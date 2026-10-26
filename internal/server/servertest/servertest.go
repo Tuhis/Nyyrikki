@@ -193,6 +193,17 @@ func (e *Env) Stop() {
 	}
 }
 
+// Stopped reports whether nyyrikkid has exited.
+func (e *Env) Stopped() bool {
+	select {
+	case err := <-e.done:
+		e.done <- err
+		return true
+	default:
+		return false
+	}
+}
+
 // URL returns nyyrikkid's canonical URL.
 func (e *Env) URL() string { return e.Config.Server.CanonicalURL }
 

@@ -197,7 +197,18 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	errc := make(chan error, 3)
-	go func() { errc <- bot.Run(ctx) }()
+	go func() {
+		err := bot.Run(ctx)
+		if errors.Is(err, telegram.ErrStopped) {
+			// Another poller or a revoked token: the poller stops for good
+			// and escalations are denied, but the server keeps serving so
+			// /readyz reports it. Exiting would make the kubelet restart
+			// us into exactly the retry loop docs/05 D2 forbids.
+			log.Error("telegram poller stopped; escalations are denied until restart", "err", err)
+			return
+		}
+		errc <- err
+	}()
 	go func() { errc <- mainSrv.ServeTLS(mainLn, "", "") }()
 	go func() { errc <- healthSrv.Serve(healthLn) }()
 	log.Info("nyyrikkid listening", "listen", mainLn.Addr().String(), "health", healthLn.Addr().String(), "version", o.Version)

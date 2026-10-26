@@ -239,6 +239,7 @@ func TestOneOffApproved(t *testing.T) {
 	if ok, _ := e.p.Resolve(context.Background(), id, approval.ActionDeny, approverID); ok {
 		t.Fatal("second tap acted")
 	}
+	waitOutcome(t, e, id, approval.Approved)
 	g.Release()
 	if g.Context().Err() == nil {
 		t.Fatal("released grant context still live")
@@ -364,6 +365,13 @@ func TestDependencyFailuresDeny(t *testing.T) {
 		e.p.Resolve(context.Background(), id, approval.ActionApprove, approverID)
 		if res := get(t, ch); res.g != nil || codes.Of(res.err) != codes.Unavailable {
 			t.Fatalf("allowed with a failed audit write: %v", res.err)
+		}
+		// The chat must not say "Approved" for a request that didn't run.
+		waitOutcome(t, e, id, approval.Failed)
+		for _, k := range e.asker.outcomes(id) {
+			if k == approval.Approved {
+				t.Fatal("prompt shows Approved for a denied run")
+			}
 		}
 	})
 }

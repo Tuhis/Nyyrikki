@@ -65,6 +65,20 @@ func TestInvalid(t *testing.T) {
 	}
 }
 
+// The bot token travels in the Bot API URL, so it must not cross the
+// network in cleartext (found in review).
+func TestTelegramAPIURL(t *testing.T) {
+	for url, ok := range map[string]bool{
+		"https://api.telegram.org": true, "http://127.0.0.1:8080": true, "http://localhost:9": true,
+		"http://api.telegram.org": false, "http://10.0.0.1": false, "ftp://x": false,
+	} {
+		src := strings.Replace(valid(t), "  bot_token_file:", "  api_url: "+url+"\n  bot_token_file:", 1)
+		if _, err := Parse([]byte(src)); (err == nil) != ok {
+			t.Errorf("%s: %v", url, err)
+		}
+	}
+}
+
 func TestExactlyOneHuman(t *testing.T) {
 	src := strings.Replace(valid(t), "targets:", `  - id: second
     subject: x

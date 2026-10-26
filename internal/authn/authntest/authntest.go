@@ -147,6 +147,9 @@ type Claims struct {
 	Expiry    time.Time
 	NotBefore time.Time
 	NoExpiry  bool
+	// Typ is the token type claim; empty means "Bearer", or "DPoP" when
+	// JKT is set, as Keycloak issues access tokens. "-" leaves it out.
+	Typ string
 }
 
 // Token signs a token with the given claims, filling defaults for empty
@@ -200,6 +203,15 @@ func (s *Server) claimsMap(c Claims) map[string]any {
 	}
 	if c.SID != "" {
 		m["sid"] = c.SID
+	}
+	switch {
+	case c.Typ == "-":
+	case c.Typ != "":
+		m["typ"] = c.Typ
+	case c.JKT != "":
+		m["typ"] = "DPoP"
+	default:
+		m["typ"] = "Bearer"
 	}
 	if c.JKT != "" {
 		m["cnf"] = map[string]string{"jkt": c.JKT}

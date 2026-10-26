@@ -18,6 +18,7 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/config"
 	"github.com/Tuhis/Nyyrikki/internal/server/servertest"
+	"github.com/Tuhis/Nyyrikki/internal/telegram/telegramtest"
 )
 
 func TestMain(m *testing.M) { servertest.Main(m) }
@@ -380,5 +381,31 @@ func TestMCPHeadersLogin(t *testing.T) {
 	h, err := l.Header(context.Background(), "POST", l.MCPURL, time.Now)
 	if err != nil || !strings.HasPrefix(h.Get("Authorization"), "Bearer ") {
 		t.Fatal(err)
+	}
+}
+
+// TestTelegramConflictKeepsServingAndDenies: a 409 from getUpdates means
+// another poller has the token. Nyyrikki stops polling for good but keeps
+// serving, so /readyz can report it, and denies every escalation until it
+// is restarted. It must not exit and be restarted into a retry loop
+// (docs/05 D2; found in review).
+func TestTelegramConflictKeepsServingAndDenies(t *testing.T) {
+	e := servertest.Start(t)
+	e.Telegram.FailNext("getUpdates", http.StatusConflict)
+	// End the current long poll so the next one meets the conflict.
+	e.Telegram.PushMessage(telegramtest.TextMessage{FromID: servertest.ApproverID, ChatID: servertest.ApproverID, Text: "hello"})
+	e.Telegram.Wait(t, "the poller to hit the conflict", func() bool { return e.Telegram.Calls("getUpdates") >= 2 })
+	time.Sleep(200 * time.Millisecond)
+	if e.Stopped() {
+		t.Fatal("nyyrikkid exited on a Telegram conflict")
+	}
+	cs := mcpAgent(t, e, "claude-code", "s1")
+	var out api.RunOut
+	if eb := call(t, cs, api.ToolRun, api.RunIn{Target: "prod", Args: []string{"get", "pods"}, Reason: "x"}, &out); eb == nil || eb.Code != codes.Unavailable {
+		t.Fatalf("escalation with a stopped poller: %+v", eb)
+	}
+	var targets api.ListTargetsOut
+	if eb := call(t, cs, api.ToolListTargets, map[string]any{}, &targets); eb != nil || len(targets.Targets) == 0 {
+		t.Fatalf("listing stopped working: %+v", eb)
 	}
 }

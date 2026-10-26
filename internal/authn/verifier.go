@@ -96,6 +96,7 @@ func NewVerifier(cfg Config) *Verifier {
 // claims are the access-token claims Nyyrikki reads.
 type claims struct {
 	jwt.Claims
+	Typ      string `json:"typ"`
 	AZP      string `json:"azp"`
 	SID      string `json:"sid"`
 	AuthTime int64  `json:"auth_time"`
@@ -245,6 +246,11 @@ func (v *Verifier) verifyToken(ctx context.Context, token string) (*claims, erro
 	}
 	if err := c.ValidateWithLeeway(jwt.Expected{Time: v.cfg.Now()}, maxSkew); err != nil {
 		return nil, fail("token: %v", err)
+	}
+	// Only access tokens (INV-06): Keycloak marks them "Bearer" or "DPoP";
+	// an ID or refresh token carrying the audience is refused.
+	if c.Typ != "Bearer" && c.Typ != "DPoP" {
+		return nil, fail("token: not an access token")
 	}
 	if c.Subject == "" || c.AZP == "" {
 		return nil, fail("token: missing sub or azp")

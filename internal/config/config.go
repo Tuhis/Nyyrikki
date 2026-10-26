@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -230,8 +231,11 @@ func (c *Config) Validate() error {
 	if u, err := url.Parse(c.Auth.Issuer); err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
 		bad("auth.issuer must be an https URL")
 	}
-	if u, err := url.Parse(c.Telegram.APIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		bad("telegram.api_url must be an http(s) URL")
+	// The bot token is part of every Bot API URL: https only, except on
+	// loopback (a local test fake).
+	if u, err := url.Parse(c.Telegram.APIURL); err != nil || u.Host == "" ||
+		!(u.Scheme == "https" || u.Scheme == "http" && isLoopback(u.Hostname())) {
+		bad("telegram.api_url must be an https URL")
 	}
 	if t := c.Approval.Timeout.D(); t < 10*time.Second || t > 10*time.Minute {
 		bad("approval.timeout must be between 10s and 10m")
@@ -354,6 +358,14 @@ func (c *Config) TargetByName(name string) (*Target, bool) {
 		}
 	}
 	return nil, false
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func contains(xs []string, x string) bool {
