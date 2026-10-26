@@ -45,11 +45,17 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 ## Milestones to the first version
 
 Adopted 2026-10-26 (owner decision). The R items above split the work
-by subsystem. The milestones below cut across them into the order in
-which it gets **built**: each one is a vertical slice that runs end to
-end and can be demonstrated. Implementation follows the milestones,
-one at a time, in order; design docs for a later milestone may be
-written earlier. **M4 done means the first version is done.** A
+by subsystem. The milestones below cut across them into vertical slices
+that each run end to end and can be demonstrated. Implementation works
+toward them. **All five done means the first version is done.**
+
+The numbering follows the natural dependencies, but it is **not a
+required order**. Which milestone to work on, and whether several go in
+parallel, is the owner's call case by case. A later milestone may be
+asked for before an earlier one is done. When that happens, the parts
+of earlier milestones it depends on are built as far as it needs them,
+following the same design docs, and the earlier milestone's own "done
+when" still has to be met before it is marked done. A
 milestone's status changes like an R item's: dated, and saying what is
 still open.
 
