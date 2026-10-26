@@ -32,8 +32,9 @@ that makes it fail and asserts deny. A default branch in a decision
 
 **One decision point.** Whether a request may run is decided in exactly
 one place. A second "quick check" elsewhere drifts from the first. Review
-asks: can any tool, MCP method (resources, prompts, sampling),
-transport, batch or follow-up request reach a target without passing it?
+asks: can any MCP tool or method (resources, prompts, sampling), CLI
+command, transport, batch or follow-up request reach a target without
+passing it?
 
 **No approval, no request.** The decision point allows a request only
 when a one-off approval of exactly that request, or a live elevation
@@ -84,9 +85,17 @@ foreign-chat callback is rejected, with a test for each.
 
 **Secrets never leave their lane.** Nyyrikki's own credentials, the
 temporary credentials it issues, agent tokens, and secret contents from
-target systems never appear in logs, audit free-text, Telegram messages
-or responses returned to the agent. Redaction happens at the boundary,
-with a test that asserts the redacted form.
+target systems never appear in logs, audit free-text or Telegram
+messages. Nyyrikki's own credentials and leases never appear in a
+response or an error returned to the agent either. Redaction happens at
+the boundary, with a test that asserts the redacted form. The target's
+response to an approved request is the exception: it is returned
+unredacted (`ROADMAP.md` R9).
+
+**MCP and CLI stay in step.** Both are thin clients of one API. A
+change that adds or changes an operation in one does it in both, with a
+test for each, and neither gains a way to approve, deny or end
+anything.
 
 **Every decision is audited, including the failures.** Allow, deny,
 escalate, approve, reject, expire, every forwarded request (as which
@@ -149,7 +158,7 @@ criteria**.
    what happens in the other order.
 5. **Bypass hunt**: list every way a request can reach a target and
    check that each one passes the single decision point. Look at every
-   tool and MCP method, transports, batching, request encodings and
+   MCP tool and method, every CLI command, transports, batching, request encodings and
    parser differences, redirects, streaming upgrades, the impersonated
    identity, elevation expiry, and the gap between check and forwarding.
 6. **Trust boundaries**: for every new input (agent request, agent

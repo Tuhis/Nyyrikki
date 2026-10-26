@@ -25,7 +25,8 @@ what is in and out of scope. The kinds of issue that will certainly be in
 scope:
 
 - Running a request that no one-off approval or live elevation covers,
-  through any tool, MCP method, transport or request encoding.
+  through any MCP tool or method, CLI command, transport or request
+  encoding.
 - Running a different or wider request than the one that was approved:
   request smuggling, a parse that differs between what the approver saw
   and what is forwarded, extra requests riding along, redirects to
@@ -50,10 +51,13 @@ scope:
   account that isn't an approver, or getting an approver to approve
   something other than what runs (for example with a misleading stated
   reason or a request that renders deceptively).
-- Getting Nyyrikki's credentials, the temporary credentials it issues,
-  or secrets from the target systems into the agent's hands, through
-  responses, errors or messages.
+- Getting Nyyrikki's credentials or the temporary credentials it issues
+  into the agent's hands, through responses, errors or messages.
 - Leaking tokens, kubeconfigs, API keys or secret contents into logs,
   audit records or Telegram messages.
 - Tampering with or suppressing audit records.
 - Supply-chain issues in the build and release path.
+
+Accepted in the first version: the response to an approved request
+reaches the agent unredacted, including any secret material the request
+returns. Optional redaction is deferred (`ROADMAP.md` R9).

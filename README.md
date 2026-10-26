@@ -1,10 +1,10 @@
 # Nyyrikki
 
-A gateway that lets AI agents run privileged actions through MCP, with
-each escalation approved by a human on Telegram.
+A gateway that lets AI agents run privileged actions through MCP or a
+CLI, with each escalation approved by a human on Telegram.
 
-An agent connects to Nyyrikki as an MCP server and asks it to do things
-the agent can't do itself, such as deleting a pod with `kubectl`.
+An agent connects to Nyyrikki as an MCP server, or calls its command-line
+client from a shell, and asks it to do things the agent can't do itself, such as deleting a pod with `kubectl`.
 Nyyrikki passes the agent's request through to the target system, using
 credentials that only Nyyrikki holds. Nothing privileged runs without a
 person's approval. The agent can ask for one request to be approved, or

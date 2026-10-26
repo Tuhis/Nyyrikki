@@ -33,13 +33,14 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 | # | Item | Status |
 |---|------|--------|
 | R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
-| R2 | [Gateway core: MCP tools, identity, targets, one decision point](#r2--gateway-core) | 💡 proposed 2026-10-26 |
+| R2 | [Gateway core: MCP and CLI, identity, targets, one decision point](#r2--gateway-core) | 💡 proposed 2026-10-26 |
 | R3 | [Audit log](#r3--audit-log) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
 | R4 | [Pass-through, identity propagation and credential custody](#r4--pass-through-identity-propagation-and-credential-custody) | 💡 proposed 2026-10-26 |
 | R5 | [Telegram escalation: one-off approvals and time-boxed elevation](#r5--telegram-escalation) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
 | R6 | [Packaging and deployment](#r6--packaging-and-deployment) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
 | R7 | [Operator surface](#r7--operator-surface) | 💡 proposed 2026-10-25 |
 | R8 | [AI risk assessment](#r8--ai-risk-assessment) | ⏸️ deferred 2026-10-26 (owner decision: not in the first version) |
+| R9 | [Optional response redaction](#r9--optional-response-redaction) | ⏸️ deferred 2026-10-26 (owner decision: future, and optional) |
 
 R2–R5 together make the first usable version. Before R5 lands, nothing
 privileged can run, because nothing can be approved.
@@ -72,7 +73,10 @@ running the gates on an empty skeleton.
 **Why**: every request has to pass one place that decides correctly,
 before anything can run.
 
-**Scope**: the MCP server and its three tools:
+**Scope**: three operations, offered both as MCP tools and as commands
+of a CLI. Some agents work better with a CLI, and a CLI lets them pipe
+and filter output with their shell tools. Both are thin clients of the
+same API and reach the same decision point:
 
 - **List targets**: the target systems this agent may ask for, with no
   approval needed.
@@ -91,7 +95,11 @@ request passes. A request is allowed only by a one-off approval of
 exactly that request, or by a live elevation that matches agent, human
 and target. Everything else is denied, including on any dependency
 error. MCP features beyond these tools (resources, prompts, sampling)
-are off.
+are off. The CLI writes the target's response to stdout and Nyyrikki's
+own messages to stderr, has exit codes that tell denied, timed out and
+failed apart, and blocks while an approval is pending. How it
+authenticates as the agent, and that it holds no target credential and
+can't approve anything, is settled here too.
 
 ## R3 — Audit log
 
@@ -134,14 +142,15 @@ with R2.
   when needed (an elevation window is a natural lease): scope, lifetime,
   revocation on every path, cleanup after a crash, and keeping them
   inside Nyyrikki.
-- **Responses**: which part of a target's response goes back to the
-  agent, and how secrets in it are redacted. Also timeouts, and what
-  happens when a request partly succeeds.
+- **Responses**: the target's response goes back to the agent as it
+  came, unredacted (redaction is R9, deferred). Nyyrikki's own
+  credentials and leases never appear in a response or an error. Also
+  timeouts, and what happens when a request partly succeeds.
 
 ## R5 — Telegram escalation
 
 **Why**: every privileged request needs a human who can answer within
-seconds from a phone, while the agent's tool call waits.
+seconds from a phone, while the agent's call waits.
 
 **Scope**: the approver bot; two message kinds, a one-off request
 (showing the exact request as it will be forwarded) and an elevation
@@ -152,7 +161,8 @@ timeout as deny; the approver allow-list; whether the human an agent
 acts for may approve that agent's requests; what the approver sees while
 an elevation is live, and whether they can end it early from the chat;
 and what the waiting agent sees (MCP progress or a timeout, decided
-against what clients support).
+against what clients support; for the CLI, what it prints while it
+blocks).
 
 ## R6 — Packaging and deployment
 
@@ -189,3 +199,19 @@ which requests it may decide alone (a policy question, settled in the
 doc); prompt-injection defences against the agent and against what the
 agent read; latency and cost; fail closed when the model is unavailable;
 and the evaluation set that measures it.
+
+## R9 — Optional response redaction
+
+**Deferred 2026-10-26 (owner decision)**: in the first version, the
+response to an approved request reaches the agent as the target sent it.
+Redaction is a possible future enhancement, and even then optional, on
+by configuration per target.
+
+**Why it may come back**: an approved request can return secret material
+(for example `kubectl get secret`), which then sits in the agent's
+context and, through it, at the model provider.
+
+**Scope, if picked up**: what counts as a secret per target type; how
+redaction is configured and switched on; how the agent and the approver
+can tell a redacted response from an original; and a test asserting the
+redacted form for each target type.

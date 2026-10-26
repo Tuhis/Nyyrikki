@@ -2,8 +2,9 @@
 
 ## Purpose & Context
 Nyyrikki lets AI agents carry out privileged actions they can't do on their
-own, such as `kubectl delete pod`. An agent connects to Nyyrikki as an
-**MCP server**. Nyyrikki holds high-privilege credentials for the target
+own, such as `kubectl delete pod`. An agent reaches Nyyrikki through an
+**MCP server** or an equivalent **CLI**: both offer the same operations,
+and the CLI lets an agent pipe output through its shell. Nyyrikki holds high-privilege credentials for the target
 systems, and the agent never sees them. Where a target supports it,
 Nyyrikki uses impersonation or delegation so that the target system sees
 the **exact human** the agent acts for, not Nyyrikki. When needed,
@@ -15,7 +16,7 @@ Nyyrikki doesn't offer one tool per action. Every privileged request
 needs a human's approval on Telegram, given in one of two ways:
 
 - **One-off escalation**: the approver sees that exact request and
-  approves or denies it. The tool call waits for the answer or fails.
+  approves or denies it. The call waits for the answer or fails.
 - **Time-boxed elevation**: the approver grants the agent a window of at
   most 30 minutes on one or more named target systems. Within that
   window, the agent's requests to those systems run without asking again.
@@ -88,7 +89,11 @@ behind it is out of order, however small.
   approval surface, the Telegram bot token or any credential on the
   machine the agent runs on, and never log in to Telegram on anything the
   agent can control. Any of these lets the agent approve itself. No MCP
-  tool approves, denies or ends anything.
+  tool or CLI command approves, denies or ends anything.
+- **MCP and CLI are thin clients of one API.** Neither makes decisions,
+  holds target credentials or offers anything the other doesn't. A
+  capability added to one is added to both, and both reach the same
+  decision point.
 - **An approval covers exactly what it says.** A one-off approval covers
   one request, forwarded exactly as the approver saw it. An elevation
   covers the named targets, for the named agent and human, until its
@@ -102,7 +107,8 @@ behind it is out of order, however small.
   expiry.
 - **Nyyrikki holds the credentials; the agent never does.** That
   includes the temporary credentials Nyyrikki creates on target systems.
-  None of them is ever handed to an agent, directly or in a tool result.
+  None of them is ever handed to an agent, directly, in a result or in
+  an error.
   Issued credentials are scoped as narrowly and live as briefly as works,
   and they are revoked on every path.
 - **The target sees the real user.** Wherever the target can impersonate
@@ -117,9 +123,14 @@ behind it is out of order, however small.
   agent, the human it acts for, the target, the exact request, what
   covered it (which approval or elevation), and what it did. Requests
   made under an elevation are recorded one by one, like any others.
-- **Secrets never reach logs, Telegram messages or tool results.** That
-  covers tokens, kubeconfigs, API keys and the contents of secret
-  resources.
+- **Secrets never reach logs or Telegram messages.** That covers tokens,
+  kubeconfigs, API keys and the contents of secret resources.
+- **Target responses reach the agent unredacted.** The response to an
+  approved request is the agent's to read, as it would be for the human
+  it acts for. Redacting secrets in responses is a possible future,
+  optional feature (owner decision 2026-10-26, `ROADMAP.md` R9), not part
+  of the first version. Nyyrikki's own credentials are a different
+  matter: they never appear in a response or an error.
 - **Bug fixes are test-first**: write the failing test, watch it fail, then
   fix. See `CODE-REVIEW.md`. Every rule there exists because its absence
   cost a real bug.
@@ -173,8 +184,8 @@ Their reasoning holds for the current plan too, so they stand.
   running unmodified `kubectl` or `ssh` against protocol proxies, and
   impersonating a fixed per-profile user. Replaced on 2026-10-26 by owner
   decision with the plan in `ROADMAP.md`: requests passed through via
-  MCP, one-off approvals or elevations of at most 30 minutes, acting as
-  the exact human.
+  MCP or the CLI, one-off approvals or elevations of at most 30
+  minutes, acting as the exact human.
 - **An HTTP identity-aware proxy in front of web services for people in
   browsers** (OIDC sign-in, sessions, per-route rules). The project's
   first framing, set aside before the Warden plan.
