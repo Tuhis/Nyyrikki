@@ -73,7 +73,7 @@ All checked on 2026-10-26 with Go 1.26.8.
 | D11 | **Target version check.** Before the first run on a target, and then at most every 10 minutes, Nyyrikki reads `/version` with its own credential (no impersonation) and refuses the target below 1.35 (`unavailable`, `target_version`). An unreachable target is `unavailable`. | docs/01 D13; M6. |
 | D12 | **Interactive runs.** `run` with `interactive: true` is allowed only for `exec` and `attach` with `stdin` and `tty` set. The approval is the same as for any run. The run starts only when the client attaches to `/stream` with the ticket (docs/02 D10): the child gets a pseudo-terminal (M8), WebSocket binary messages carry terminal bytes both ways, and a text message `{"resize": {"cols", "rows"}}` resizes it. When the child exits, the server sends `{"exit_code": n}` and closes. | OD2. A pty is what makes kubectl ask for a TTY, as it does on the owner's laptop. |
 | D13 | **Output to the agent.** The result is kubectl's exit status and its stdout and stderr, as they came, apart from truncation (D7). Nyyrikki adds none of its credentials to them: the kubeconfig holds no secret (D9), verbosity flags don't exist (M1), and `config` isn't offered (D5). *Revised 2026-10-27 (OD3)*: a request that reads Nyyrikki's credentials on the target, because the human can, returns them like any response; that is an accepted risk. | `CLAUDE.md`: responses unredacted; Nyyrikki's credentials never put in a response by Nyyrikki. |
-| D14 | **Secret-bearing values in what Nyyrikki shows and logs.** The values of `--from-literal` (the part after the first `=`), `--docker-password` and of `data` and `stringData` in any stdin document whose `kind` is `Secret` and of `patch`'s `--patch` when the command names a Secret (`secret`, `secrets`, `secret/<name>`) are replaced in the approver's view and the audit record by `‹redacted: N bytes, sha256:<first 12 hex>›`. They still run as sent; the hash binds the approval to them. | `CLAUDE.md`: secrets never reach logs or Telegram. The approver still sees that a secret is being set, and its size. *Revised 2026-10-27 (review of the docs PR)*: also `patch secret`'s `--patch`, Secrets inside a `List`, and a Secret's `last-applied-configuration` annotation. |
+| D14 | **Secret-bearing values in what Nyyrikki shows and logs.** In the approver's view and the audit record, these are replaced by `‹redacted: N bytes, sha256:<first 12 hex>›`: the values of `--from-literal` (the part after the first `=`) and `--docker-password`; `patch`'s `--patch` when a positional names a Secret (the resource token, matched case-insensitively up to the first `/` or `.`, is `secret` or `secrets`) or when the target comes from `-f`; and, in stdin, `data`, `stringData` and the `kubectl.kubernetes.io/last-applied-configuration` annotation of every document whose `kind` is `Secret`, including Secrets inside a `List`'s `items`. They still run as sent; the hash binds the approval to them. Not covered, and accepted: a Secret's values typed into another command's positional argument (for example `annotate secret x kubectl.kubernetes.io/last-applied-configuration='{…}'`). *Revised 2026-10-27 (review of the docs PR)*: the patch, `List` and annotation cases were added. | `CLAUDE.md`: secrets never reach logs or Telegram. The approver still sees that a secret is being set, and its size. |
 
 ### Rejected alternatives
 
@@ -176,7 +176,7 @@ targets:
 | G6 Requests run as the human: impersonation from the registry, never from the request | `TestKubeconfigImpersonation`; e2e against kind, checking the apiserver audit log for the impersonated user |
 | G7 A target older than 1.35 is refused | `TestVersionCheck` |
 | G8 Interactive exec over `/stream` works and is cut at expiry | `TestInteractiveExec` (fake apiserver), e2e |
-| G9 Secret-bearing values are redacted in the display and the audit record | `TestDisplayRedaction` |
+| G9 Secret-bearing values are redacted in the display and the audit record, in every spelling of D14 (`secret`, `secrets/x`, `Secret`, `secrets.v1`, `patch -f -`) | `TestDisplayRedaction`, `TestDisplayRedactsSecretPatch` |
 
 ## 8. Chunks
 
@@ -197,6 +197,12 @@ targets:
   `drain`). The approver approves the line; that is what OD1 chose.
 - **Large stdin documents** may not fit in one Telegram message
   (docs/05 D9 refuses them rather than show part of a request).
+- **An approved request can read Nyyrikki's own credentials, or mint a
+  standing credential**, when the human can (OD3). Accepted by the owner;
+  SECURITY.md (Accepted risks) lists what it costs and the RBAC that
+  closes it. Marking such requests on the Telegram message, without
+  refusing them, is a possible strengthening of the one defence, the
+  approver's tap.
 
 ## 10. How it was implemented (YYYY-MM-DD)
 

@@ -156,7 +156,7 @@ of order, however small.
 - **Telegram updates are untrusted.** A callback is not an approval until
   it is checked against the approver, the request or elevation, and its
   expiry.
-- **Nyyrikki holds the target credentials; the agent never does.** That
+- **Nyyrikki holds the target credentials and never hands them to the agent.** That
   covers every credential for a target system or for approving,
   including the temporary credentials Nyyrikki creates on targets. The
   only credential the agent holds is its own token for authenticating to

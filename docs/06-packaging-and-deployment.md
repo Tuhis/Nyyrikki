@@ -73,6 +73,13 @@ mounted, `rbac.impersonate` (users, groups), `networkPolicy`, `image`,
 - **What the agents can read.** The pod spec and ConfigMap hold no
   secret (docs/01 OD7).
 - **Listeners.** Only `:8443` and `:8081` are exposed (docs/01 D10).
+- **The human's own rights on the cluster Nyyrikki runs in** (docs/04
+  OD3, accepted risk). A human who can read Nyyrikki's Secrets, mint its
+  ServiceAccount's tokens, exec into its pod, debug its node or create a
+  privileged or `hostPath` pod can, with one approved request, hand the
+  agent Nyyrikki's credentials. The setup docs tell the owner which
+  rights to withhold to close it (SECURITY.md, Accepted risks), or to run
+  Nyyrikki on a cluster the human doesn't administer.
 
 ## 7. Acceptance criteria
 

@@ -276,8 +276,9 @@ with R2.
   revocation on every path, cleanup after a crash, and keeping them
   inside Nyyrikki.
 - **Responses**: the target's response goes back to the agent as it
-  came, unredacted (redaction is R9, deferred). Nyyrikki's own
-  credentials and leases never appear in a response or an error. Also
+  came, unredacted (redaction is R9, deferred). Nyyrikki never puts its
+  own credentials or leases in a response or an error (a request that
+  reads them because the human can is docs/04 OD3's accepted risk). Also
   timeouts, and what happens when a request partly succeeds.
 
 ## R5 — Telegram escalation

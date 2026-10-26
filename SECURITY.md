@@ -138,7 +138,8 @@ These kinds of issue are always in scope:
   (not revoked after an error, a timeout or a crash) or being wider than
   needed.
 - Compromise of Nyyrikki itself, or of where its credentials are stored,
-  which exposes everything behind it.
+  which exposes everything behind it, other than through an approved
+  request the human could run themselves (Accepted risks).
 - Producing an approval from anything the agent controls: an approval
   surface, a bot token, a Telegram session or a credential on the
   agent's machine. An approval means something only if the agent can't
@@ -148,7 +149,9 @@ These kinds of issue are always in scope:
   something other than what runs (for example with a misleading stated
   reason or a request that renders deceptively).
 - Getting Nyyrikki's credentials or the temporary credentials it issues
-  into the agent's hands, through responses, errors or messages.
+  into the agent's hands, through responses, errors or messages, other
+  than through an approved request the human could run themselves
+  (Accepted risks).
 - Leaking tokens, kubeconfigs, API keys or secret contents into logs,
   audit records or Telegram messages.
 - Tampering with or suppressing audit records.
@@ -159,13 +162,37 @@ These kinds of issue are always in scope:
 - **Responses are unredacted.** The response to an approved request
   reaches the agent as the target sent it, including any secret
   material it returns. Optional redaction is deferred (`ROADMAP.md` R9).
-- **An approved request can read Nyyrikki's own credentials** when the
-  human it runs as can: for example `get secret -n <nyyrikki-namespace>`,
-  `create token <nyyrikki-serviceaccount>`, or `exec` into Nyyrikki's pod,
-  if the human is a cluster admin. The approver's tap, on a message that
-  shows the exact request, is the defence. Owners who want it closed give
-  the human no access to Nyyrikki's namespace (docs/04 OD3, owner
-  decision 2026-10-27).
+- **One approved request can hand the agent Nyyrikki's own credentials**
+  when the human it runs as can read them (docs/04 OD3, owner decision
+  2026-10-27): `get secret -n <nyyrikki-namespace>`, `create token
+  <nyyrikki-serviceaccount>`, `exec` into Nyyrikki's pod, or the node
+  paths below, as a cluster admin can. What that costs, for as long as
+  the stolen credential lives:
+  - a **target token** (a remote target's, or one minted for Nyyrikki's
+    ServiceAccount) gives direct API access that can impersonate the
+    human with no Nyyrikki in the path, so INV-01, INV-03 and INV-10 no
+    longer hold for that target;
+  - the **Telegram bot token** lets the agent edit Nyyrikki's pending
+    messages, so the approver could see a harmless command while the
+    buttons settle the real request (INV-02, INV-04), or set a webhook,
+    which stops Nyyrikki's polling (fail closed: every escalation is
+    denied);
+  - the **introspection secret** is lost.
+
+  The defence is the approver's tap, on a message that shows the exact
+  request. To close it instead, the human must have none of: access to
+  Secrets, `serviceaccounts/token`, `pods/exec`, `pods/attach` or
+  `pods/portforward` in Nyyrikki's namespace (and in `nyyrikki-system` on
+  remote targets); `nodes/proxy`; node debugging (`debug node/…`); and the
+  right to create privileged or `hostPath` pods anywhere (for example Pod
+  Security `restricted` on every namespace the human can write to). Or
+  Nyyrikki runs on a cluster the human can't administer, with remote
+  targets only. Until then, INV-01, -02, -03, -04, -08 and -10 hold only
+  while the human lacks those rights (docs/06, deployment).
+- **One approval can mint a standing credential on a target**: `create
+  token <any-sa> --duration=…`, or a CSR created and then approved with
+  `certificate approve`. INV-03 bounds elevations, not what one approved
+  request returns. The approver's tap is the defence.
 - **The human approves their own agents' requests.** In the first
   version there is one human, who is also the approver (docs/01 OD1).
   The defence is a message that shows exactly what will run (R5).
