@@ -32,7 +32,7 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 
 | # | Item | Status |
 |---|------|--------|
-| R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
+| R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 📝 designing 2026-10-26: [docs/01](docs/01-foundations.md) drafted, OD1–OD13 decided; open: FD1–FD3 (skeleton, gates, measurements) |
 | R2 | [Gateway core: MCP and CLI, identity, targets, one decision point](#r2--gateway-core) | 💡 proposed 2026-10-26 |
 | R3 | [Audit log](#r3--audit-log) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
 | R4 | [Pass-through, identity propagation and credential custody](#r4--pass-through-identity-propagation-and-credential-custody) | 💡 proposed 2026-10-26 |
@@ -68,7 +68,7 @@ item, the doc's chunks say which part.
 
 | # | Milestone | Draws from | Status |
 |---|---|---|---|
-| M0 | [Decisions locked](#m0--decisions-locked) | R1 | not started 2026-10-26 |
+| M0 | [Decisions locked](#m0--decisions-locked) | R1 | in progress 2026-10-26: decisions in docs/01; open: CI running the gates on a skeleton (FD1, FD2) |
 | M1 | [Walking skeleton that only says no](#m1--walking-skeleton-that-only-says-no) | R2, R3 | not started 2026-10-26 |
 | M2 | [One-off escalation, end to end, on one target](#m2--one-off-escalation-end-to-end-on-one-target) | R2, R4, R5 | not started 2026-10-26 |
 | M3 | [Time-boxed elevation](#m3--time-boxed-elevation) | R2, R4, R5 | not started 2026-10-26 |
@@ -135,7 +135,8 @@ foreign callback, and a request that differs from what was approved all
 end in deny, each with a test. Every step is audited.
 
 **Open questions it needs answered**: whether the human an agent works
-for may approve that agent's requests (R5's doc); whether the request is
+for may approve that agent's requests (R5's doc; with one human in v1,
+[docs/01](docs/01-foundations.md) OD1 means they must); whether the request is
 a raw API request or a CLI line (R4's doc).
 
 ### M3 — Time-boxed elevation

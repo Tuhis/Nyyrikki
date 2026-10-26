@@ -56,18 +56,53 @@ design docs. Every copy drifted: it missed shipped milestones and
 contradicted itself. If you find yourself writing roadmap narrative here,
 put it in the doc and link to it.
 
-## Architecture (nothing locked in yet)
-No language, framework, MCP transport, agent or human identity scheme,
-credential store, impersonation or credential-issuing mechanism,
-pass-through request format, or first target system type has been
-chosen. Those decisions belong to R1
-(`ROADMAP.md`) and its design doc, `docs/01-*.md`. When R1 locks them in,
-record **only the decisions and the reasons for them** here, in the
-shape of a "locked in" list, and link to the doc.
+## Architecture (locked in by R1, 2026-10-26)
+Decisions and their reasons only. The detail, the owner decisions
+(OD1–OD13) and the measurements are in
+[`docs/01`](docs/01-foundations.md). Don't restate more of it here.
 
-Until then, **do not write application code.** The repository holds
-process and design documents only. A code change without a design doc
-behind it is out of order, however small.
+- **Go**, floor `go 1.26.0`, one module, two binaries: `nyyrikkid`
+  (server) and `nyyrikki` (CLI). The apiserver's request parser and the
+  MCP SDK are Go (D1, D2).
+- **A standalone service deployed with its own Helm chart**, one pod,
+  publishable as open source under **Apache-2.0**. Nothing assumes the
+  owner's environment (OD2, OD10, D3).
+- **One external API: remote MCP over Streamable HTTP at `/mcp`.** The
+  CLI is an MCP client of it, not of a second API. Only R2's tools are
+  offered; resources, prompts, sampling and elicitation are off (D4).
+- **MCP sessions carry no authority**; stateless mode. Approvals and
+  elevations key on the agent's identity (D5).
+- **Nyyrikki is an OAuth resource server only.** Tokens come from an
+  external authorization server, Keycloak as the reference, using its
+  supported features only: DCR for MCP clients, the device grant for
+  the CLI, an audience scope, introspection, no `offline_access` (D6,
+  D7).
+- **Human = token `sub` from the configured issuer, looked up in the
+  human registry; agent = (issuer, `azp`, `sid`), one sign-in.**
+  Nothing the client says identifies it (D8, OD5, OD12).
+- **Every call validates the JWT locally; run and elevate also
+  introspect.** Keycloak unreachable means deny (D9, OD13).
+- **Listeners: `:8443` HTTPS (`/mcp`, protected-resource metadata), TLS
+  terminated in-process; `:8081` health only, no data** (D10).
+- **SQLite (WAL, `modernc.org/sqlite`) on a PVC, one replica,
+  `Recreate`**; audit also to stdout as JSON lines; static binaries
+  (D11).
+- **Config is one strict YAML file from the chart's ConfigMap, holding
+  no secrets** (D12).
+- **First target: Kubernetes, in-cluster and remote, 1.35 and newer**
+  (OD9, D13).
+- **Credentials are Secrets mounted as files, never env vars.**
+  Nyyrikki's ServiceAccounts can only impersonate the registry's humans
+  (D15).
+- **Everything Nyyrikki logs is agent-readable**: the agents share its
+  cluster with cluster-wide read (OD7, D16).
+- **Gates and CI** as in docs/01 §5.6, each with a canary; actions
+  pinned to SHAs (D17, D18).
+
+Application code is written only for chunks of a design doc whose
+decisions the owner has approved: R1's chunks FD1–FD3 now, the rest as
+R2–R6 are designed. A code change without a design doc behind it is out
+of order, however small.
 
 ## Key constraints / principles to respect
 - **Fail closed.** Any error, timeout, unparseable response or unreachable
@@ -158,6 +193,18 @@ links point to the removed docs at the commit they were written in.
 - **Telegram webhooks.** An inbound endpoint is a second way to inject
   updates. Long polling only
   ([docs/04](https://github.com/Tuhis/Nyyrikki/blob/0ea8b56/docs/04-telegram-escalation.md) D2).
+
+Settled on 2026-10-26 in [docs/01](docs/01-foundations.md):
+
+- **Nyyrikki as its own OAuth authorization server.** Token minting
+  would sit next to the credentials it protects (OD3).
+- **Local-only JWT checks for run and elevate.** A revoked agent would
+  keep working until its token expired (OD13).
+- **An MCP server on the agent's machine (stdio)**, or **a second API
+  for the CLI** next to `/mcp`. One more thing on the machine the agent
+  controls; a second decision path to keep in step (OD6, D4).
+- **MCP session IDs as identity or as the key of an elevation.** A
+  client-chosen bearer value is not an identity (D5).
 
 ## Conventions
 - **Design doc before code.** Every roadmap item is designed in its own
