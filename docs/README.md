@@ -19,6 +19,11 @@ Not a design doc, but in this directory:
 | Doc | Item |
 |---|---|
 | [01](01-foundations.md) | R1 — Foundations: architecture, threat model, toolchain |
+| [02](02-gateway-core.md) | R2 — Gateway core: MCP and CLI, identity, targets, one decision point |
+| [03](03-audit-log.md) | R3 — Audit log |
+| [04](04-kubectl-passthrough.md) | R4 — Pass-through, identity propagation and credential custody: kubectl, 1:1 |
+| [05](05-telegram-escalation.md) | R5 — Telegram escalation: one-off approvals and time-boxed elevation |
+| [06](06-packaging-and-deployment.md) | R6 — Packaging and deployment, the minimal part for M4 |
 
 The replaced Warden plan (2026-10-25) also had docs numbered 01–09.
 Nothing was built from them, so they were removed and numbering starts
