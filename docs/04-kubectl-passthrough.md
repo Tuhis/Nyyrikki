@@ -220,9 +220,7 @@ targets:
 - **D14** also redacts the `last-applied-configuration` annotation of a
   Secret and Secrets inside a `List`. stdin that doesn't decode but
   mentions "secret" is shown only as its size and hash. `patch`'s
-  `--patch` is redacted whenever a positional names a Secret
-  (`secret`, `secrets`, `secret/<name>`, `secret.v1`), after review of the
-  docs PR.
+  `--patch` is redacted as D14 says, after review of the docs PR.
 - **`debug --profile`** is refused, because it shares the name of the
   denied global `--profile`. A per-command rule could allow it later.
 - **D7, cut runs**: a cut returns the partial output and `expired`, with

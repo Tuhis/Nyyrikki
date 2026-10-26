@@ -519,8 +519,16 @@ func TestDisplayRedactsSecretPatch(t *testing.T) {
 		{"patch", "secret", "db", "-p", `{"data":{"pw":"` + value + `"}}`},
 		{"patch", "secrets", "db", "--type=json", "-p", `[{"op":"replace","path":"/data/pw","value":"` + value + `"}]`},
 		{"patch", "secret/db", "-n", "shop", "--patch", `{"stringData":{"pw":"` + value + `"}}`},
+		{"patch", "secrets/db", "-p", `{"data":{"pw":"` + value + `"}}`},
+		{"patch", "Secret", "db", "-p", `{"data":{"pw":"` + value + `"}}`},
+		{"patch", "secrets.v1.", "db", "-p", `{"data":{"pw":"` + value + `"}}`},
+		{"patch", "-f", "-", "-p", `{"data":{"pw":"` + value + `"}}`},
 	} {
-		c, err := Parse(args, nil, false)
+		var stdin []byte
+		if args[1] == "-f" {
+			stdin = []byte("apiVersion: v1\nkind: Secret\nmetadata:\n  name: db\n")
+		}
+		c, err := Parse(args, stdin, false)
 		if err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}

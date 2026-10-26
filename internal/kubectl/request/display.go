@@ -37,11 +37,16 @@ func (c *Canonical) redactedArgv() []string {
 	return append(out, c.argv[len(out):]...)
 }
 
-// patchesSecret reports whether the command is a patch naming a Secret,
-// whose --patch then carries secret values (docs/04 D14).
+// patchesSecret reports whether the command is a patch that may target a
+// Secret, whose --patch then carries secret values (docs/04 D14): a
+// positional names one, or the target comes from -f, where it can't be
+// told from the argv.
 func (c *Canonical) patchesSecret() bool {
 	if len(c.path) != 1 || c.path[0] != "patch" {
 		return false
+	}
+	if _, ok := c.flag("filename"); ok {
+		return true
 	}
 	pos := c.positionals
 	if c.dash >= 0 && c.dash <= len(pos) {
