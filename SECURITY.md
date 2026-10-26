@@ -81,9 +81,8 @@ says so:
   environment variables or ConfigMap values.
 - Nyyrikki's ServiceAccounts can impersonate only the configured
   humans' identities and have no other rights.
-- The authorization-server realm Nyyrikki trusts never reuses an SSO
-  session for a new sign-in (in Keycloak: no Cookie authenticator in its
-  browser flow), so each sign-in is a separate agent (docs/01 D7, D8).
+- The CLI's client in the authorization server requires DPoP-bound
+  tokens (docs/01 D7).
 - The NetworkPolicy shipped with the chart is enforced by the cluster's
   network plugin.
 - The approver's Telegram account uses 2-Step Verification and a
@@ -156,4 +155,8 @@ These kinds of issue are always in scope:
 - **An agent's displayed name is its own claim.** Agents are told
   apart by their sign-in, not by what they call themselves (docs/01
   D8).
+- **Two MCP sign-ins may be one agent.** Sign-ins of the same MCP
+  client registration in one browser session can share Keycloak's
+  session ID, and then share an elevation. CLI sign-ins are always
+  separate, because each has its own DPoP key (docs/01 OD14).
 - **One replica.** When Nyyrikki is down, nothing privileged runs.

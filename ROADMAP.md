@@ -32,7 +32,7 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 
 | # | Item | Status |
 |---|------|--------|
-| R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 📝 designing 2026-10-26: [docs/01](docs/01-foundations.md) drafted, OD1–OD13 decided; open: FD1–FD3 (skeleton, gates, measurements) |
+| R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 📝 designing 2026-10-26: [docs/01](docs/01-foundations.md) drafted, OD1–OD14 decided; open: FD1–FD3 (skeleton, gates, measurements) |
 | R2 | [Gateway core: MCP and CLI, identity, targets, one decision point](#r2--gateway-core) | 💡 proposed 2026-10-26 |
 | R3 | [Audit log](#r3--audit-log) | 💡 proposed 2026-10-25, re-scoped 2026-10-26 |
 | R4 | [Pass-through, identity propagation and credential custody](#r4--pass-through-identity-propagation-and-credential-custody) | 💡 proposed 2026-10-26 |

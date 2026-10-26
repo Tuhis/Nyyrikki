@@ -58,7 +58,7 @@ put it in the doc and link to it.
 
 ## Architecture (locked in by R1, 2026-10-26)
 Decisions and their reasons only. The detail, the owner decisions
-(OD1–OD13) and the measurements are in
+(OD1–OD14) and the measurements are in
 [`docs/01`](docs/01-foundations.md). Don't restate more of it here.
 
 - **Go**, floor `go 1.26.0`, one module, two binaries: `nyyrikkid`
@@ -75,14 +75,15 @@ Decisions and their reasons only. The detail, the owner decisions
 - **Nyyrikki is an OAuth resource server only.** Tokens come from an
   external authorization server, Keycloak as the reference, using its
   supported features only: DCR for MCP clients, the device grant for
-  the CLI, an audience scope, introspection, no `offline_access` (D6,
-  D7).
+  the CLI with DPoP required, an audience scope, introspection, no
+  `offline_access` (D6, D7).
 - **Human = token `sub` from the configured issuer, looked up in the
-  human registry; agent = (issuer, `azp`, `sid`), one sign-in.**
-  Correct only because the trusted realm never reuses an SSO session
-  (no Cookie authenticator), so each sign-in gets a new `sid`; a known
-  `sid` with a different `auth_time` is denied. Nothing the client says
-  identifies it (D7, D8, OD5, OD12).
+  human registry. Agent = one sign-in: (issuer, `azp`, `cnf.jkt`) for
+  the CLI, whose tokens are DPoP-bound to a key made per
+  `nyyrikki login`; (issuer, `azp`, `sid`) for MCP clients.** Keycloak's
+  `sid` is the browser's SSO session, so it alone doesn't separate
+  sign-ins. Nothing the client says identifies it (D7, D8, OD5, OD12,
+  OD14).
 - **Every call validates the JWT locally; run and elevate also
   introspect.** Keycloak unreachable means deny (D9, OD13).
 - **Listeners: `:8443` HTTPS (`/mcp`, protected-resource metadata), TLS
