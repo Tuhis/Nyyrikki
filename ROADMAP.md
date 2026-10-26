@@ -26,9 +26,9 @@ requests against target systems, each covered by a human approval on
 Telegram (see `CLAUDE.md`, "Explicitly set aside"). Agents' requests pass
 through to the target's own API, and Nyyrikki acts as the human the
 agent works for. The first version has no model in the loop: AI risk
-assessment is R8 and deferred. The measured facts in the removed docs
-(Kubernetes, SSH, Telegram and MCP client behaviour) can be mined from
-history, but each is re-checked before a new decision leans on it.
+assessment is R8 and deferred. The facts measured for it (Kubernetes, SSH,
+Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
+`docs/gotchas.md`. Each is re-checked before a new decision leans on it.
 
 | # | Item | Status |
 |---|------|--------|

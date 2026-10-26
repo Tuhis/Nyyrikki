@@ -29,7 +29,8 @@ follow from that.
 
 Re-planned on 2026-10-26 by owner decision. This replaced the plan
 adapted from the Warden design on 2026-10-25. Nothing had been built, so
-its design docs were removed; they are in git history. See also
+its design docs were removed; they are in git history. The facts they
+measured are kept in `docs/measured.md` and `docs/gotchas.md`. See also
 "Explicitly set aside" below. AI assessment of requests is deferred, not
 dropped: it is the last roadmap item, ⏸️ until the owner picks it up.
 
@@ -45,6 +46,7 @@ has one authoritative home. Read it there.
 | How to write a design doc | `docs/README.md` and `docs/TEMPLATE.md` | restate it here |
 | What each design doc covers | `docs/README.md` (the index) | keep a second list |
 | Consolidated gotchas | `docs/gotchas.md` | duplicate them here |
+| Measured facts from the replaced plan | `docs/measured.md` | rely on one without re-checking it |
 | Open confirmed bugs | `BUGS.md` | list them here |
 | Coding and review rules, the gates | `CODE-REVIEW.md` | restate them here |
 | Commit types and scopes, PR etiquette | `CONTRIBUTING.md` | restate them here |

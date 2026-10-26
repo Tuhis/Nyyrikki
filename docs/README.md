@@ -12,12 +12,19 @@ Not a design doc, but in this directory:
 |---|---|
 | [`TEMPLATE.md`](TEMPLATE.md) | The skeleton every new design doc starts from |
 | [`gotchas.md`](gotchas.md) | A consolidated list of gotchas, each of which cost real debugging time |
+| [`measured.md`](measured.md) | Measured facts carried over from the replaced Warden plan, to re-check before reuse |
 
 ## Index
 
 | Doc | Item |
 |---|---|
 | — | No design docs yet. R1 will be `01`. |
+
+The replaced Warden plan (2026-10-25) also had docs numbered 01–09.
+Nothing was built from them, so they were removed and numbering starts
+again (owner decision, 2026-10-26). Their measured facts are in
+[`measured.md`](measured.md), and their gotchas stay in
+[`gotchas.md`](gotchas.md).
 
 ## The process
 
