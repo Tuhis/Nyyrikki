@@ -1,0 +1,17 @@
+# The secret-scan gate (docs/01 D17). The canary is the only allowed leak.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "gate canaries"
+paths = ['''test/canaries/secret/''']
+
+[[rules]]
+id = "nyyrikki-elevation-handle"
+description = "Nyyrikki elevation handle (docs/02 D9)"
+regex = '''nyel_[A-Za-z0-9_-]{43}'''
+
+[[rules]]
+id = "nyyrikki-stream-ticket"
+description = "Nyyrikki stream ticket (docs/02 D10)"
+regex = '''nyst_[A-Za-z0-9_-]{43}'''

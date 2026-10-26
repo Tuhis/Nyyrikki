@@ -174,13 +174,26 @@ criteria**.
 
 ## Gates (all must pass before merge)
 
-None yet: no language or toolchain has been chosen. The design doc that
-picks them (R1, `docs/01`) defines the gates. That PR adds them here
-**and** in `CONTRIBUTING.md`'s "Running the gates", and makes CI enforce
-them. At a minimum, expect a formatter check, a linter, the full test
-suite with the race detector (or the language's equivalent), a dependency
-licence check and a secret scan.
+Defined by [docs/01](docs/01-foundations.md) D17 and §5.6, run by
+`scripts/gates.sh` locally and by the `gates` job in CI. Tool versions are
+pinned in `.github/workflows/ci.yml` (measured 2026-10-26, docs/01 M12):
+staticcheck v0.8.2, govulncheck v1.9.0, go-licenses v2.0.1, gitleaks
+v8.30.1, kubeconform v0.8.0.
 
-`gawk` lesson worth keeping: make sure each gate actually checks
-something. A typecheck that type-checks nothing passes vacuously, and that
-is worse than no gate at all.
+| Gate | Command |
+|---|---|
+| format | `test -z "$(gofmt -l .)"` |
+| vet | `go vet ./...` |
+| staticcheck | `staticcheck ./...` |
+| tidy | `go mod tidy -diff` |
+| tests | `go test -race -count=1 ./...` |
+| vulnerabilities | `govulncheck ./...` |
+| licences | `go-licenses check ./... --allowed_licenses=MIT,BSD-2-Clause,BSD-3-Clause,Apache-2.0,ISC`, ignoring hand-reviewed modules, whose LICENSE hashes are pinned in `scripts/pinned-licenses` |
+| secrets | `gitleaks dir . --redact --config .gitleaks.toml` (it also matches elevation handles and stream tickets) |
+| chart | `helm lint`, `helm template … \| kubeconform -strict -kubernetes-version 1.35.0`, and the chart's template tests |
+| pinning | every action pinned to a SHA, every workflow defaulting to `contents: read` |
+
+Every gate has a canary in `test/canaries/`, and `scripts/gates-selftest.sh`
+(the `gates-selftest` step in CI) fails if any gate passes its canary.
+`gawk` lesson worth keeping: a gate that checks nothing passes
+vacuously, which is worse than no gate at all.

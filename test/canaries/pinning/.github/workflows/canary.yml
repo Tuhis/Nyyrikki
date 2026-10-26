@@ -1,0 +1,10 @@
+# Planted for the pinning canary: an action pinned to a tag, not a SHA.
+name: canary
+on: push
+permissions:
+  contents: read
+jobs:
+  x:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4

@@ -1,0 +1,3 @@
+package gpl
+
+func F() {}
