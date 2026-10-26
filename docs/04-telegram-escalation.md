@@ -3,7 +3,9 @@
 **Status**: drafted 2026-10-25. Status lives in
 [`ROADMAP.md`](../ROADMAP.md). Open: OD1 (what may be sent to Telegram)
 and OD2 (dual control in v1). Decisions D1–D14 await the owner's
-approval.
+approval. Revised 2026-10-26 after review in PR #1: `409` stops polling
+(§5.1), sibling refs are consumed only on decision prompts (§5.4),
+allowance variants follow the holding rule (§5.5).
 
 Chunks **TG1–TG5** (`TG` = Telegram; unused).
 
@@ -66,6 +68,7 @@ is **10.3 (2026-08-24)**.
 | M14 | Telegram accounts support 2-Step Verification (a cloud password in addition to the SMS code), a local passcode lock, and a list of active sessions that can be terminated. "whoever has the number, has the account" without 2SV. | telegram.org/faq | Confirmed. The approver setup in §5.2 requires the first two. A bot cannot check either (D13) |
 | M15 | `User.id` has at most 52 significant bits (safe in int64). In a private chat, the chat ID equals the user's ID. | Bot API: User; [MTProto bot IDs](https://core.telegram.org/api/bots/ids) | `User.id`: confirmed. The private-chat equality is only indirect ("MTProto user IDs are equal to bot API user dialog IDs"). D4 therefore checks `chat.id == from.id` explicitly and doesn't assume it |
 | M16 | Do Telegram clients auto-link `/commands`, URLs and `@mentions` inside `<pre>` and `<code>`? | **Not yet verified.** Measure in TG5 with a real bot and the official Android and iOS clients | D7 makes the answer non-critical: no text command escalates |
+| M17 | `getUpdates` fails with `409 Conflict` while another `getUpdates` poller is running on the same token, or while a webhook is set. | Bot API reference ("will not work if an outgoing webhook is set up"); python-telegram-bot maps 409 to `telegram.error.Conflict` for both cases | Partly: the webhook case is documented, the competing-poller case is library behaviour. **TG1 measures both** against the real Bot API and records the error descriptions |
 
 ## 3. Owner decisions
 
@@ -136,6 +139,15 @@ for {
 - **`429`**: sleep for `parameters.retry_after`.
 - **`401`** (token revoked): stop polling, set `approvals_unavailable`,
   alert. Escalations then expire (D11).
+- **`409 Conflict`** (M17): another poller or a webhook appeared on the
+  token while G runs. Someone else holds the bot token, or a second G is
+  running. Treat it like `401`: stop polling, set
+  `approvals_unavailable`, audit `telegram.unavailable` with error class
+  `conflict`, and alert. It is never retried with backoff, because a
+  webhook would receive updates G never sees, and a second poller would
+  steal approvals. So INV-19's webhook check also runs during
+  operation, not only at startup. Recovery is a restart after the
+  operator rotates the token (docs/09 §5.7).
 
 Outgoing calls (`sendMessage`, `editMessageText`,
 `editMessageReplyMarkup`, `answerCallbackQuery`) go through one
@@ -191,10 +203,10 @@ Profile: k8s-node-maint
   Drain, upgrade and uncordon prod nodes one at a time.
 TTL: 60 min (profile max 2 h, total 4 h) · Step mode: off
 Scope:
+  k8s prod: * secrets → deny
   k8s prod: get,list,watch ** → allow
   k8s prod: patch nodes → allow
   k8s prod: create pods/eviction -n * → confirm
-  k8s prod: * secrets → deny
   ssh node-1, node-2 as root: exec apt-get -y upgrade* → confirm …
 Decide by 13:47 UTC (in 15 min)
 Agent says (untrusted):
@@ -247,8 +259,12 @@ text ("Not valid", "Already decided", "Expired") and audits
    cq.message.message_id == row.message_id                     else wrong_message   (M3)
 6. now < row.expires_at                                        else expired
 7. in one transaction:
-     UPDATE decision_refs SET consumed_at=now
-       WHERE prompt_id=row.prompt_id AND consumed_at IS NULL    -- the ref and its siblings
+     if prompt.purpose in (grant, extension, step):             -- decision prompts
+       UPDATE decision_refs SET consumed_at=now
+         WHERE prompt_id=row.prompt_id AND consumed_at IS NULL  -- the ref and its siblings
+     else:                                                      -- control and list prompts
+       UPDATE decision_refs SET consumed_at=now
+         WHERE id=row.id AND consumed_at IS NULL                -- the clicked ref only
      require the clicked ref was among the rows updated        else already_used     (INV-03)
      apply the action as a compare-and-set on the object (docs/02 D3)
        object no longer in the expected state                  -> already_decided
@@ -259,9 +275,23 @@ text ("Not valid", "Already decided", "Expired") and audits
 9. retire every approver's prompt for this object (edit, D9)
 ```
 
-Consuming the siblings in step 7 means that one tap retires every button
-on that prompt. A second tap on the same message, or a replay of a
-consumed ref, fails at step 7.
+On a **decision prompt**, consuming the siblings in step 7 means one tap
+retires every button on it: a grant, extension or step is decided once.
+A second tap on the same message, or a replay of a consumed ref, fails
+at step 7.
+
+On a **control or list prompt** (`grant_controls`, `list`, `unmute`,
+`revoke_all`), a tap consumes only its own ref. The other buttons keep
+working, so `[Revoke]` stays one tap away (RR-3) after `[Step mode: turn
+on]`, and revoking one grant from `/grants` leaves the other grants'
+`[Revoke]` and `[Revoke all]` usable. Each action is still a
+compare-and-set on its object (docs/02 D3), so a button whose object
+has moved on is a no-op (`already_decided`). When a tap changes what the
+prompt should offer, step 9 edits the keyboard and mints fresh refs only
+for the new buttons, such as `[Step mode: turn off]`. Refs on control
+and list prompts expire when the object they act on ends, rather than
+at the request window: at the grant's `max_total` cap, which no
+extension can pass, or at the end of the mute.
 
 ### 5.5 Step prompts, allowances and grant controls
 
@@ -283,12 +313,24 @@ are never taken from A.
 | Kind | Narrow variant | Wide variant |
 |---|---|---|
 | k8s | same verb and resource, same namespace, any name | same verb and resource, any namespace |
-| http | same method, path with its last segment replaced by `*` | same method, path with its last two segments replaced by `*`, if the path has ≥ 3 segments |
+| http | same method, the exact path: the same call again | the pattern of the rule that held the operation, when it differs from the narrow variant |
 | ssh | none: commands are matched exactly or not at all (guardrail, RR-4) | none |
 
+Every allowance is also **bound to the rule that held the operation**
+(docs/02 §5.5): it covers an operation only if that same rule is the
+operation's first match. So an allowance can never stretch across to
+another rule's operations, whatever its matcher. For HTTP that's the
+whole widening: the wide variant is that rule's own pattern, which puts
+the wildcard where the profile author put it, on the varying ID. For
+`PUT /realms/acme/users/abc/reset-password`, the variants are that exact
+path and `PUT /realms/acme/users/*/reset-password`. Replacing path
+segments by position instead would turn `…/users/abc/reset-password`
+into `…/users/abc/*`, every action on one user, and `POST
+/realms/acme/users` into `POST /realms/acme/*`.
+
 The allowance lifetime is fixed at 15 min in v1, capped at the grant's
-expiry. The button's ref row stores the exact matcher, and the message
-shows it.
+expiry. The button's ref row stores the exact matcher and the rule, and
+the message shows the matcher.
 
 **Grant controls**, on the active-grant message:
 
@@ -354,6 +396,7 @@ The redaction rules live in docs/03 §5.9 (INV-11).
 | `sendMessage` fails | The prompt is retried with backoff until its decision window ends. The grant stays pending, and A sees `delivered: 0` (§5.9). |
 | Telegram unreachable for minutes | No updates, so no decisions. Requests and steps expire (D11). Alert after 2 min of failed polls. |
 | `401` from the Bot API | `approvals_unavailable`. Polling stops, the alert fires, and everything expires. |
+| `409 Conflict` from `getUpdates` | The same as `401`, audited as `telegram.unavailable` with error class `conflict` (§5.1). Not retried. |
 | A callback for a prompt whose `message_id` was never recorded (G crashed after sending) | Rejected as `wrong_message`. G sends a fresh prompt and retires the stale one when it can. |
 | Redelivered update after a crash | Effects plus the offset are atomic (D3), and refs are single-use. Nothing happens twice. |
 | An update older than the object's window | Fails the expiry check (§5.4 step 6). |
@@ -477,18 +520,18 @@ Validation:
 
 | Goal | Verified by |
 |---|---|
-| G1. A grant, extension or step is decided only through a §5.4-verified tap. No other code path decides one (INV-02) | integration tests against the fake Bot API; an AST check that `grants.Manager.Approve`, `steps.Broker.Approve` and `ExtensionApprove` are called only from `telegram.Decide` |
-| G2. Each §5.4 rejection fires for its own case: malformed, unknown ref, wrong user, approver disabled or unpaired, wrong chat, non-private chat, wrong message ID, expired, replayed, sibling already consumed, object already decided (INV-03) | one test per reason, each asserting a deny, no state change, and a `telegram.callback_rejected` audit |
-| G3. Two taps on one prompt, from two goroutines, yield exactly one decision | concurrency test with the race detector |
+| G1. A grant, extension or step is decided only through a §5.4-verified tap. No other code path decides one (INV-02) | integration tests against the fake Bot API; an AST check that `grants.Manager.Approve`, `steps.Broker.Approve`, `ExtensionApprove`, the step-mode-off transition and the unmute are called only from `telegram.Decide` |
+| G2. Each §5.4 rejection fires for its own case: malformed, unknown ref, wrong user, approver disabled or unpaired, wrong chat, non-private chat, wrong message ID, expired, replayed, sibling already consumed on a decision prompt, object already decided (INV-03) | one test per reason, each asserting a deny, no state change, and a `telegram.callback_rejected` audit |
+| G3. Two taps on one decision prompt, from two goroutines, yield exactly one decision. On a control or list prompt, a tap leaves the other buttons usable: `[Revoke]` works after `[Step mode: turn on]`, and after one `[Revoke]` on `/grants` the others still revoke | concurrency test with the race detector; control-prompt integration tests |
 | G4. A crash after the effects but before the offset commit, or a redelivered update, has no second effect (D3) | fault-injection test that kills the handler around the commit |
 | G5. A set webhook stops G from starting (D2). A `getMe` username mismatch stops G from starting | startup tests |
 | G6. Pairing accepts only the configured user, in a private chat, with a valid code. Every mismatch burns the code (§5.2) | pairing tests |
 | G7. Untrusted text is escaped and neutralized. It can't create tags, break out of the blockquote, or hide characters. Messages never exceed 4096 characters. Every send sets `protect_content` and disables link previews (INV-15, D8) | golden-file tests of rendered HTML from adversarial inputs; the fake Bot API asserts the send parameters |
-| G8. No message, and no audit event, contains a token, credential, cookie, `Authorization` value, ref or pairing code (INV-11) | a test that scans every fake-Bot-API payload and audit line during the e2e suite for planted canary secrets |
-| G9. Telegram unreachable, `429`, `5xx` or `401`: decisions don't happen, requests and steps expire, and nothing is allowed (D11) | one fault-injection test per failure |
+| G8. No message, and no audit event, contains a token, credential, cookie, `Authorization` value, ref or pairing code (INV-11) | a test that scans every fake-Bot-API payload and audit line during the e2e suite for planted canary secrets. The suite holds a Keycloak `reset-password` step, so the step prompt for a password change is scanned too |
+| G9. Telegram unreachable, `429`, `5xx`, `401` or `409`: decisions don't happen, requests and steps expire, and nothing is allowed. `409` stops polling instead of backing off (D11) | one fault-injection test per failure |
 | G10. No text command escalates (D7) | a test that enumerates the command table, plus a test that `/revoke_all` alone revokes nothing |
 | G11. Deny + mute denies new requests for 1 h without prompting. Unmute requires its button | integration test |
-| G12. Allowance buttons create exactly the matcher shown, and nothing broader (INV-17) | broker plus Telegram integration test |
+| G12. Allowance buttons create exactly the matcher shown, bound to the holding rule, and nothing broader. An allowance from one rule never skips a hold from another (INV-17) | broker plus Telegram integration test; a two-`confirm`-rule profile where an allowance from the first is presented to the second |
 | G13. M16 is measured with a real bot on the official Android and iOS clients, and the result is recorded in §2 | manual, by the owner, before TG5 closes |
 
 ## 8. Chunks

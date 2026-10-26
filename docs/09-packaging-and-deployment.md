@@ -3,6 +3,8 @@
 **Status**: drafted 2026-10-25, adapted from the Warden design. Status
 lives in [`ROADMAP.md`](../ROADMAP.md). Open: OD1 (where G runs) and OD2
 (where audit anchors go). Decisions D1–D11 await the owner's approval.
+Revised 2026-10-26 after review in PR #1: the Kubernetes binding audit
+(§5.4) and bot-token rotation by restart (§5.7).
 
 Chunks **DP1–DP4** (`DP` = deployment; unused).
 
@@ -179,6 +181,27 @@ For every target:
 - Admin access is restricted to G's address.
 - The standing admin credentials A had are removed.
 
+**Kubernetes binding audit.** G's own self-check can't see a RoleBinding
+in a namespace it doesn't query (docs/07 D11). So, once per cluster at
+setup and again after any RBAC change, the operator lists with
+cluster-admin every binding whose subjects include G's identity or a
+group it inherits:
+
+```sh
+kubectl get clusterrolebindings,rolebindings -A -o json | jq -r '
+  .items[] | select(any(.subjects[]?;
+      (.kind == "ServiceAccount" and .namespace == "nyyrikki-system" and .name == "nyyrikki")
+   or (.kind == "Group" and (.name == "system:authenticated"
+        or .name == "system:serviceaccounts"
+        or .name == "system:serviceaccounts:nyyrikki-system")))) |
+  "\(.kind) \(.metadata.namespace // "-") \(.metadata.name) -> \(.roleRef.name)"'
+```
+
+The only binding for the ServiceAccount itself is the impersonator's.
+Group bindings beyond the bootstrap ones (docs/07 M10) also apply to
+every impersonated profile user (docs/07 M9), so each one is either
+removed or accepted and recorded next to the cluster's config.
+
 ### 5.5 Backups and anchors
 
 - **What**: `/etc/nyyrikki` and `/var/lib/nyyrikki`, encrypted and
@@ -211,8 +234,8 @@ For every target:
 | SSH user CA | Add the new public key to the targets' `TrustedUserCAKeys` (both trusted), switch G to the new key, then remove the old one after a day. |
 | SSH proxy host key | New key, then reissue grants. A's per-grant `known_hosts` comes from the credentials. |
 | Audit anchor key | Yearly. Add the new public key to `audit.anchor_pubkeys` under a new key ID, and keep the old one for verification. |
-| Telegram bot token | BotFather `/revoke`, update the secret file, `config.reload`. |
-| Upstream secrets | Rotate in the IdP, update `secrets/`, `config.reload`. |
+| Telegram bot token | BotFather `/revoke`, update the secret file, restart G. Reload doesn't pick up the bot token, because the `getMe` and webhook checks run at startup (docs/02 §5.15.7). |
+| Upstream secrets | Rotate in the IdP, update `secrets/`, `config.reload`. Reload re-resolves them (docs/02 §5.15.7). |
 
 ### 5.8 Break-glass
 

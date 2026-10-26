@@ -28,6 +28,14 @@ the doc.
 - **For `nodes/<n>/proxy/<path>`, the proxied path only appears in
   `RequestInfo.Parts`**, not in `Name` or `Subresource`, so policy can't
   see it. ([docs/07](07-kubernetes-proxy.md) M2)
+- **Every impersonated user is also in `system:authenticated`.** The
+  apiserver adds the group itself, so anything a cluster binds to it is
+  part of every profile's RBAC. ([docs/07](07-kubernetes-proxy.md) M9)
+- **`SelfSubjectRulesReview` never comes back empty, and it sees one
+  namespace.** Every identity gets the bootstrap discovery and
+  self-review rules, and `spec.namespace` is required, so a RoleBinding
+  in a namespace you didn't ask about is invisible.
+  ([docs/07](07-kubernetes-proxy.md) M10, D11)
 
 **Go: TLS and HTTP**
 
@@ -42,6 +50,10 @@ the doc.
 - **`http.DefaultTransport` honours `HTTP(S)_PROXY`.** Upstream
   transports need `Proxy: nil`, or an environment variable on G can
   redirect privileged traffic. ([docs/06](06-http-proxy.md) M2)
+- **`url.PathEscape("..")` is `".."`.** A dot-segment check on raw
+  segments, followed by decoding and re-encoding, forwards `%2e%2e` as a
+  literal `..`. Decode first, then check. ([docs/06](06-http-proxy.md)
+  M4)
 
 **Telegram Bot API**
 
@@ -51,9 +63,20 @@ the doc.
 - **`getUpdates` fails while a webhook is set.** Unconfirmed updates are
   kept for only 24 h, and a crash between processing an update and
   confirming it redelivers it. ([docs/04](04-telegram-escalation.md) M5)
+- **A `409 Conflict` from `getUpdates` means someone else is using the
+  token**, through a webhook or a second poller. Backing off and
+  retrying hands them the approvals. Stop instead.
+  ([docs/04](04-telegram-escalation.md) M17)
 - **Bots can delete only messages younger than 48 h, but can edit
   without a time limit.** Retire prompts by editing them.
   ([docs/04](04-telegram-escalation.md) M8)
+
+**Keycloak**
+
+- **`PUT …/users/{id}/reset-password` sends the new password as a bare
+  `{"type":"password","value":"…"}`**, with `value` at the root, so
+  redacting only `credentials[].value` leaks it.
+  ([docs/03](03-audit-log.md) §5.9)
 
 **Tooling and dependencies**
 

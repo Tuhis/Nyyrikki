@@ -3,7 +3,11 @@
 **Status**: drafted 2026-10-25, adapted from the Warden design. Status
 lives in [`ROADMAP.md`](../ROADMAP.md). This doc has no open owner
 decisions of its own; [docs/01](01-foundations.md) OD1 and OD2 apply.
-Decisions D1–D18 await the owner's approval.
+Decisions D1–D18 await the owner's approval. Revised 2026-10-26 after
+review in PR #1: D9 (token minted at delivery, release without token),
+D15 (teardown order matches §5.17), allowances bound to their rule
+(§5.5), shadowed denies fail validation (§5.15.6), what reload
+re-resolves (§5.15.7), pending steps on restart (§5.17).
 
 Chunks **GC1–GC8** (`GC` = grant core; unused).
 
@@ -83,13 +87,13 @@ approves on its own) shape it.
 | D6 | **Policy is default-deny, with ordered rules where the first match wins.** Actions are `allow`, `deny` and `confirm`. One glob matcher, plus RE2 for `re:` patterns, both compiled at config load. | INV-08. Small enough to review line by line (§5.8). |
 | D7 | **Client identity is an mTLS client certificate from G's internal CA.** A generates the key itself and enrols with a one-time token and a CSR. Checks run in `tls.Config.VerifyConnection`, *and* per request against an in-memory index of client and cert status. Session tickets are disabled on the agent listener. | INV-06. M2: `VerifyPeerCertificate` is skipped on resumption, and a keep-alive connection outlives a revocation. |
 | D8 | **Grant credentials**: a bearer token `nyg_<grantId>_<secret>`, of which G stores only the SHA-256, plus a per-grant ed25519 SSH public key generated on A. Both stop working the instant the grant leaves `active`. The token is valid only together with the client cert of the grant's client. | INV-06, INV-09. A stolen token is useless without A's client key. |
-| D9 | **Credentials are delivered once**: in the first read after activation. If they are lost, A releases the grant and requests a new one. | G never has to store the token. |
+| D9 | **Credentials are minted when they are delivered, and delivered once.** The first read after activation generates the token, stores its SHA-256 and sets `credentials_delivered_at`, in one compare-and-set transaction (§5.13). If the response is lost, A releases the grant, which needs only mTLS, and requests a new one. | G never stores a plaintext token, not even across a restart between activation and the first read. Release only removes access, so a lost token must not be able to orphan a grant until it expires. |
 | D10 | **The profile is frozen at approval** (`profile_snapshot`). A config reload never widens or narrows a live grant. | Approvers approve what they were shown. |
 | D11 | **Timers**: request window 15 min, extension window 10 min, step timeout 5 min, full teardown within 2 s. One timer scheduler, with a janitor as backstop. | INV-07. Defaults are in §5.7. |
 | D12 | **Moderated mode is deferred to R7.** | It needs a live presence signal (the approver is watching now). Telegram can't provide that without heartbeat taps, which would be bad UX. Step mode covers per-operation oversight in v1. |
 | D13 | **Failure phases are typed**: every error that crosses a package boundary carries a `codes.Code` from one package, `internal/codes`. Proxies map codes to protocol errors, and nothing parses messages. | CODE-REVIEW "type your failure phases", "shared constants have exactly one definition". |
 | D14 | **Local admin goes over a Unix socket** (`/run/nyyrikki/admin.sock`, group `nyyrikki-admin`). No admin command grants or widens access. `grant.revoke` only de-escalates. | INV-16. Approvals have exactly one path (docs/04, INV-02). |
-| D15 | **Teardown order**: commit the state, then cancel the grant context, close sessions, drop the token and key index entries, and emit `grant.ended`. | Access is gone from the index before anything slow happens. |
+| D15 | **Teardown order**: commit the state, drop the token and SSH-key index entries, then cancel the grant context, close sessions, and emit `grant.ended` (§5.17). | Access is gone from the index before anything slow happens. |
 | D16 | **Config is one YAML file, strictly decoded** (unknown keys are an error), validated in full at startup and on reload. G refuses to start on any error. Secrets are referenced, never inline. | Fail closed. A typo in a deny rule must not silently drop the rule. |
 | D17 | **Control-API request bodies are strictly decoded** (`DisallowUnknownFields`) and size-capped. Requests are rate-limited per client. | Untrusted input. M4. |
 | D18 | **Dual control is supported but off by default**: `approvals_required` defaults to 1. docs/04 OD2 decides whether it ships in v1. | Cheap in the data model, but a knob nobody asked for until the owner says otherwise. |
@@ -158,7 +162,7 @@ A profile is a named, flat (no inheritance) bundle defined in config
 | `approvals_required` | copied from the profile at request time |
 | `created_at`, `activated_at`, `expires_at`, `ended_at` | timestamps; null until reached |
 | `end_reason` | `expired | revoked | released | request_expired | denied` |
-| `token_hash` | SHA-256 of the bearer token; set at activation |
+| `token_hash` | SHA-256 of the bearer token; set when the token is minted at first delivery (D9), `NULL` before |
 | `ssh_pubkey` | the per-grant ed25519 key A registered (if the profile has an `ssh` section) |
 | `credentials_delivered_at` | set when the one-time credentials were returned (D9) |
 
@@ -231,11 +235,15 @@ lifetime. While it is live, matching holds pass without a new tap.
 | `id` | `al_<ULID>` |
 | `grant_id`, `kind` | scope |
 | `matcher` | a match expression in the §5.8 grammar, built by G from the approved operation (docs/04 §5.5 lists the offered variants) |
+| `rule_index` | the rule in the grant's snapshot that held the approved operation. The allowance applies only to operations whose first matching rule is this one |
 | `expires_at` | ≤ the grant's `expires_at` |
 | `created_by`, `revoked_at` | provenance |
 
-An allowance only short-circuits a **hold**. It never overrides a `deny`
-or the scope check (INV-17). Operations that pass through an allowance
+An allowance only short-circuits a **hold**, and only a hold by its own
+rule. It never overrides a `deny` or the scope check, and it can't carry
+an approval from one rule over to another rule's operations (INV-17).
+The snapshot is frozen (D10), so `rule_index` stays meaningful for the
+grant's lifetime. Operations that pass through an allowance
 are audited with `via_allowance`.
 
 ### 5.6 Session
@@ -267,8 +275,8 @@ When approved:
 
 ```
 new_expiry = min(now + requested_ttl,
-                 now + profile.ttl.max,
-                 grant.activated_at + profile.ttl.max_total)
+                 now + snapshot.ttl.max,
+                 grant.activated_at + snapshot.ttl.max_total)
 ```
 
 `new_expiry` MUST be strictly greater than the current `expires_at`;
@@ -378,12 +386,13 @@ Evaluate(grant, op) -> Decision{Action, Rule, Reason}
 4. op's cluster/upstream/target not in section scope -> DENY out_of_scope  (INV-18)
 5. k8s implicit allows (docs/07 §5.6)     -> ALLOW implicit
 6. decision = DENY default_deny                                         (INV-08)
-   for rule in section.rules:             // first match wins
-       if ruleMatches(rule, op): decision = rule.action; break
+   for i, rule in section.rules:          // first match wins
+       if ruleMatches(rule, op): decision = {rule.action, Rule: i}; break
 7. decision == DENY                       -> DENY (rule or default_deny)
 8. needHold = decision == CONFIRM OR (grant.step AND op.Mutating)
 9. needHold:
-     live allowance matches op            -> ALLOW via_allowance        (INV-17)
+     live allowance with rule_index == decision.Rule
+       and ruleMatches(allowance.matcher, op) -> ALLOW via_allowance    (INV-17)
      else                                 -> HOLD
 10. -> ALLOW
 ```
@@ -409,7 +418,7 @@ Profile `k8s-node-maint` (§5.15.5):
 | `patch nodes node-1` | ALLOW (`patch nodes`) |
 | `patch nodes/status node-1` | DENY: default, because `nodes` ≠ `nodes/status` |
 | `create pods/eviction -n shop web-0` | HOLD (`confirm`) |
-| the same, with a live allowance `create pods/eviction -n *` | ALLOW `via_allowance` |
+| the same, with a live allowance `create pods/eviction -n *` bound to that rule | ALLOW `via_allowance` |
 | `get secrets -n shop` | DENY (`* secrets`) |
 | `delete pods -n shop web-0` | DENY: default |
 | `exec pods/exec -n shop web-0` (WebSocket `GET`, docs/07 §5.3) | DENY: default. Regression vector for the connect-subresource gotcha |
@@ -424,6 +433,7 @@ Profile `keycloak-users` (`step: required`):
 | `PUT /realms/acme/users/abc/reset-password` | HOLD |
 | `DELETE /realms/acme/users/abc` | DENY (`DELETE **`) |
 | `POST /realms/other/users` | DENY: default |
+| `PUT /realms/acme/users/abc`, with a live allowance `PUT /realms/acme/users/**` bound to the `reset-password` rule | HOLD: the allowance's rule isn't the first match |
 
 An SSH profile with rules `[exec: apt-get -y upgrade* → confirm, shell → confirm]`:
 
@@ -444,6 +454,11 @@ Edge cases the tests MUST also cover:
 - `re:` anchoring: `re:/users` must not match `/users/x`.
 - Zero-width and bidi characters must not bypass a `deny`.
 - Trailing-slash normalization agrees with docs/06 §5.2.
+- The `k8s-node-maint` rules with `* secrets → deny` moved after
+  `get,list,watch **` fail validation as a shadowed deny (§5.15.6). This
+  is the regression vector for the ordering mistake found in review of
+  PR #1. The same rules with `get secrets -n shop app-config → allow`
+  placed first still validate.
 
 ### 5.9 The decision point (gate)
 
@@ -524,7 +539,9 @@ reload. `SessionTicketsDisabled: true`.
 
 ### 5.12 Grant credentials
 
-Grant credentials are issued at activation and returned once (D9).
+Grant credentials are minted at the first read after activation and
+returned once (D9). An active grant whose `token_hash` is still `NULL`
+accepts no token.
 
 - **Bearer token**: `nyg_<grantId>_<secret>`, where `<secret>` is 32
   bytes from `crypto/rand` in Crockford base32. G stores
@@ -534,8 +551,8 @@ Grant credentials are issued at activation and returned once (D9).
   3. require `client_id` == the mTLS identity;
   4. compare the hashes with `subtle.ConstantTimeCompare`.
 
-  Used as `Authorization: Bearer` for `/k8s/…` and `/u/…`, and for
-  `extend` and `release`.
+  Used as `Authorization: Bearer` for `/k8s/…`, `/u/…` and `extend`.
+  `release` doesn't need it (D9).
 - **Per-grant SSH key**: `nyyrikki-mcp` generates an ed25519 key pair on
   A when it requests a profile that has an `ssh` section, and sends the
   public key with the request. G indexes active grants by that key for
@@ -590,7 +607,7 @@ Every code is a constant in `internal/codes`, and nowhere else (D13).
 | `GET /v1/grants/{id}` | mTLS (owning client) | state, expiry, effective step, approvals, approval delivery status (docs/04 §5.9), and the one-time `credentials` |
 | `GET /v1/grants/{id}/wait?since=<state>&timeout_ms=` | mTLS | long-poll, at most 55 000 ms. Returns on a state change or at the timeout, always with the current state |
 | `POST /v1/grants/{id}/extend` | mTLS + token | `{ttl_minutes}`, returns `202 {extension}` |
-| `POST /v1/grants/{id}/release` | mTLS + token | active → released. Idempotent |
+| `POST /v1/grants/{id}/release` | mTLS (owning client) | active → released. Idempotent. No token, so a grant whose credentials were lost can still be ended (D9) |
 | `GET /v1/grants/{id}/steps` | mTLS + token | pending steps, for the agent's visibility. **Cannot approve anything** |
 
 **`POST /v1/grants` request**
@@ -629,8 +646,13 @@ activation, and never again:
   "ssh":  {"proxy":"nyyrikki.internal:2222","host_key":"ssh-ed25519 AAAA…","targets":["node-1"]} }
 ```
 
-`credentials_delivered_at` is set in the same transaction that reads
-them, using a compare-and-set on `credentials_delivered_at IS NULL` (D3).
+The read that delivers them runs one transaction: a compare-and-set on
+`credentials_delivered_at IS NULL` (D3) that also sets `token_hash` to
+the SHA-256 of a freshly generated token. Only the request that wins the
+compare-and-set gets the plaintext, and only after the commit. If the
+transaction fails, no token exists, and the next read tries again. If
+the response is lost after the commit, the token is unrecoverable by
+design, and A releases (D9).
 
 **Limits**
 
@@ -706,7 +728,7 @@ clients:
   - id: cl_agent_vm_a
     display_name: agent-vm-a
     enabled: true
-    source_cidrs: ["10.20.0.5/32"]   # optional
+    source_cidrs: ["10.20.0.5/32"]   # required if the client may request an ssh profile
 ```
 
 #### 5.15.5 `profiles`
@@ -721,11 +743,11 @@ profiles:
     k8s:
       clusters: [prod]
       impersonate: { user: "nyyrikki:k8s-node-maint", groups: ["nyyrikki:node-maint"] }   # docs/07
-      rules:
+      rules:                                          # first match wins
+        - { match: "* secrets",                 action: deny }      # before the read rule
         - { match: "get,list,watch **",         action: allow }
         - { match: "patch nodes",               action: allow }     # cordon / uncordon
         - { match: "create pods/eviction -n *", action: confirm }   # drain
-        - { match: "* secrets",                 action: deny }
     ssh:
       targets: [node-1, node-2]
       logins: [root]                                                # docs/08
@@ -758,6 +780,10 @@ write empty sections.
 - **Profiles**:
   - names are unique and match the §5.2 pattern;
   - every ID in `clients` exists;
+  - every client named by a profile with an `ssh` section has
+    `source_cidrs`. The SSH listener has no client certificate, so the
+    per-grant key alone authenticates, and the address is its only
+    binding to A (docs/08 D2, SECURITY.md RR-1);
   - `approvals_required` ≥ 1 and ≤ the number of paired-or-configured
     approvers;
   - `ttl.default` ≤ `ttl.max` ≤ `ttl.max_total` ≤ 24h;
@@ -765,6 +791,26 @@ write empty sections.
   - every cluster, upstream and target referenced exists;
   - every rule parses (§5.8.2);
   - a profile that allows nothing logs a warning.
+- **Shadowed denies**: with first match wins, an earlier `allow` or
+  `confirm` takes precedence over a later `deny` for every operation they
+  both match. G checks each `deny` against the rules before it and fails
+  validation, naming both rules, when an earlier non-deny rule:
+  - shares at least one verb (k8s) or method (http) with it, or is the
+    same SSH request type; and
+  - is at least as broad in every other field. A field is at least as
+    broad when it is equal, a bare wildcard (`**` resource, `*`
+    namespace, name, command or host), omitted (`-n`, name), or a path
+    ending in `/**` whose literal prefix the later path starts with.
+
+  The approver would otherwise be shown a deny that isn't enforced:
+  `get,list,watch ** → allow` before `* secrets → deny` allows `get
+  secrets`. An earlier
+  rule that is narrower in some field, such as `get secrets -n shop
+  app-config → allow` before `* secrets → deny`, is a deliberate
+  exception and passes. A rule of any action that an earlier rule fully
+  covers logs a warning. This check is a lint, not a proof: overlap
+  through partial globs or `re:` isn't detected, which is why the §5.8.6
+  vectors exist.
 - **Protocol-specific rules** live in docs/06–08.
 - **Secrets**: a value ending in `_file` is a path, `_env` is an
   environment variable, and `_ref` is a `secret://<name>` reference
@@ -779,8 +825,21 @@ write empty sections.
 `nyyrikki config.reload` re-reads and re-validates the file. If it passes,
 G atomically swaps clients, profiles, approvers and targets. Active
 grants keep their snapshot (D10). If it fails, G keeps the running config
-and returns the error. Changes to listener addresses or to the PKI need a
-restart.
+and returns the error.
+
+Reload also re-resolves every secret reference that targets use: upstream
+credentials (docs/06), cluster credentials (docs/07) and anything the
+SSH targets reference (docs/08). A cached OAuth2 token is dropped when
+its upstream's credential changes. A secret that no longer resolves fails
+the reload, like any other validation error.
+
+These need a restart, which keeps active grants (docs/09 D6):
+
+- listener addresses;
+- the PKI: the internal CA, G's server certificate, the SSH user CA and
+  the SSH proxy host key;
+- the Telegram bot token, because G checks it with `getMe` and the
+  webhook check at startup (docs/04 §5.1).
 
 #### 5.15.8 Knobs and where they are consumed
 
@@ -854,7 +913,8 @@ CREATE INDEX idx_steps_grant_state ON steps(grant_id, state);
 
 CREATE TABLE allowances (
   id TEXT PRIMARY KEY, grant_id TEXT NOT NULL REFERENCES grants(id),
-  kind TEXT NOT NULL, matcher TEXT NOT NULL, created_by TEXT NOT NULL,
+  kind TEXT NOT NULL, matcher TEXT NOT NULL, rule_index INTEGER NOT NULL,
+  created_by TEXT NOT NULL,
   created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, revoked_at INTEGER);
 
 CREATE TABLE sessions (
@@ -907,8 +967,14 @@ admin socket is the exception (§5.14).
 
   The whole sequence MUST complete within 2 s (INV-07).
 - **Restart**: G reloads active grants from the DB and rebuilds the index
-  and timers. Sessions that were open are recorded as closed with
-  `close_reason: restart`.
+  and timers. Pending grants and pending extensions keep their windows,
+  and their timers are rebuilt too: A's `wait` reconnects. Sessions that
+  were open are recorded as closed with `close_reason: restart`.
+- **Pending steps are expired on startup** (`step_expired`, reason
+  `restart`), and their prompts are retired (docs/04 D9). The connection
+  that was holding the operation died with the old process, so an
+  approval could no longer let anything through, and "Approve + allow"
+  would create an allowance with no live operation behind it.
 
 ## 6. Security considerations
 
@@ -947,7 +1013,7 @@ admin socket is the exception (§5.14).
 
 | Goal | Verified by |
 |---|---|
-| G1. Config validation rejects every malformed case in §5.15.6, unknown keys included, and G refuses to start | table-driven test with one fixture per rule (`internal/config`) |
+| G1. Config validation rejects every malformed case in §5.15.6, unknown keys and shadowed denies included, and G refuses to start | table-driven test with one fixture per rule (`internal/config`) |
 | G2. Only enrolled, enabled, in-CIDR clients with an unrevoked certificate connect. A revoked certificate is rejected on a resumed TLS session and on a kept-alive connection (INV-06) | integration tests: revoke mid-connection, then the next request is 401; resume after revoke is rejected |
 | G3. Enrolment tokens are single-use and expire. The key never leaves A (INV-01) | integration test (concurrent double use → one success); a test asserting the server API never accepts a private key |
 | G4. Grant tokens are stored hashed, bound to the client certificate, and unusable after the grant leaves `active` (INV-06, INV-09) | integration tests: wrong client certificate with a valid token → 401; after release, revoke or expiry → 401 |
@@ -956,10 +1022,10 @@ admin socket is the exception (§5.14).
 | G7. Policy: every vector in §5.8.6 passes, and an empty or non-matching rule set denies (INV-08) | `internal/policy` table tests, plus a fuzz test that no random operation is allowed without a matching rule |
 | G8. No forwarder can reach an upstream without a `gate.Permit` (D5) | compile-time (unexported constructor), plus an AST check in CI that `Permit{` appears only in package `gate` |
 | G9. A step approval authorizes only its own operation. An allowance covers only its matcher and lifetime (INV-17) | broker tests: approval for operation A presented for operation B → deny; an expired or narrow allowance doesn't cover a broader operation |
-| G10. Teardown completes within 2 s with a watch, a held step and a long-poll in flight (INV-07) | integration test with a timing assertion |
+| G10. Teardown completes within 2 s with a watch, a held step and a long-poll in flight (INV-07). A restart expires pending steps and retires their prompts, and keeps pending grants decidable | integration test with a timing assertion; a restart test with a pending step and a pending grant |
 | G11. A cannot widen scope through any request field. TTL is clamped. A reload doesn't change a live grant (INV-18, D10) | API tests over every field; a reload test |
 | G12. The admin socket has no command that grants or widens access (INV-16) | a test that enumerates the command table against an allowlist |
-| G13. Credentials are returned exactly once (D9) | a concurrent double-`wait` test across activation |
+| G13. Credentials are minted and returned exactly once. A restart between activation and the first read still delivers them. `release` works without the token (D9) | a concurrent double-`wait` test across activation; a restart test in that window; a release test with mTLS only |
 | G14. Every config knob in §5.15.8 changes behaviour at its call site | one test per knob |
 
 ## 8. Chunks

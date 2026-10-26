@@ -2,7 +2,9 @@
 
 **Status**: drafted 2026-10-25, adapted from the Warden design. Status
 lives in [`ROADMAP.md`](../ROADMAP.md). There are no open owner
-decisions. Decisions D1–D14 await the owner's approval.
+decisions. Decisions D1–D14 await the owner's approval. Revised 2026-10-26 after
+review in PR #1: D2 (`source_cidrs` required) and §5.3 (requests before
+the dial are queued).
 
 Chunks **SH1–SH5** (`SH` = SSH; unused).
 
@@ -63,7 +65,7 @@ None open.
 | # | Decision | Why |
 |---|---|---|
 | D1 | **A terminating proxy.** A's SSH session ends at G, and G opens a separate SSH connection to the target. | G sees the decrypted channels, so it can apply policy per channel, record, and tear down. |
-| D2 | **A authenticates with the grant's own ed25519 key**, and nothing else. The key must belong to an active grant of a client whose `source_cidrs` allow the address. | INV-06, INV-09. The key stops working when the grant ends. |
+| D2 | **A authenticates with the grant's own ed25519 key**, and nothing else. The key must belong to an active grant of a client whose `source_cidrs` allow the address. `source_cidrs` is required for every client that may request an SSH profile (docs/02 §5.15.6). | INV-06, INV-09. The key stops working when the grant ends. There is no mTLS on this listener, so unlike the HTTP token, the key works on its own: the address is what binds it to A. |
 | D3 | **The username encodes the target**: `<login>+<target>`, for example `root+node-1`. | One config entry serves every target and login in scope. |
 | D4 | **The upstream dial is lazy.** G dials the target only when the first channel that needs it has passed policy, and its hold if any. | A denied or unapproved operation never touches the target. |
 | D5 | **Upstream login uses an ephemeral certificate per session** from G's SSH user CA: principal = the login, valid from now−60 s to now+3 min, `KeyId nyyrikki:<grant>:<session>`, over a key pair generated in memory for that session. | INV-13. A target never holds a reusable Nyyrikki credential. M4. |
@@ -130,8 +132,25 @@ On the first channel that needs the target (`session` or
    unknown key aborts the channel with `ssh.hostkey_mismatch` (audited)
    and alerts.
 4. Authenticate with the certificate.
-5. Open the matching channel upstream, and splice the two channels
-   through the recorder.
+5. Open the matching channel upstream, replay the queued requests
+   (below), and splice the two channels through the recorder.
+
+**Requests before the dial are queued.** An OpenSSH client sends
+`pty-req` and `env` on the session channel *before* `shell`, `exec` or
+`subsystem`, so they arrive while there is no upstream yet. G:
+
+- checks each one against §5.5, drops what §5.5 drops, and answers
+  `want_reply` locally;
+- queues the rest in arrival order, keeping only the latest
+  `window-change`, at most 16 requests and 16 KiB, after which the
+  channel is closed;
+- replays the queue upstream in order after step 4, then sends the
+  `shell`, `exec` or `subsystem` request itself.
+
+If the target refuses a replayed request it had been told succeeded
+(`pty-req` on a target with `PermitTTY no`), G writes the reason to the
+channel's stderr and closes it. A queued request is never replayed for a
+channel that policy denied.
 
 ### 5.4 G's host key toward A
 
@@ -339,7 +358,7 @@ Validation:
 | G4. The certificate presented to sshd is valid for at most 3 min, has principal = login and key ID `nyyrikki:<grant>:<session>`, and carries only the D8 extensions. It can't log in after it expires (INV-13) | e2e: capture the certificate at a test sshd, and try it again after expiry |
 | G5. A changed or unknown target host key aborts with `ssh.hostkey_mismatch`. A `@revoked` key is refused (INV-12) | e2e |
 | G6. Agent forwarding, X11, `-R`, streamlocal and unknown channel types are rejected. `direct-tcpip` follows policy | integration tests, one per type |
-| G7. Only `LANG` and `LC_*` env requests reach the target | test sshd that records the environment |
+| G7. Only `LANG` and `LC_*` env requests reach the target. `pty-req` and `env` sent before `shell` or `exec` reach the target in order, before it | test sshd that records the environment and the request order |
 | G8. A PTY shell produces a playable `.cast`, exec without a PTY produces `.jsonl`, and `sftp` and `scp` produce `.meta.json` with the operations and paths | e2e with OpenSSH clients |
 | G9. Revoke during an interactive shell, an exec and a direct-tcpip tunnel prints the notice and closes everything within 2 s (INV-07) | e2e with timing |
 | G10. No CA key, certificate private key or target credential ever reaches A (INV-04) | canary scan over the bytes sent to A |

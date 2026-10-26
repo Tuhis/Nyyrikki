@@ -2,7 +2,8 @@
 
 **Status**: drafted 2026-10-25, adapted from the Warden design. Status
 lives in [`ROADMAP.md`](../ROADMAP.md). There are no open owner
-decisions. Decisions D1–D12 await the owner's approval.
+decisions. Decisions D1–D12 await the owner's approval. Revised 2026-10-26 after
+review in PR #1: D5 (release needs no token, docs/02 D9).
 
 Chunks **AG1–AG4** (`AG` = agent; unused).
 
@@ -74,7 +75,7 @@ None open.
 | D2 | **A stdio MCP server** built on the official Go SDK (M7). | It works with every MCP client the owner uses (M1–M5). |
 | D3 | **Secrets never appear in tool output.** Usage strings reference file paths, never token values. | Tool results go to the model provider (CLAUDE.md: secrets never reach prompts). |
 | D4 | **State directory** `~/.local/state/nyyrikki` (overridable with `NYYRIKKI_STATE_DIR`). Directories are `0700` and files `0600`. `nyyrikki-mcp` refuses to run if they are looser. | Other users on A shouldn't read them. The agent itself can. That is RR-1. |
-| D5 | **Credentials are materialized once, on activation.** If the files are lost, release the grant and request a new one. | docs/02 D9. |
+| D5 | **Credentials are materialized once, from the response that mints them.** If the files are lost, release the grant, which needs no token, and request a new one. | docs/02 D9. |
 | D6 | **`nyyrikki_wait` long-polls for at most 55 s per call** and sends MCP progress notifications while waiting. The agent calls it again until a terminal or active state. | M4–M6: no MCP client cuts it off, and the agent stays responsive. |
 | D7 | **Registration**: Claude Code at **user scope** through `claude mcp add` (into `~/.claude.json`), and Codex in `~/.codex/config.toml` with explicit timeouts (§5.7). | User scope lets every thread on A elevate. M1, M2, M5. |
 | D8 | **The per-grant SSH key is generated on A** when a profile with an `ssh` section is requested. Only the public key is sent. | docs/02 §5.12. |
@@ -134,7 +135,7 @@ can relay. Error results carry the API error code and
 | `nyyrikki_wait(grant_id, timeout_s?=55)` | `GET /v1/grants/{id}/wait` | on `active`, materializes the files (§5.4) and returns usage (§5.5). On a terminal state, says why. Otherwise reports "still pending", plus the delivery status (docs/04 §5.9) |
 | `nyyrikki_status(grant_id?)` | `GET /v1/grants/{id}` or this client's grants | state, time left, sessions, pending steps (visibility only) |
 | `nyyrikki_extend(grant_id, ttl_minutes)` | `POST …/extend` with the token | `{extension_id, state:"pending"}`, plus "Extension requested on Telegram; call `nyyrikki_wait`." |
-| `nyyrikki_release(grant_id)` | `POST …/release` with the token | `released`, and deletes the grant directory (D11). Idempotent |
+| `nyyrikki_release(grant_id)` | `POST …/release` over mTLS; no token needed (docs/02 D9) | `released`, and deletes the grant directory (D11). Idempotent, and works after the credential files are lost |
 
 The tool descriptions tell the model:
 
@@ -256,7 +257,9 @@ experience is:
   profile names, states and paths. It never gets tokens or keys (D3).
   The agent can still `cat` the files. Leaking them is bounded:
   - the token is useless without the client key;
-  - both work only from A's address (`source_cidrs`, plus G's firewall);
+  - the SSH key works on its own, so it is bound to A's address instead:
+    `source_cidrs` is required for SSH clients (docs/02 §5.15.6), and
+    G's firewall admits only A;
   - both die with the grant (INV-09).
 - **What reaches Telegram and the audit log**: `reason` and `label`,
   which are untrusted, escaped and labelled (docs/04 §5.7).
@@ -275,7 +278,7 @@ experience is:
 | G3. Enrolment aborts on a CA fingerprint mismatch and on a reused token | integration tests |
 | G4. The tool list contains no tool that can approve, deny, or change step mode | a test that enumerates the registered tools against an allowlist |
 | G5. Registration works: Claude Code at user scope, Codex with the §5.7 config, and **a T3 Code thread lists the tools** (M3) | manual, by the owner, recorded in §2 with the client versions |
-| G6. Credentials survive an MCP server restart. A lost credential set leads to a clear "release and re-request" message | integration test |
+| G6. Credentials survive an MCP server restart. A lost credential set leads to a clear "release and re-request" message, and that release succeeds without the token | integration test |
 | G7. The client certificate renews at 80% of its lifetime with no operator action | integration test with a fake clock |
 | G8. `nyyrikki_wait` emits progress notifications and returns within 55 s | integration test |
 | G9. Release, expiry, revoke and deny remove the grant directory (D11) | integration test |

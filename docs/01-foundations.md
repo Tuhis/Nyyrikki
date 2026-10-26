@@ -4,7 +4,8 @@
 lives in [`ROADMAP.md`](../ROADMAP.md). OD1 and OD2 were decided by the
 owner on 2026-10-25. OD3 (the project licence) is open. Decisions D1–D16
 await the owner's approval. The threat model is in
-[`SECURITY.md`](../SECURITY.md).
+[`SECURITY.md`](../SECURITY.md). Revised 2026-10-26 after review in PR #1:
+D9 and §5.8 (licences `go-licenses` can't classify).
 
 Chunks **FN1–FN3** (`FN` = foundations; unused).
 
@@ -94,7 +95,7 @@ date.
 | M6 | `github.com/oklog/ulid/v2` v2.1.2 (Apache-2.0); `github.com/coder/websocket` v1.8.15 (ISC) | proxy.golang.org, LICENSE files | Confirmed |
 | M7 | `github.com/modelcontextprotocol/go-sdk` v1.8.0 (2026-09-04) is v1 with a compatibility promise, has a stdio transport, and supports MCP spec revision 2026-07-28. Its licence is mid-transition: MIT and Apache-2.0 for code, CC-BY-4.0 for docs. | module source, README, LICENSE; compile test | Confirmed. D9 allows CC-BY-4.0 for documentation files only |
 | M8 | Kubernetes libraries are Apache-2.0 | kubernetes/kubernetes `LICENSE` | Confirmed |
-| M9 | Versions and exact command-line flags of the gate tools (staticcheck, govulncheck, go-licenses, gitleaks), and `go mod tidy -diff` | **Not yet measured.** FN2 pins the versions, checks the flags in §5.8 against each tool's help output, and records both here | — |
+| M9 | Versions and exact command-line flags of the gate tools (staticcheck, govulncheck, go-licenses, gitleaks), and `go mod tidy -diff`; how `go-licenses` classifies the MCP go-sdk (M7) | **Not yet measured.** FN2 pins the versions, checks the flags in §5.8 against each tool's help output, runs `go-licenses report` on the go-sdk, and records all three here | — |
 
 ## 3. Owner decisions
 
@@ -116,7 +117,7 @@ date.
 | D6 | **Storage**: SQLite in WAL mode through `modernc.org/sqlite` for state. Append-only JSONL files for the audit log. Files for recordings. Binaries are built with `CGO_ENABLED=0 -trimpath`. | Single instance, no extra service, static binaries (M3). |
 | D7 | **Config**: one YAML file, decoded strictly with `go.yaml.in/yaml/v3` (`KnownFields(true)`) and validated in full. Secrets are referenced, never inline (docs/02 §5.15). | Fail closed on typos. M4: the old `gopkg.in/yaml.v3` is unmaintained. |
 | D8 | **Listeners**: `:8443` for agents (mTLS required), `:2222` for SSH (per-grant key), the admin Unix socket, and optional metrics on loopback only. That is the complete list. There is no web UI in v1. | Least surface. A test asserts this inventory (docs/09 G1). |
-| D9 | **Dependency policy.** Every dependency is justified in its PR (CONTRIBUTING). The licence allowlist is MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 and ISC; CC-BY-4.0 is allowed for documentation files only. Versions are pinned in `go.mod`, `go.sum` is committed, builds use `-mod=readonly`, and module downloads are verified through the Go checksum database. Renovate proposes updates, as in `gawk`. | Supply chain (SECURITY.md scope). |
+| D9 | **Dependency policy.** Every dependency is justified in its PR (CONTRIBUTING). The licence allowlist is MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0 and ISC; CC-BY-4.0 is allowed for documentation files only. `go-licenses` can't express "documentation only", so a module whose licence it can't place on the allowlist is handled as in §5.8: reviewed by hand, ignored by name with the reason, and its licence file pinned by hash. Versions are pinned in `go.mod`, `go.sum` is committed, builds use `-mod=readonly`, and module downloads are verified through the Go checksum database. Renovate proposes updates, as in `gawk`. | Supply chain (SECURITY.md scope). |
 | D10 | **Gates**: format, vet, staticcheck, `go mod tidy -diff`, `go test -race` across the full suite, govulncheck, a licence check and a secret scan. Each gate has a canary that proves it fails on a planted violation (§5.8). | CODE-REVIEW §Gates. The gawk lesson: a gate that checks nothing is worse than none. |
 | D11 | **CI**: GitHub Actions. Every third-party action is pinned to a commit SHA. The default token permission is `contents: read`. | Supply chain. |
 | D12 | **Repository layout** in §5.6. Application code goes in `internal/`, and only `nyyrikki-mcp`'s control-API client is shared across binaries. | Nothing is importable from outside by accident. |
@@ -272,6 +273,19 @@ govulncheck ./...
 go-licenses check ./... --allowed_licenses=MIT,BSD-2-Clause,BSD-3-Clause,Apache-2.0,ISC
 gitleaks dir . --redact                                   # secret scan
 ```
+
+**Licences that `go-licenses` can't classify.** The MCP go-sdk's
+licence files mix MIT and Apache-2.0 for code with CC-BY-4.0 for docs
+(M7), and `go-licenses` judges a module by its licence file, not by file
+type. FN2 runs `go-licenses report` on it and records the result in M9.
+If the module doesn't pass as reported, FN2:
+
+- reviews the licence by hand, and records the outcome and the date in
+  M9;
+- adds `--ignore github.com/modelcontextprotocol/go-sdk` to the gate
+  with a comment pointing at M9;
+- pins the SHA-256 of the module's licence files in the gate, so a
+  licence change in an update fails CI and is reviewed again.
 
 **Canaries**: `test/canaries/` holds one planted violation per gate:
 

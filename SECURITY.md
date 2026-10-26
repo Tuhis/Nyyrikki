@@ -136,7 +136,10 @@ understanding the agent's intent.
 
 - **RR-1. An active grant can be used by anything on A.** Bounded by
   narrow profiles, short TTLs, step mode, recording and instant revoke.
-  Not removed.
+  Not removed. The HTTP token also needs A's client key. The per-grant
+  SSH key doesn't, because the SSH listener has no mTLS. Copied off A, it
+  works from any address that `source_cidrs` and G's firewall admit,
+  which is why `source_cidrs` is required for SSH clients (docs/08 D2).
 - **RR-2. G is the TCB.** Compromising G compromises everything. G is a
   dedicated, minimal host (docs/09).
 - **RR-3. The approver's Telegram account is the approval factor.**
@@ -176,24 +179,24 @@ understanding the agent's intent.
 | ID | Invariant | Enforced in | Verified by |
 |---|---|---|---|
 | INV-01 | A never holds a standing privileged credential. It holds only its client identity and per-grant, short-lived, revocable credentials (AS-6). | docs/02 §5.11–5.12, docs/05 | docs/02 G3, docs/05 G2 |
-| INV-02 | A grant, extension, step approval, allowance or step-mode-off takes effect only through a Telegram tap that passes every check in docs/04 §5.4. No other code path performs these transitions. | docs/04 §5.4 | docs/04 G1 |
-| INV-03 | Every tap carries a random, single-use reference issued by G for one approver, one prompt and one object, with an expiry. It is consumed atomically with its siblings. A replayed, expired, foreign or forwarded tap is rejected. | docs/04 §5.4 | docs/04 G2, G3 |
+| INV-02 | A grant, extension, step approval, allowance, step-mode-off or unmute takes effect only through a Telegram tap that passes every check in docs/04 §5.4. No other code path performs these transitions. | docs/04 §5.4, D7 | docs/04 G1, G11 |
+| INV-03 | Every tap carries a random, single-use reference issued by G for one approver, one prompt and one object, with an expiry. On a decision prompt it is consumed atomically with its siblings, so the object is decided once. A replayed, expired, foreign or forwarded tap is rejected. | docs/04 §5.4 | docs/04 G2, G3 |
 | INV-04 | Upstream credentials and the bot token (AS-1) are never sent to, derived on, or reachable from A. G adds credentials on its own side of each proxy. | docs/04 D1, docs/06 §5.5, docs/07 §5.8, docs/08 §5.9 | docs/04 G8, docs/06 G4, docs/07 G9, docs/08 G10 |
-| INV-05 | For Kubernetes, G's identity can only impersonate, and only the fixed per-profile user from the frozen profile. G strips every client-sent `Authorization` and `Impersonate-*` header. Kubernetes RBAC is the boundary. | docs/07 | docs/07 G2, G3, G4 |
+| INV-05 | For Kubernetes, G's identity can do nothing but impersonate, beyond the discovery and self-review rules every identity gets, and it impersonates only the fixed per-profile user from the frozen profile. G strips every client-sent `Authorization` and `Impersonate-*` header. Kubernetes RBAC is the boundary. | docs/07 D1, D2, D11, §5.11 | docs/07 G2, G3, G4 |
 | INV-06 | Every proxied operation needs an active grant whose client equals the authenticated transport identity, checked per request. | docs/02 §5.11–5.12, docs/08 §5.1 | docs/02 G2, G4, docs/08 G1 |
 | INV-07 | Revoke, expiry and release cancel every in-flight request and open connection of the grant within 2 s, and refuse new ones. | docs/02 §5.17, all proxies | docs/02 G10, docs/07 G11, docs/08 G9 |
 | INV-08 | Policy is default-deny. An operation proceeds only if a rule matches with `allow`, or with `confirm` and the hold is approved. | docs/02 §5.8 | docs/02 G7 |
 | INV-09 | Grant credentials are per grant, and stop working the instant the grant leaves `active`. | docs/02 §5.12 | docs/02 G4 |
 | INV-10 | The audit log is append-only and tamper-evident (hash chain plus signed anchors). An audit write that fails never becomes an allow, and access is still removable while audit is down. | docs/03, docs/02 D4 | docs/03 G1, G2, docs/02 G6 |
-| INV-11 | No Telegram message or audit event contains a token, credential, cookie, `Authorization` value, unredacted body, decision reference or pairing code. Callback data alone authorizes nothing. | docs/04 §5.7, docs/03 §5.3 | docs/04 G8, docs/03 G6 |
+| INV-11 | No Telegram message or audit event contains a token, credential, cookie, `Authorization` value, unredacted body, decision reference or pairing code. Callback data alone authorizes nothing. | docs/04 §5.7, docs/03 §5.3, §5.9 | docs/04 G8, docs/03 G6 |
 | INV-12 | Target identity is verified, never trusted on first use: pinned SSH host keys or a host CA; TLS against a configured trust store. | docs/06 §5.6, docs/07 §5.12, docs/08 §5.3 | docs/06 G5, docs/07 G10, docs/08 G5 |
 | INV-13 | SSH logins to targets use ephemeral certificates (valid ≤ 3 min) minted per session from G's SSH user CA. | docs/08 §5.9 | docs/08 G4 |
 | INV-14 | G sanitizes request shape. It strips hop-by-hop and identity headers and rejects path traversal (`..`, `//`, encoded slashes). Client input never selects the upstream credential. | docs/06 §5.2, §5.4, docs/07 §5.2 | docs/06 G2, G3, docs/07 G2 |
 | INV-15 | Text from A (and from parsed operations) shown in Telegram is escaped, has control, bidi and zero-width characters neutralized, is truncated, and is placed after G's trusted lines in a labelled quote. | docs/04 §5.7 | docs/04 G7 |
 | INV-16 | Administrative actions (enrolment, pairing, config, revoke-as-admin) are available only on G's local admin socket. No admin command grants or widens access, and nothing A can reach is an admin path. | docs/02 §5.14 | docs/02 G12 |
-| INV-17 | A step approval authorizes only its own operation. An allowance authorizes only within its matcher and lifetime, and never overrides a deny or scope. | docs/02 §5.4–5.5, docs/04 §5.5 | docs/02 G9, docs/04 G12 |
+| INV-17 | A step approval authorizes only its own operation. An allowance authorizes only within its matcher, its lifetime and the rule that held the approved operation, and never overrides a deny or scope. | docs/02 §5.4–5.5, docs/04 §5.5 | docs/02 G9, docs/04 G12 |
 | INV-18 | A can't widen its own authority. Profiles, their scope and their targets are fixed in G's config. A chooses only which permitted profile, and a TTL clamped by config. | docs/02 §5.2, §5.13 | docs/02 G11, docs/06 G1 |
-| INV-19 | G receives Telegram updates only through its own outbound long-poll to the Bot API over verified TLS. No endpoint on G accepts updates, and G refuses to run if a webhook is set on its bot. | docs/04 D2, D10 | docs/04 G5, docs/09 G1 |
+| INV-19 | G receives Telegram updates only through its own outbound long-poll to the Bot API over verified TLS. No endpoint on G accepts updates. G refuses to start if a webhook is set on its bot, and stops polling if a webhook or a second poller appears while it runs (`409`). | docs/04 D2, D10, §5.1 | docs/04 G5, G9, docs/09 G1 |
 
 ### Out of scope
 

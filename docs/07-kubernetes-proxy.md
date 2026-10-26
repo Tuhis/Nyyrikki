@@ -3,7 +3,9 @@
 **Status**: drafted 2026-10-25, adapted from the Warden design. It
 includes the connect-subresource correction, measured in M1. Status
 lives in [`ROADMAP.md`](../ROADMAP.md). Open: OD1 (clusters older than
-1.35). Decisions D1–D14 await the owner's approval.
+1.35). Decisions D1–D14 await the owner's approval. Revised 2026-10-26
+after review in PR #1: D11 (self-check against the bootstrap allowlist,
+M9, M10), path checks in §5.2.
 
 Chunks **KP1–KP5** (`KP` = Kubernetes proxy; unused).
 
@@ -58,6 +60,8 @@ All measured on 2026-10-25.
 | M6 | Impersonation headers: `Impersonate-User`, `Impersonate-Group`, `Impersonate-Uid`, `Impersonate-Extra-<key>`. RBAC: verb `impersonate` on `users`, `groups` and `serviceaccounts` (core group), and on `uids` and `userextras/<key>` (`authentication.k8s.io`). `resourceNames` restricts which identities may be impersonated. **KEP-5284 constrained impersonation** is beta and on by default since 1.36. It adds verbs such as `impersonate:user-info` and `impersonate-on:user-info:<verb>`, with the legacy verb as a fallback. | [User impersonation](https://kubernetes.io/docs/reference/access-authn-authz/user-impersonation/), `kube_features.go` | Confirmed. The exact constrained-impersonation rule shape is measured in KP5 (D12) |
 | M7 | Supported Kubernetes releases: 1.37 (latest 1.37.1), 1.36 and 1.35. 1.34 reaches end of life on 2026-10-27. | [kubernetes.io/releases](https://kubernetes.io/releases/) | Confirmed. OD1 |
 | M8 | kubeconfig `AuthInfo.tokenFile` exists. client-go re-reads it periodically, and it takes precedence over `token`. | `go doc k8s.io/client-go/tools/clientcmd/api.AuthInfo`, client-go v0.37.1 | Confirmed. The token stays out of the kubeconfig (§5.10) |
+| M9 | The apiserver adds `system:authenticated` to every impersonated non-anonymous user, unless the request names `system:authenticated` or `system:unauthenticated` itself. | `pkg/endpoints/filters/impersonation/impersonation.go` and `mode.go`, k8s.io/apiserver v0.37.1, 2026-10-26 | Confirmed (found in review of PR #1). Whatever a cluster binds to `system:authenticated` is part of every profile's effective RBAC (§5.11) |
+| M10 | Bootstrap RBAC (release-1.37) binds three ClusterRoles to `system:authenticated`: `system:basic-user` (`create` on `selfsubjectaccessreviews`, `selfsubjectrulesreviews`, `selfsubjectreviews`), `system:discovery` and `system:public-info-viewer` (`get` on `/livez`, `/readyz`, `/healthz`, `/version`, `/version/`, `/openapi`, `/openapi/*`, `/api`, `/api/*`, `/apis`, `/apis/*`). ServiceAccounts also get `system:service-account-issuer-discovery` (`get` on `/.well-known/openid-configuration[/]`, `/openid/v1/jwks[/]`) and, when the ClusterTrustBundle gate is on, `get,list,watch clustertrustbundles`. `SelfSubjectRulesReview.spec.namespace` is required: the review returns cluster-wide rules plus that one namespace's. | `plugin/pkg/auth/authorizer/rbac/bootstrappolicy/policy.go` (release-1.37); `go doc` of `SelfSubjectRulesReviewSpec`, k8s.io/api v0.36.4, 2026-10-26 | Confirmed from source (found in review of PR #1). Drives D11's allowlist and its namespace list. KP3 measures the live result on each supported version, including k3s's additions |
 
 M1 output (k8s.io/apiserver v0.37.1):
 
@@ -96,7 +100,7 @@ M1 output (k8s.io/apiserver v0.37.1):
 | D8 | **WebSocket exec and attach are proxied and recorded** through a passive channel-frame parser (§5.7). G strips `Sec-WebSocket-Extensions`, so frames stay uncompressed and parseable. | Recording is a system goal (docs/01 §1, goal 7). M4. |
 | D9 | **SPDY exec and attach are always refused** (`spdy_exec_denied`). Port-forward is allowed on both transports when policy allows it, recorded as metadata only. | SPDY framing isn't recorded. kubectl ≥ 1.30 uses WebSockets, and falls back to SPDY only after a refusal (M3), so a refusal shows up as two denied attempts, both audited. |
 | D10 | **Nyyrikki's errors are Kubernetes `Status` objects** with matching HTTP codes. | `kubectl` prints them cleanly. |
-| D11 | **At startup, G checks its own identity** in each cluster with `SelfSubjectRulesReview`. If any rule grants something other than impersonation, or if the result is `incomplete`, G refuses to enable that cluster. | INV-05 is verified, not assumed. |
+| D11 | **At startup and on every reload, G checks its own identity** in each cluster (§5.11): a `SelfSubjectRulesReview` per namespace it can name, compared against the configured impersonation rules plus the M10 bootstrap allowlist, and `SelfSubjectAccessReview` probes for the permissions that matter most. Any extra rule, an `incomplete` result, or an allowed probe disables that cluster. A RoleBinding in a namespace G can't name stays invisible to it, so the operator runs a binding audit at setup (docs/09 §5.4). | INV-05 is verified as far as G can see, not assumed. "Any rule other than impersonation" alone would disable every cluster, because every identity gets the M10 rules. |
 | D12 | **Constrained impersonation, once measured.** Clusters on 1.36 or newer get it, which lets G impersonate each user only for the verbs that profile needs. Older clusters use the legacy `impersonate` verb with `resourceNames`. KP5 measures the exact rules (M6). | Defence in depth: even G's identity is limited per profile. |
 | D13 | **TLS to the apiserver is verified** against the configured CA. | INV-12. |
 | D14 | **The kubeconfig carries the token only by reference** (`tokenFile`). | M8. docs/05 D3. |
@@ -142,6 +146,13 @@ rather than `*`, so that `secrets` isn't included.
     `Trailer`, `Transfer-Encoding`;
   - `Upgrade` and `Sec-WebSocket-*`, except on the streaming path in
     §5.7.
+- **Path checks** (INV-14): `<apipath>` goes through the same
+  normalizer as docs/06 §5.2, one function shared by both proxies. Each
+  segment is decoded once and then checked, and empty, dot, encoded-slash,
+  control-character and double-encoded segments are rejected with a
+  `400` `Status`. `RequestInfoFactory` (§5.3) parses the decoded
+  segments, and the forwarded path is those same segments re-encoded, so
+  the parser and the apiserver see the same path.
 - **Rewriting**: the remaining request is rewritten with
   `httputil.ReverseProxy`'s `Rewrite`, never `Director` (docs/06 M1), to
   `<apiserver_url>/<apipath>`.
@@ -337,7 +348,37 @@ rules:
 ```
 
 It is bound with a ClusterRoleBinding to the ServiceAccount, and nothing
-else is bound to it. D11 checks this at startup.
+else is bound to it.
+
+**The self-check (D11)** runs per cluster at startup and on every reload:
+
+1. **`SelfSubjectRulesReview`** in `default`, `kube-system`,
+   `nyyrikki-system`, and every namespace written literally in a
+   profile's rules (`-n shop`). Every rule returned must be one of:
+   - an `impersonate` rule whose resource names are users, groups and
+     extras that a configured profile uses;
+   - a rule in the M10 bootstrap allowlist, which is compiled into G per
+     supported minor version.
+
+   Anything else, or `incomplete: true`, disables the cluster.
+2. **`SelfSubjectAccessReview` probes**, cluster-wide (namespace empty)
+   and in each namespace from step 1. Every one must come back
+   `allowed: false`:
+   - `impersonate users system:admin`, `impersonate groups
+     system:masters`, `impersonate serviceaccounts` (any name);
+   - `get secrets`, `create pods`, `create pods/exec`, `patch nodes`,
+     `create clusterrolebindings`, and `*` on `*`.
+
+The check can't see a RoleBinding in a namespace it doesn't query, and
+G can't list namespaces. The operator closes that gap once at setup
+with a binding audit that needs cluster-admin (docs/09 §5.4). A cluster
+that fails is disabled. It doesn't stop the other clusters.
+
+**Every impersonated user is also in `system:authenticated`** (M9). The
+RBAC boundary for a profile is therefore its own role *plus* everything
+the cluster binds to `system:authenticated`. On a default cluster that's
+only the M10 rules, but some distributions and operators bind more. The
+setup audit in docs/09 §5.4 lists those bindings too.
 
 **The impersonated user** gets one role per profile, as an allowlist
 matching the profile. For `k8s-node-maint`:
@@ -405,7 +446,8 @@ get `503` and it raises an alert. Other clusters are unaffected.
   - Bodies are redacted before recording.
   - The streaming upgrade is accepted only on the §5.7 path.
 - **New outbound boundary**: G ↔ apiserver, with TLS verified (D13).
-  G's identity can only impersonate (D1, D11).
+  G's identity can only impersonate, beyond the M10 bootstrap rules
+  (D1, D11).
 - **Dependency failures**:
   - apiserver down → `503 Status`;
   - D11 or the version check fails → the cluster is disabled;
@@ -429,9 +471,9 @@ get `503` and it raises an alert. Other clusters are unaffected.
 | Goal | Verified by |
 |---|---|
 | G1. The operation mapping matches the M1 table, including the D4 override (WebSocket `GET pods/exec` → `exec`, mutating; `GET pods/log` → `get`, a read) | table test using the real `RequestInfoFactory`; fuzzing |
-| G2. A client-sent `Authorization`, `Impersonate-User: system:admin`, `Impersonate-Group` or `Impersonate-Extra-*` never reaches the apiserver. Impersonation comes only from the snapshot (INV-05, INV-14) | fake apiserver that records headers; e2e against k3s |
+| G2. A client-sent `Authorization`, `Impersonate-User: system:admin`, `Impersonate-Group` or `Impersonate-Extra-*` never reaches the apiserver. Impersonation comes only from the snapshot. A traversal such as `/api/v1/namespaces/shop/pods/x/%2e%2e/%2e%2e/%2e%2e/kube-system/secrets` is rejected before parsing (INV-05, INV-14) | fake apiserver that records headers and paths; the docs/06 G2 normalization matrix run against `/k8s/<cluster>/…`; e2e against k3s |
 | G3. In e2e, an operation that the impersonated user's RBAC lacks is refused by the apiserver, even when Nyyrikki's rules would allow it (INV-05) | e2e: a permissive profile with a narrow RBAC role |
-| G4. G refuses to enable a cluster whose identity has any non-impersonation permission, or where `SelfSubjectRulesReview` is `incomplete` (D11) | e2e: give the ServiceAccount an extra `get pods`, and assert the cluster is disabled |
+| G4. G refuses to enable a cluster whose identity has any permission beyond the configured impersonation rules and the M10 allowlist, where `SelfSubjectRulesReview` is `incomplete`, or where any §5.11 probe is allowed. A cluster with only the default bootstrap bindings is enabled (D11) | e2e against k3s on each supported minor version: the default cluster passes; an extra ClusterRoleBinding for `get pods` fails; a RoleBinding for `get secrets` in a namespace a profile names fails; `impersonate users` without `resourceNames` fails |
 | G5. WebSocket exec with `tty` produces a playable `.cast`, and without `tty` a `.jsonl`, with input and output matching the session | e2e with `kubectl exec` (≥ 1.30) |
 | G6. SPDY exec is refused. A refused WebSocket exec followed by kubectl's SPDY retry produces two audited denials and no exec (M3, D9) | e2e with `kubectl exec`, plus a forced SPDY client |
 | G7. Every Nyyrikki rejection is a valid `Status` with the code from §5.9 | integration tests |
@@ -463,6 +505,10 @@ KP5 is last.
 - **RBAC allowlists drift from profiles.** KP5's generator closes most
   of that gap. Until then the RBAC is maintained by hand next to the
   profile.
+- **The shared normalizer rejects a trailing slash and empty segments.**
+  kubectl's discovery requests (`/api`, `/apis`) carry neither, but a
+  client that sends one gets a `400`. G8's e2e run with real kubectl
+  catches it, and any exception is decided and recorded here.
 - **`proxy` subresources hide their target path** (M2). They are denied
   unless a profile explicitly allows them.
 

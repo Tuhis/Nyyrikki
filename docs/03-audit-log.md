@@ -2,7 +2,9 @@
 
 **Status**: drafted 2026-10-25, adapted from the Warden design. Status
 lives in [`ROADMAP.md`](../ROADMAP.md). There are no open owner
-decisions. Decisions D1–D11 await the owner's approval.
+decisions. Decisions D1–D11 await the owner's approval. Revised 2026-10-26 after
+review in PR #1: D3 (what anchors prove before they leave G) and §5.9
+(root-level `value`, unparseable and large bodies).
 
 Chunks **AU1–AU4** (`AU` = audit; unused).
 
@@ -59,7 +61,7 @@ None open.
 |---|---|---|
 | D1 | **One append-only JSONL log on G**, with one event per line, rotated by size (128 MiB) or daily. | Plain text survives every tool. Append-only matches the threat model. |
 | D2 | **Hash chain.** Every line carries `hash = sha256(prev_hash ‖ canonical(event without hash))`. The chain continues across rotated files. | Detects edits, deletion, reordering and truncation in the middle of the log (INV-10). |
-| D3 | **Signed anchors.** Every 1000 events or 5 min, whichever comes first, G appends to `anchors.jsonl` an ed25519 signature over `(seq_to, chain_hash, ts)`. The public key is kept off G. | Detects truncation at the tail and rewriting by anyone without the key. M4. |
+| D3 | **Signed anchors, which count once they are copied off G.** Every 1000 events or 5 min, whichever comes first, G appends to `anchors.jsonl` an ed25519 signature over `(seq_to, chain_hash, ts)`. The public key is in `audit.anchor_pubkeys` on G, and a copy is kept with the off-G anchor copies (docs/09 OD2), where the verification that matters runs. | Detects truncation at the tail and rewriting of anything an off-G anchor covers. M4. On G alone, anchors add little over file permissions: the signing key is readable by the service user that writes the log, so whoever can rewrite the log can also re-sign it. |
 | D4 | **A single writer goroutine** behind a bounded channel. `Append` returns only after the line is written and `fsync`ed. Callers that grant access wait for that (docs/02 D4). | Durable before the effect. One writer keeps `seq` gap-free. |
 | D5 | **Back-pressure sheds new escalations, never audit lines.** If the queue is over 80% full, the gate returns `busy` for new operations, and access removal still proceeds. | Audit integrity beats availability (SECURITY.md RR-5). |
 | D6 | **The event catalog is closed.** Event types are constants in `internal/audit`, and an unknown type is a compile error. | CODE-REVIEW "shared constants have exactly one definition". |
@@ -264,21 +266,35 @@ Label values come only from config or from constants, never from A.
 ### 5.9 Redaction (shared, `internal/redact`)
 
 `redact.Body(contentType, bytes) Digest` and `redact.Fields(map)` run on
-structured bodies before they reach an event, a step summary or a
-Telegram message:
+request bodies and fields before they reach an event, a step summary or
+a Telegram message. Redaction is by key, so it needs a body it can parse
+completely. Anything else is reduced to its digest:
 
-- **These fields, at any depth, have their values replaced** with
+- **Parsed** content types:
+  - JSON: `application/json` and any `+json` type, which includes
+    Kubernetes merge and JSON patches;
+  - YAML: `application/yaml` and `application/apply-patch+yaml`
+    (server-side apply);
+  - `application/x-www-form-urlencoded`, parsed into key/value pairs
+    that the same key rules apply to (`client_secret=…`).
+- **Digest only**, `{sha256, len, content_type}` with no content: any
+  other content type, a body that fails to parse, and any body over
+  1 MiB. A prefix of a large body is never kept, because a truncated
+  JSON document can't be parsed and so can't be redacted.
+- **These keys, at any depth, have their values replaced** with
   `"<redacted len=N sha256=8hex>"` (case-insensitive), keeping the keys:
   - `password`, `secret`, `token`, `clientSecret`, `client_secret`,
     `privateKey`, `private_key`, `tls.key`;
-  - `credentials[].value` (Keycloak);
+  - `value`. That covers Keycloak's `CredentialRepresentation`, which
+    `PUT …/users/{id}/reset-password` sends bare, with the new password
+    at the root (`{"type":"password","value":"…"}`), as well as
+    `credentials[].value`, Kubernetes `env[].value` and JSON Patch
+    values. Losing a few harmless values (a toleration's, say) is the
+    price of not having to know every API that calls a secret `value`;
   - `data` and `stringData` (Kubernetes Secrets);
   - and any key ending in `Token`, `Password` or `Secret`.
 - **Kubernetes `Secret` objects** keep only their metadata and their key
   names.
-- **Bodies over 1 MiB** are digested to their sha256 plus the first
-  64 KiB, which is then redacted the same way, with
-  `truncated: true`.
 - **Headers** never reach events at all. Each proxy records method, path
   and status only.
 
@@ -320,8 +336,10 @@ recordings:
 - **What reaches the audit log**: §5.3 after §5.9. Never secrets (INV-11),
   enforced by G6.
 - **New ways to reach an upstream**: none.
-- **Tampering**: someone without root on G can't change the log. Root
-  on G can, but can't forge anchors already copied off G (D3, RR-2).
+- **Tampering**: someone who is neither root nor the service user on G
+  can't change the log, because of file permissions. Root or the
+  service user can rewrite it and re-sign anchors, but can't change what
+  anchors already copied off G cover (D3, RR-2).
 
 ## 7. Acceptance criteria
 
@@ -332,7 +350,7 @@ recordings:
 | G3. Back-pressure returns `busy`, and never drops a line | load test with a stalled writer |
 | G4. A PTY session produces a `.cast` that `asciinema play` (both 2.x and 3.x) accepts. Non-PTY exec produces `.jsonl`. SFTP produces `.meta.json` | e2e: replay through both CLI versions in containers |
 | G5. A session whose recording can't be opened is refused. A write error closes the session (D8) | integration test |
-| G6. No event or recording metadata contains any of the planted canary secrets (INV-11) | the canary scan over the full e2e audit output (shared with docs/04 G8) |
+| G6. No event or recording metadata contains any of the planted canary secrets (INV-11) | `internal/redact` table tests, one per content type and rule in §5.9; the canary scan over the full e2e audit output (shared with docs/04 G8). The planted canaries include a Keycloak `reset-password` body, a Kubernetes Secret, a form-encoded `client_secret`, a JSON Patch `value`, an unparseable JSON body and a 2 MiB JSON body with a canary past the first 64 KiB |
 | G7. Retention deletes recordings after the configured age, and never deletes audit lines when the retention is 0 | janitor test with a fake clock |
 | G8. Every key in §5.10 changes behaviour at its call site | one test per knob |
 
@@ -351,8 +369,8 @@ KP4 and docs/08 SH3.
 ## 9. Risks and open questions
 
 - **Root on G can rewrite anything not yet anchored off G** (RR-2). How
-  anchors leave G is an operations choice (docs/09 §5.5). Without it, D3
-  protects only against non-root tampering.
+  anchors leave G is an operations choice (docs/09 §5.5, OD2). Until
+  they do, anchors add nothing over file permissions (D3).
 - **Recordings are only as safe as G's disk.** Disk encryption at rest
   is required in docs/09.
 - **asciicast v2 may eventually be dropped by asciinema.** M2 says it is

@@ -2,7 +2,8 @@
 
 **Status**: drafted 2026-10-25, adapted from the Warden design. Status
 lives in [`ROADMAP.md`](../ROADMAP.md). There are no open owner
-decisions. Decisions D1–D12 await the owner's approval.
+decisions. Decisions D1–D12 await the owner's approval. Revised 2026-10-26 after
+review in PR #1: D2 and §5.2 (checks run on decoded segments, M4).
 
 Chunks **HP1–HP4** (`HP` = HTTP proxy; unused).
 
@@ -47,6 +48,7 @@ and G does the rest:
 | M1 | `httputil.ReverseProxy.Director` is unsafe for this purpose. Hop-by-hop headers are removed *after* `Director` runs, so a client can list any header in `Connection` and strip headers the proxy added. `Rewrite` runs after that removal, and also drops inbound `Forwarded` and `X-Forwarded-*`. | `go doc net/http/httputil.ReverseProxy`, Go 1.26.8, 2026-10-25 | Confirmed, quoted: "this permits a malicious client to remove any headers that may be added by Director … Rewrite addresses these issues." Drives D3, and a gotcha |
 | M2 | `http.DefaultTransport` uses `ProxyFromEnvironment`. A `Transport` with `Proxy: nil` uses no proxy. | `go doc net/http.Transport`, `go doc net/http.DefaultTransport` | Confirmed. Drives D7: environment variables on G can't redirect upstream traffic |
 | M3 | Keycloak 26.8.1 (2026-10-13): the admin REST API can be called by a confidential client that has *Client authentication* and *Service account roles* enabled, using `grant_type=client_credentials`. The realm-management client roles include `view-users`, `query-users` and `manage-users`. The documented example uses the **master** realm with the full `admin` role. | keycloak.org server_development guide ("Authenticating with a service account"), server_admin guide | Partly. The mechanism is confirmed. The least-privilege shape (§5.7: a client in the target realm with only realm-management user roles) is assembled from separate pages, so HP4 measures it against a real Keycloak |
+| M4 | `url.PathEscape` leaves `.` and `..` unescaped, and `url.Parse` decodes `%2e%2e` to `..` in `URL.Path`. A dot-segment check on raw segments, followed by decode and re-encode, forwards a literal `..`. | `go run` against Go 1.26.8, 2026-10-26: `PathEscape("..") == ".."`; `Parse(".../users/%2e%2e/%2e%2e/master").Path == ".../users/../../master"` | Confirmed (found in review of PR #1). Drives the order in §5.2: decode first, then check |
 
 ## 3. Owner decisions
 
@@ -57,7 +59,7 @@ None open.
 | # | Decision | Why |
 |---|---|---|
 | D1 | **Fixed upstreams.** Each one is a name plus a `base_url` in config. The path `/u/<upstream>/<rest>` can only append `<rest>` to that base URL. | INV-18. A can't point the proxy anywhere else. |
-| D2 | **Normalize strictly, and reject rather than repair** (§5.2). Encoded slashes and backslashes, dot segments, empty segments, a trailing slash, control characters and absolute-form request targets are all rejected. | INV-14. A path is either unambiguous or refused, so the rules and the upstream see the same thing. |
+| D2 | **Normalize strictly, and reject rather than repair** (§5.2). Each segment is decoded once and then checked. Encoded slashes and backslashes, dot segments in any encoding, empty segments, a trailing slash, control characters, double encoding and absolute-form request targets are all rejected. | INV-14. A path is either unambiguous or refused, so the rules and the upstream see the same thing. |
 | D3 | **`httputil.ReverseProxy` with `Rewrite`, never `Director`.** | M1. |
 | D4 | **Strip the client's credentials and routing headers, then set G's own** (§5.4). | INV-04, INV-14. |
 | D5 | **Read means `GET`, `HEAD` or `OPTIONS`.** Every other method is mutating. `CONNECT`, `TRACE` and any `Upgrade` request are denied before policy runs. | Step mode needs a clear rule. The denied methods tunnel or reflect. |
@@ -93,21 +95,30 @@ None open.
 
 ### 5.2 Path normalization (INV-14)
 
-These steps run on the raw request target before anything else:
+These steps run on the raw request target before anything else. Every
+check runs on the **decoded** segment, so an encoded form can't slip
+past a check that a literal form would fail (M4):
 
 1. Only the origin form (`/u/…`) is accepted. An absolute-form target is
    rejected with `invalid_path`.
-2. Split `<rest>` on `/`. Reject the request if any of these is true:
-   - a segment is empty (this covers `//` and a trailing `/`);
-   - a segment is `.` or `..`;
-   - a segment contains `%2F`, `%2f`, `%5C`, `%5c`, `%00`, or an invalid
-     percent sequence;
-   - a segment decodes to a control character (C0, C1 or DEL).
-3. Percent-decode each segment once. The decoded segments, joined with
-   `/` and given a leading `/`, form `op.Path`.
-4. Forward the segments re-encoded with `url.PathEscape`.
+2. Split the raw `<rest>` on `/`, then percent-decode each segment once.
+   An invalid percent sequence is rejected.
+3. Reject the request if any **decoded** segment:
+   - is empty (this covers `//` and a trailing `/`);
+   - is `.` or `..`, in any encoding: `%2e`, `%2E%2e`, `.%2E`, `%2e.`;
+   - contains `/` or `\` (an encoded `%2F` or `%5C`);
+   - contains a control character (C0 including NUL, C1, or DEL);
+   - contains `%` (a raw `%25`). That rejects double encoding such as
+     `%252e%252e`, which an upstream that decodes twice would read as
+     `..`.
+4. The decoded segments, joined with `/` and given a leading `/`, form
+   `op.Path`.
+5. Forward the decoded segments re-encoded with `url.PathEscape`. Because
+   no decoded segment is `.`, `..` or contains `/`, the forwarded path has
+   exactly the segments the rules matched.
 
-The query string is forwarded verbatim and plays no part in matching.
+All rejections return `400 invalid_path`. The query string is forwarded
+verbatim and plays no part in matching.
 
 ### 5.3 Operation and read vs mutating
 
@@ -153,9 +164,12 @@ is an allowlist.
 - The status code, content type and sizes are audited. The response
   body is streamed to A and never stored.
 
-**Redaction**: on top of docs/03 §5.9, a Keycloak `credentials[].value`
-and a `secret` field in client representations are covered by the shared
-rules there. New upstream-specific fields get added there, not here.
+**Redaction**: the shared rules in docs/03 §5.9 cover Keycloak. A
+`value` at any depth catches `credentials[].value` and the bare
+`CredentialRepresentation` that `reset-password` sends, and `secret`
+catches client representations. A body the redactor can't parse is
+recorded as a digest only. New upstream-specific fields get added there,
+not here.
 
 ### 5.5 Credential injection
 
@@ -277,7 +291,7 @@ Validation:
 | Goal | Verified by |
 |---|---|
 | G1. Only configured upstreams in the grant's scope are reachable. No request field changes the scheme, host or port (INV-18) | tests with off-scope names, absolute-form targets, and `Host` header games |
-| G2. Every rejection in §5.2 fires, and the resolved URL never escapes `base_url` (INV-14) | table test of the normalization matrix, plus fuzzing |
+| G2. Every rejection in §5.2 fires, and the resolved URL never escapes `base_url` (INV-14) | table test of the normalization matrix, which includes `..`, `%2e%2e`, `%2E%2e`, `.%2E`, `%2e.`, `%2e`, `%252e%252e`, `%2F`, `%5C`, `%00` and `//`; the same cases seed the fuzzer, which asserts that no forwarded path contains a `.` or `..` segment |
 | G3. The headers listed in §5.4 never reach the upstream, including when they are named in `Connection` (INV-14, M1) | stub upstream that records the headers it receives |
 | G4. No upstream credential, OAuth2 token or Keycloak secret ever reaches A, in any response, header or error (INV-04) | capture every byte returned to A in the e2e suite and scan for canaries |
 | G5. An upstream with an untrusted certificate fails with no request sent. Disabling verification is rejected at config load (INV-12) | integration test, config test |
