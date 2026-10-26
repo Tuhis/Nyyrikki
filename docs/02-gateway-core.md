@@ -46,7 +46,7 @@ All checked on 2026-10-26.
 |---|---|---|---|
 | M1 | go-sdk v1.8.0: `StreamableHTTPOptions.Stateless` answers GET and DELETE with 405 and creates a temporary session per POST; a tool handler gets `req.Session` and can send `NotifyProgress` with the request's `progressToken`; the client side has `ProgressNotificationHandler` | read `mcp/streamable.go`, `mcp/client.go`, `mcp/streamable_test.go` at v1.8.0 | Confirmed. D3, D7 |
 | M2 | A tool handler's context is cancelled when the client drops the HTTP request in stateless mode | read `serveStateless` at v1.8.0: the session is bound to the request's context | Confirmed from source; GW3 has a test that asserts the pending approval is withdrawn on disconnect |
-| M3 | Codex's tool timeout defaults differ between its docs (60 s) and its source (300 s); Claude Code's default tool timeout is effectively unbounded | `docs/measured.md` (MCP clients M4, M5), re-read the same sources | Confirmed. D7's default wait (3 min) stays under both; the setup docs set Codex's `tool_timeout_sec` explicitly |
+| M3 | Codex's tool timeout defaults differ between its docs (60 s) and its source (300 s); Claude Code's default tool timeout is effectively unbounded | `docs/measured.md` (MCP clients M4, M5), re-read the same sources | Confirmed. D7's default wait (3 min) is longer than Codex's documented 60 s and shorter than the 300 s in its source, so the setup docs set Codex's `tool_timeout_sec` explicitly; that, not the default, is what makes it work |
 | M4 | `github.com/go-jose/go-jose/v4` v4.1.6 (Apache-2.0) verifies JWS with an explicit algorithm allowlist, parses JWKs and computes RFC 7638 thumbprints | pkg.go.dev, module source | Confirmed. D2 |
 
 ## 3. Owner decisions
@@ -190,9 +190,13 @@ nyyrikki mcp-headers
 | 75 | `expired` or `withdrawn`: nobody answered in time |
 | 77 | `denied`, `target_not_allowed`, `handle_unknown`, `session_inactive`, `introspection_failed` |
 
-A remote command that itself exits 64, 67, 69, 75 or 77 is told apart by
-the `nyyrikki:` line on stderr, which is printed only for Nyyrikki's own
-outcomes.
+A remote command can itself exit 64, 67, 69, 75 or 77, and its stderr is
+forwarded, so it can also print lines that look like Nyyrikki's. When
+Nyyrikki itself fails, the CLI's last stderr line is
+`nyyrikki: error: <code>: <message>` with a code of D14. That tells a
+cooperative remote command apart, not a hostile one: a script that must
+know for certain uses the `run` tool's structured result, where `error`
+is set only by Nyyrikki.
 
 ### 5.6 Configuration
 
@@ -246,7 +250,7 @@ default values file and checks that every field reaches its consumer.
 | G3 Each dependency failure (introspection, SQLite, audit, approver channel) ends in deny, through MCP and the CLI | `decision` tests with failing fakes; integration tests |
 | G4 A target that is absent or not visible is denied with the same answer | `TestDecideTargetNotAllowed` |
 | G5 One-off: approved runs once; denied, expired, withdrawn (client disconnect) and a second tap each deny or do nothing | `decision` tests; `TestRunClientDisconnectWithdraws` |
-| G6 Elevation: covered requests run without asking; after expiry, on another target, from another agent key or without the handle → one-off; a handle never issued to this agent key → deny; more than 30 m gives 30 m | `TestElevation*` |
+| G6 Elevation: a live elevation's handle, from the agent key and human it was issued to, on a target it names → runs without asking; no handle → one-off; this key's handle but expired, ended, another human or a target it doesn't name → one-off; an unknown handle, or one issued to another agent key → deny `handle_unknown`, never a one-off; more than 30 m gives 30 m | `TestElevation*`, `TestElevationHandleUnknownDenies` |
 | G7 No package other than `decision` can construct a `Grant`; the runner takes only a `Grant` | compile-time (unexported fields) plus `TestOnlyDecisionMakesGrants` (go/packages scan) |
 | G8 The server registers only the three tools and no resources or prompts | `TestOnlyThreeTools` |
 | G9 A stream ticket works once, for 30 s, for its agent key only, and `/stream` without one is refused | `TestStreamTicket*` |

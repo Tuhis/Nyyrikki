@@ -359,7 +359,7 @@ The threat model, its assets, trust base, adversaries, invariants
   version: target refused (D13).
 - **What reaches logs, Telegram and the agent.** Logs are agent-readable
   (D16), so they carry no secrets and no approval material. Responses go
-  to the agent unredacted (R9); Nyyrikki's own credentials never do.
+  to the agent unredacted (R9); Nyyrikki never adds its own credentials to them (docs/04 OD3 for a request that reads them).
 - **New ways to reach a target.** One: `/mcp` (D4, D10). Any later
   endpoint is added by a dated revision of D4 and passes the same
   decision point.

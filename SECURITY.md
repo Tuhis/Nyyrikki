@@ -108,7 +108,7 @@ says so:
 | INV-05 | Requests run on the target as the human the agent is bound to, taken from the human registry, never from anything in the request. | R4 |
 | INV-06 | Only access tokens from the configured issuer, with Nyyrikki as audience, unexpired, for a known human are accepted, and a DPoP-bound or CLI token only with a valid proof (docs/01 D9). Run and elevate also need the session to be live by introspection. No token is passed on to a target. | docs/01 D9, R2 |
 | INV-07 | Any error, timeout or unreachable dependency ends in deny. | every doc |
-| INV-08 | Nyyrikki's own credentials never reach the agent: not in a response, an error, a log or a Telegram message. | R4 |
+| INV-08 | Nyyrikki never puts its own credentials in a response, an error, a log or a Telegram message. (A target's response to an approved request that reads them, because the human can, is an accepted risk below.) | R4 |
 | INV-09 | Logs and audit records are treated as readable by the agent: no credential, no secret value, no approval material in them. | docs/01 D16, R3 |
 | INV-10 | Every request, decision, approval, elevation and dependency failure is audited. A failed audit write doesn't turn into an allow. | R3 |
 | INV-11 | Nyyrikki listens only on its HTTPS port and its health port, and the health port serves no data. | docs/01 D10, R6 |
@@ -159,6 +159,13 @@ These kinds of issue are always in scope:
 - **Responses are unredacted.** The response to an approved request
   reaches the agent as the target sent it, including any secret
   material it returns. Optional redaction is deferred (`ROADMAP.md` R9).
+- **An approved request can read Nyyrikki's own credentials** when the
+  human it runs as can: for example `get secret -n <nyyrikki-namespace>`,
+  `create token <nyyrikki-serviceaccount>`, or `exec` into Nyyrikki's pod,
+  if the human is a cluster admin. The approver's tap, on a message that
+  shows the exact request, is the defence. Owners who want it closed give
+  the human no access to Nyyrikki's namespace (docs/04 OD3, owner
+  decision 2026-10-27).
 - **The human approves their own agents' requests.** In the first
   version there is one human, who is also the approver (docs/01 OD1).
   The defence is a message that shows exactly what will run (R5).

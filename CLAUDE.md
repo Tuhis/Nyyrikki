@@ -161,8 +161,10 @@ of order, however small.
   including the temporary credentials Nyyrikki creates on targets. The
   only credential the agent holds is its own token for authenticating to
   Nyyrikki.
-  None of them is ever handed to an agent, directly, in a result or in
-  an error.
+  Nyyrikki never hands one to an agent, directly, in a result or in an
+  error. An approved request that itself reads them, because the human
+  it runs as can, is an accepted risk (owner decision 2026-10-27,
+  `docs/04` OD3, SECURITY.md).
   Issued credentials are scoped as narrowly and live as briefly as works,
   and they are revoked on every path.
 - **The target sees the real user.** Wherever the target can impersonate
@@ -184,7 +186,9 @@ of order, however small.
   it acts for. Redacting secrets in responses is a possible future,
   optional feature (owner decision 2026-10-26, `ROADMAP.md` R9), not part
   of the first version. Nyyrikki's own credentials are a different
-  matter: they never appear in a response or an error.
+  matter: Nyyrikki never puts them in a response or an error itself; a
+  target response that contains them because the human can read them
+  is the accepted risk above.
 - **Bug fixes are test-first**: write the failing test, watch it fail, then
   fix. See `CODE-REVIEW.md`. Every rule there exists because its absence
   cost a real bug.
