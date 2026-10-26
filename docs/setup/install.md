@@ -58,6 +58,17 @@ targets:
 
 Kubernetes 1.35 or newer is required. Older targets are refused (docs/01 D13).
 
+## Your own rights, and Nyyrikki's credentials
+
+Requests run as you. If you can read Nyyrikki's Secrets, mint tokens for
+its ServiceAccount, exec into its pod, debug its node or create
+privileged or `hostPath` pods, then one request you approve can hand the
+agent Nyyrikki's credentials. That is an accepted risk, and your tap is
+the defence. To close it, withhold those rights from the human Nyyrikki
+acts as, on this cluster and on `nyyrikki-system` in remote ones, or run
+Nyyrikki on a cluster you don't administer
+([SECURITY.md](../../SECURITY.md), Accepted risks).
+
 ## Rotating credentials
 
 Replace a Secret's value. Nyyrikki reads every credential file on use, so
