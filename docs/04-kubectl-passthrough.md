@@ -54,7 +54,7 @@ All checked on 2026-10-26 with Go 1.26.8.
 |---|---|---|
 | OD1 | What form does a request take? | **A kubectl command line, 1:1**: the agent sends the arguments it would give `kubectl`, and that is what runs (owner, 2026-10-26). |
 | OD2 | Interactive exec and attach? | **Included** (owner, 2026-10-26; docs/02 OD3). |
-| OD3 | Requests run as the human. If the human can read Nyyrikki's own Secrets, mint its ServiceAccount's tokens or exec into its pod (a cluster admin can), an approved request returns Nyyrikki's credentials (review of the docs PR). Enforce an RBAC check, refuse such requests by argv, require a separate cluster, or accept? | **Accept the risk** (owner, 2026-10-27). The approver sees the exact request, and that is the defence. SECURITY.md lists it under accepted risks, and INV-08 and `CLAUDE.md` say what Nyyrikki itself guarantees: it never adds its credentials to a response, an error, a log or a message. An owner who wants it closed gives the human no access to Nyyrikki's namespace. |
+| OD3 | Requests run as the human. If the human can reach Nyyrikki's own credentials (read its Secrets, mint its ServiceAccount's tokens, exec into its pod, mount them in a pod of their own, reach its node) or can mint a standing credential on a target, a request the agent gets approved, or any request under an elevation on that target, returns them (review of the docs PR). Enforce an RBAC check, refuse such requests by argv, require a separate cluster, or accept? | **Accept the risk** (owner, 2026-10-27; reconfirmed the same day for requests under an elevation, which get no message of their own). The defence is the approver's tap, on the exact request or on the elevation that covers it. SECURITY.md (Accepted risks) lists what it costs, which invariants it suspends, the rights that narrow it and the separate cluster that closes it; INV-08 and `CLAUDE.md` say what Nyyrikki itself guarantees: it never adds its credentials to a response, an error, a log or a message. |
 
 ## 4. Decisions
 
@@ -72,7 +72,7 @@ All checked on 2026-10-26 with Go 1.26.8.
 | D10 | **Identity.** Every request runs as the human's `kubernetes.user` and `groups`, through impersonation set only in the kubeconfig Nyyrikki writes. The request can't change it: D4 refuses `--as`, `--as-group`, `--as-uid`, `--kubeconfig`, `--user` and `--context`. Nyyrikki's ServiceAccounts may impersonate only those names (`resourceNames`, docs/06). | INV-05, docs/01 D15. |
 | D11 | **Target version check.** Before the first run on a target, and then at most every 10 minutes, Nyyrikki reads `/version` with its own credential (no impersonation) and refuses the target below 1.35 (`unavailable`, `target_version`). An unreachable target is `unavailable`. | docs/01 D13; M6. |
 | D12 | **Interactive runs.** `run` with `interactive: true` is allowed only for `exec` and `attach` with `stdin` and `tty` set. The approval is the same as for any run. The run starts only when the client attaches to `/stream` with the ticket (docs/02 D10): the child gets a pseudo-terminal (M8), WebSocket binary messages carry terminal bytes both ways, and a text message `{"resize": {"cols", "rows"}}` resizes it. When the child exits, the server sends `{"exit_code": n}` and closes. | OD2. A pty is what makes kubectl ask for a TTY, as it does on the owner's laptop. |
-| D13 | **Output to the agent.** The result is kubectl's exit status and its stdout and stderr, as they came, apart from truncation (D7). Nyyrikki adds none of its credentials to them: the kubeconfig holds no secret (D9), verbosity flags don't exist (M1), and `config` isn't offered (D5). *Revised 2026-10-27 (OD3)*: a request that reads Nyyrikki's credentials on the target, because the human can, returns them like any response; that is an accepted risk. | `CLAUDE.md`: responses unredacted; Nyyrikki's credentials never put in a response by Nyyrikki. |
+| D13 | **Output to the agent.** The result is kubectl's exit status and its stdout and stderr, as they came, apart from truncation (D7). Nyyrikki adds none of its credentials to them: the kubeconfig holds no secret (D9), verbosity flags don't exist (M1), and `config` isn't offered (D5). *Revised 2026-10-27 (OD3)*: a request, approved one-off or under an elevation, that reads Nyyrikki's credentials on the target, because the human can, returns them like any response; that is an accepted risk. | `CLAUDE.md`: responses unredacted; Nyyrikki's credentials never put in a response by Nyyrikki. |
 | D14 | **Secret-bearing values in what Nyyrikki shows and logs.** In the approver's view and the audit record, these are replaced by `‹redacted: N bytes, sha256:<first 12 hex>›`: the values of `--from-literal` (the part after the first `=`) and `--docker-password`; `patch`'s `--patch` when a positional names a Secret (the resource token, matched case-insensitively up to the first `/` or `.`, is `secret` or `secrets`) or when the target comes from `-f`; and, in stdin, `data`, `stringData` and the `kubectl.kubernetes.io/last-applied-configuration` annotation of every document whose `kind` is `Secret`, including Secrets inside a `List`'s `items`. They still run as sent; the hash binds the approval to them. Not covered, and accepted: a Secret's values typed into another command's positional argument (for example `annotate secret x kubectl.kubernetes.io/last-applied-configuration='{…}'`). *Revised 2026-10-27 (review of the docs PR)*: the patch, `List` and annotation cases were added. | `CLAUDE.md`: secrets never reach logs or Telegram. The approver still sees that a secret is being set, and its size. |
 
 ### Rejected alternatives
@@ -197,10 +197,11 @@ targets:
   `drain`). The approver approves the line; that is what OD1 chose.
 - **Large stdin documents** may not fit in one Telegram message
   (docs/05 D9 refuses them rather than show part of a request).
-- **An approved request can read Nyyrikki's own credentials, or mint a
-  standing credential**, when the human can (OD3). Accepted by the owner;
-  SECURITY.md (Accepted risks) lists what it costs and the RBAC that
-  closes it. Marking such requests on the Telegram message, without
+- **An approved request, or any request under an elevation, can read
+  Nyyrikki's own credentials, or mint a standing credential**, when the
+  human can (OD3). Accepted by the owner; SECURITY.md (Accepted risks)
+  lists what it costs, the rights that narrow it and the separate cluster
+  that closes it. Marking such requests on the Telegram message, without
   refusing them, is a possible strengthening of the one defence, the
   approver's tap.
 

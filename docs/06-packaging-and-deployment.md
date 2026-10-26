@@ -74,12 +74,14 @@ mounted, `rbac.impersonate` (users, groups), `networkPolicy`, `image`,
   secret (docs/01 OD7).
 - **Listeners.** Only `:8443` and `:8081` are exposed (docs/01 D10).
 - **The human's own rights on the cluster Nyyrikki runs in** (docs/04
-  OD3, accepted risk). A human who can read Nyyrikki's Secrets, mint its
-  ServiceAccount's tokens, exec into its pod, debug its node or create a
-  privileged or `hostPath` pod can, with one approved request, hand the
-  agent Nyyrikki's credentials. The setup docs tell the owner which
-  rights to withhold to close it (SECURITY.md, Accepted risks), or to run
-  Nyyrikki on a cluster the human doesn't administer.
+  OD3, accepted risk). A human who can reach Nyyrikki's credentials can,
+  through one approved request or any request under an elevation, hand
+  them to the agent. The setup docs give the rights that narrow it, best
+  effort (SECURITY.md, Accepted risks: no write and no Secret read in
+  Nyyrikki's namespace, no `nodes/proxy`, no node debugging, no
+  privileged or `hostPath` pods, no RBAC `bind`/`escalate`/`impersonate`,
+  no admission webhooks), and the option that closes it: Nyyrikki on a
+  cluster the human doesn't administer.
 
 ## 7. Acceptance criteria
 

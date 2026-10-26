@@ -277,8 +277,9 @@ with R2.
   inside Nyyrikki.
 - **Responses**: the target's response goes back to the agent as it
   came, unredacted (redaction is R9, deferred). Nyyrikki never puts its
-  own credentials or leases in a response or an error (a request that
-  reads them because the human can is docs/04 OD3's accepted risk). Also
+  own credentials or leases in a response or an error (a request, one-off
+  or under an elevation, that reads them because the human can is
+  docs/04 OD3's accepted risk). Also
   timeouts, and what happens when a request partly succeeds.
 
 ## R5 — Telegram escalation
