@@ -28,12 +28,8 @@ Nyyrikki is a security component. A bug that runs a request it shouldn't
 is the worst outcome, worse than any outage. Rules, reviews and design docs
 follow from that.
 
-Re-planned on 2026-10-26 by owner decision. This replaced the plan
-adapted from the Warden design on 2026-10-25. Nothing had been built, so
-its design docs were removed; they are in git history. The facts they
-measured are kept in `docs/measured.md` and `docs/gotchas.md`. See also
-"Explicitly set aside" below. AI assessment of requests is deferred, not
-dropped: it is the last roadmap item, ⏸️ until the owner picks it up.
+Re-planned on 2026-10-26 by owner decision; see `ROADMAP.md` and
+"Explicitly set aside" below.
 
 ## Where the detail lives: read these, don't mirror them here
 This file holds only what a session **cannot** derive from the repo:
@@ -86,8 +82,10 @@ behind it is out of order, however small.
   stated reasons are input to check, never evidence that an action is
   safe.
 - **Approvals come from outside the agent's reach.** Never put an
-  approval surface, the Telegram bot token or any credential on the
-  machine the agent runs on, and never log in to Telegram on anything the
+  approval surface, the Telegram bot token, or any target-system,
+  admin or approval-capable credential on the machine the agent runs on
+  (the agent's own token for authenticating to Nyyrikki is expected
+  there: it can't approve anything or reach a target directly), and never log in to Telegram on anything the
   agent can control. Any of these lets the agent approve itself. No MCP
   tool or CLI command approves, denies or ends anything.
 - **MCP and CLI are thin clients of one API.** Neither makes decisions,
@@ -105,8 +103,11 @@ behind it is out of order, however small.
 - **Telegram updates are untrusted.** A callback is not an approval until
   it is checked against the approver, the request or elevation, and its
   expiry.
-- **Nyyrikki holds the credentials; the agent never does.** That
-  includes the temporary credentials Nyyrikki creates on target systems.
+- **Nyyrikki holds the target credentials; the agent never does.** That
+  covers every credential for a target system or for approving,
+  including the temporary credentials Nyyrikki creates on targets. The
+  only credential the agent holds is its own token for authenticating to
+  Nyyrikki.
   None of them is ever handed to an agent, directly, in a result or in
   an error.
   Issued credentials are scoped as narrowly and live as briefly as works,
@@ -141,18 +142,21 @@ one line of why and a link to the doc that has the reasoning. Re-deriving
 a settled question costs a whole cycle.
 
 These four were settled on 2026-10-25 under the earlier Warden plan.
-Their reasoning holds for the current plan too, so they stand.
+Their reasoning holds for the current plan too, so they stand. The
+links point to the removed docs at the commit they were written in.
 
 - **Passkey (WebAuthn) approval**, either always or only for high-risk
   requests. The owner chose one Telegram tap for every decision, for UX
-  (owner decision, 2026-10-25).
+  ([docs/01](https://github.com/Tuhis/Nyyrikki/blob/0ea8b56/docs/01-foundations.md) OD2, 2026-10-25).
 - **Approval inside the coding tool's UI**, such as a button in the T3
   Code thread. It renders on the agent's machine, which the agent
-  controls.
+  controls ([docs/01](https://github.com/Tuhis/Nyyrikki/blob/0ea8b56/docs/01-foundations.md) rejected alternatives).
 - **Admin credentials or "checking" wrapper CLIs on the agent's
-  machine.** Any process there can read or bypass them.
+  machine.** Any process there can read or bypass them
+  ([docs/01](https://github.com/Tuhis/Nyyrikki/blob/0ea8b56/docs/01-foundations.md) rejected alternatives).
 - **Telegram webhooks.** An inbound endpoint is a second way to inject
-  updates. Long polling only.
+  updates. Long polling only
+  ([docs/04](https://github.com/Tuhis/Nyyrikki/blob/0ea8b56/docs/04-telegram-escalation.md) D2).
 
 ## Conventions
 - **Design doc before code.** Every roadmap item is designed in its own
@@ -194,4 +198,4 @@ Their reasoning holds for the current plan too, so they stand.
   of passing the agent's requests through to the target's API.
 - **A model judging each request in the first version.** Deferred on
   2026-10-26 by owner decision: the first version is a plain escalation
-  gateway. The item is kept in `ROADMAP.md` as ⏸️ deferred.
+  gateway. The item is R8 in `ROADMAP.md`.
