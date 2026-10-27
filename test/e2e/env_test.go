@@ -41,6 +41,13 @@ const (
 	clusterName   = "nyyrikki-e2e"
 	keycloakName  = "nyyrikki-e2e-keycloak"
 	fakebotName   = "nyyrikki-e2e-fakebot"
+	// A docker network of our own, with a configured subnet: docker pins
+	// a container's address (--ip) only on such a network, and the network
+	// kind makes for itself may not have one (it doesn't on GitHub's
+	// runners).
+	networkName   = "nyyrikki-e2e"
+	networkSubnet = "10.231.0.0/24"
+	networkPrefix = "10.231.0"
 	distroless    = "gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab"
 	keycloakImage = "quay.io/keycloak/keycloak:26.8.1"
 	image         = "nyyrikki:e2e"
@@ -105,21 +112,26 @@ func setup(t *testing.T) *env {
 		t.Fatal(err)
 	}
 
-	// The cluster.
-	exec.Command("kind", "delete", "cluster", "--name", clusterName).Run()
-	exec.Command("docker", "rm", "-f", keycloakName, fakebotName).Run()
-	run(t, "kind", "create", "cluster", "--name", clusterName, "--kubeconfig", e.kubeconfig, "--wait", "180s")
-	if os.Getenv("NYYRIKKI_E2E_KEEP") == "" {
-		t.Cleanup(func() {
-			exec.Command("kind", "delete", "cluster", "--name", clusterName).Run()
-			exec.Command("docker", "rm", "-f", keycloakName, fakebotName).Run()
-		})
+	// The network and the cluster on it.
+	teardown := func() {
+		exec.Command("kind", "delete", "cluster", "--name", clusterName).Run()
+		exec.Command("docker", "rm", "-f", keycloakName, fakebotName).Run()
+		exec.Command("docker", "network", "rm", networkName).Run()
 	}
-	out := run(t, "docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{.Gateway}}{{end}}", clusterName+"-control-plane")
+	teardown()
+	run(t, "docker", "network", "create", "--subnet", networkSubnet, networkName)
+	create := exec.Command("kind", "create", "cluster", "--name", clusterName, "--kubeconfig", e.kubeconfig, "--wait", "180s")
+	create.Env = append(os.Environ(), "KIND_EXPERIMENTAL_DOCKER_NETWORK="+networkName)
+	if out, err := create.CombinedOutput(); err != nil {
+		t.Fatalf("kind create cluster: %v\n%s", err, out)
+	}
+	if os.Getenv("NYYRIKKI_E2E_KEEP") == "" {
+		t.Cleanup(teardown)
+	}
+	out := run(t, "docker", "inspect", "-f", `{{with index .NetworkSettings.Networks "`+networkName+`"}}{{.IPAddress}} {{.Gateway}}{{end}}`, clusterName+"-control-plane")
 	f := strings.Fields(out)
 	e.nodeIP, e.gatewayIP = f[0], f[1]
-	prefix := e.gatewayIP[:strings.LastIndex(e.gatewayIP, ".")]
-	kcIP, botIP := prefix+".250", prefix+".251"
+	kcIP, botIP := networkPrefix+".250", networkPrefix+".251"
 	e.issuer = fmt.Sprintf("https://%s:8443/realms/%s", kcIP, realm)
 	e.canonical = fmt.Sprintf("https://%s:%d", e.nodeIP, nodePort)
 	t.Logf("node %s, gateway %s, keycloak %s", e.nodeIP, e.gatewayIP, kcIP)
@@ -139,7 +151,7 @@ func setup(t *testing.T) *env {
 	os.MkdirAll(kcDir, 0o755)
 	writeFileMode(t, kcDir, "tls.crt", kcCert, 0o644)
 	writeFileMode(t, kcDir, "tls.key", kcKey, 0o644)
-	run(t, "docker", "run", "-d", "--name", keycloakName, "--network", "kind", "--ip", kcIP,
+	run(t, "docker", "run", "-d", "--name", keycloakName, "--network", networkName, "--ip", kcIP,
 		"-v", kcDir+":/certs:ro",
 		"-e", "KC_BOOTSTRAP_ADMIN_USERNAME=admin", "-e", "KC_BOOTSTRAP_ADMIN_PASSWORD=admin",
 		keycloakImage, "start-dev",
@@ -160,7 +172,7 @@ func setup(t *testing.T) *env {
 		t.Fatalf("build fakebot: %v\n%s", err, out)
 	}
 	os.Chmod(filepath.Join(botDir, "fakebot"), 0o755)
-	run(t, "docker", "run", "-d", "--name", fakebotName, "--network", "kind", "--ip", botIP,
+	run(t, "docker", "run", "-d", "--name", fakebotName, "--network", networkName, "--ip", botIP,
 		"-v", botDir+":/app:ro", distroless, "/app/fakebot", "-cert", "/app/tls.crt", "-key", "/app/tls.key")
 	e.tg = &fakeBot{api: "https://" + botIP + ":8443", control: "http://" + botIP + ":9000"}
 
