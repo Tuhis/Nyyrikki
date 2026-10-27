@@ -13,6 +13,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Values.image.digest -}}{{ .Values.image.repository }}@{{ .Values.image.digest }}
 {{- else -}}{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}{{- end -}}
 {{- end -}}
+{{- /* "true" once if any target is in-cluster, whatever their number. */ -}}
 {{- define "nyyrikki.inCluster" -}}
-{{- range .Values.targets }}{{ if .inCluster }}true{{ end }}{{ end -}}
+{{- $in := false -}}
+{{- range .Values.targets }}{{ if .inCluster }}{{ $in = true }}{{ end }}{{ end -}}
+{{- if $in }}true{{ end -}}
 {{- end -}}
