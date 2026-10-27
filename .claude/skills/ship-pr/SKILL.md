@@ -145,11 +145,14 @@ then act on what you find:
   job**, even under the bullets above. A rerun replays the old comment, and
   if the reply was already posted it adds a second one, which §3 counts as
   another round. Look for the reply first; retry only by posting the
-  round's comment again, as §3 says. A run with no reply that started
-  more than 40 minutes ago (its job timeout is 30) can't post any more:
-  treat it as a **failed run** for §3, even while GitHub still shows it
-  `in_progress`. It uses no round, and the retry may be posted although
-  that run looks open. If a late reply arrives anyway, count only one.
+  round's comment again, as §3 says. A job with no reply whose
+  `started_at` (`actions/jobs/<id>`, not the run's `createdAt`) is more
+  than its `timeout-minutes` in `claude.yml` plus 10 minutes ago can't
+  post any more: treat it as a **failed run** for §3, even while GitHub
+  still shows it `in_progress`. It uses no round, and the retry may be
+  posted although that run looks open. A job still `queued` falls under
+  the stuck-pool bullet instead. If a late reply arrives anyway, §3 counts
+  the round once.
 
 A **stall** is a wake where you found one of these: a job stuck after its
 steps, a stuck pool, a hung job or a silent round. A job that is slow but
@@ -264,11 +267,14 @@ Focus on <the parts most likely to be wrong>.
 On a large PR with a clean automatic review, ask for a full review of the
 PR in round 1, instead of "since your last review".
 
-- **At most 3 rounds.** Count the `claude[bot]` replies whose header is
-  "**Claude finished @<the account you post as>'s task …**" and that answer
-  a comment starting `@claude please review again (round`. Don't count your
-  own comments, because a retry would count twice, and don't count any other
-  `@claude` question, yours or a person's. A reply counts only if it
+- **At most 3 rounds.** Count the rounds K that have a `claude[bot]`
+  reply whose header is "**Claude finished @<the account you post as>'s
+  task …**" and that answers a comment starting `@claude please review
+  again (round K`. Count each K once, even when a retry and a late original
+  both replied: handle both replies' findings, and the round's marker is
+  the SHA named in the later request. Don't count your own comments,
+  because a retry would count twice, and don't count any other `@claude`
+  question, yours or a person's. A reply counts only if it
   actually reviewed the requested range. One that says it couldn't (a failed
   checkout, out of turns) is a failed run. It is neither a round nor clean.
   Counting on the PR survives a context reset.
@@ -279,7 +285,8 @@ PR in round 1, instead of "since your last review".
   the retry fails too, stop and hand back.
 - Handle the round's findings as in §2, then request the next round.
   Don't post any other `@claude` comment while a round is open. One job at
-  a time keeps every reply attributable.
+  a time keeps every reply attributable. A `claude.yml` job past its
+  timeout is not open, because it can't post (§2 *Waited 30 minutes?*).
 - **Stop early** when a round leaves nothing to push. That means it reports
   nothing actionable, or you declined each finding with a reply saying why.
   Commits that land later (a rebase, a person's push, an `@claude` job's
