@@ -3,6 +3,6 @@ name: nyyrikki
 description: Privilege escalation gateway for AI agents, with human approval on Telegram
 type: application
 version: 0.1.0
-appVersion: "0.1.0"
+appVersion: 0.1.0
 license: Apache-2.0
-kubeVersion: ">=1.35.0-0"
+kubeVersion: '>=1.35.0-0'
