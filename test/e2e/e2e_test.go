@@ -32,6 +32,9 @@ func TestEndToEnd(t *testing.T) {
 		c := claims(lf["access_token"].(string))
 		// docs/01 M9: what Keycloak 26.8 puts in a DPoP-bound CLI token.
 		t.Logf("M9 CLI token: typ=%v azp=%v sid=%v cnf=%v aud=%v", c["typ"], c["azp"], c["sid"], c["cnf"], c["aud"])
+		if cnf, _ := c["cnf"].(map[string]any); cnf == nil || cnf["jkt"] == nil || cnf["jkt"] == "" {
+			t.Fatalf("the CLI's token isn't DPoP-bound: cnf=%v", c["cnf"])
+		}
 		r := agent.run(t, "", "targets")
 		if r.code != 0 || !strings.Contains(r.stdout, "this-cluster") {
 			t.Fatalf("targets: %+v", r)
@@ -43,6 +46,18 @@ func TestEndToEnd(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != 401 {
 			t.Fatalf("unauthenticated /mcp: %d", resp.StatusCode)
+		}
+		// A DPoP-bound token presented as Bearer is refused (docs/01 D9).
+		req, _ := http.NewRequest("POST", e.canonical+"/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+		req.Header.Set("Authorization", "Bearer "+lf["access_token"].(string))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err = e.httpClient().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 401 {
+			t.Fatalf("a DPoP-bound token as Bearer: %d", resp.StatusCode)
 		}
 		if n := len(e.tg.Sent(t)); n != 0 {
 			t.Fatalf("listing reached the approver (%d prompts)", n)
@@ -66,10 +81,14 @@ func TestEndToEnd(t *testing.T) {
 	step(t, "M2: a denied request doesn't run", func(t *testing.T) {
 		ch := agent.async(t, "run", "--reason", "delete it", "this-cluster", "--", "delete", "pod", "box", "-n", workNS)
 		e.tap(t, next(), "Deny")
-		if r := get(t, ch, time.Minute); r.code != 77 || !strings.Contains(r.stderr, "denied") {
+		if r := get(t, ch, time.Minute); r.code != 77 || !strings.Contains(r.stderr, "nyyrikki: error: denied:") {
 			t.Fatalf("denied run: %+v", r)
 		}
-		e.kubectl(t, "-n", workNS, "get", "pod", "box") // still there
+		// Not merely still there: a deleted pod stays visible while it
+		// terminates, so check no deletion has started.
+		if ts := e.kubectl(t, "-n", workNS, "get", "pod", "box", "-o", "jsonpath={.metadata.deletionTimestamp}"); strings.TrimSpace(ts) != "" {
+			t.Fatalf("the denied delete ran: pod box is terminating since %s", ts)
+		}
 	})
 
 	step(t, "M2: a request that leaves the human is refused before any prompt", func(t *testing.T) {
@@ -80,7 +99,8 @@ func TestEndToEnd(t *testing.T) {
 			{"apply", "-f", "/var/run/secrets/kubernetes.io/serviceaccount/token"},
 		} {
 			r := agent.run(t, "", append([]string{"run", "--reason", "x", "this-cluster", "--"}, args...)...)
-			if r.code != 64 {
+			// The server's refusal, not a local usage error.
+			if r.code != 64 || !strings.Contains(r.stderr, "nyyrikki: error: invalid_request:") {
 				t.Errorf("%v: %+v", args, r)
 			}
 		}
@@ -137,12 +157,11 @@ func TestEndToEnd(t *testing.T) {
 		}
 		t.Logf("stream cut %v after the approval of a 1m elevation", lasted.Round(time.Second))
 		// After expiry the handle no longer covers: back to a one-off.
-		cmd = agent.cmd("run", "--reason", "after expiry", "this-cluster", "--", "get", "pods", "-n", workNS)
-		cmd.Env = elevated
-		done := make(chan error, 1)
-		go func() { done <- cmd.Run() }()
+		ch = agent.asyncEnv(t, []string{"NYYRIKKI_ELEVATION=" + handle}, "run", "--reason", "after expiry", "this-cluster", "--", "get", "pods", "-n", workNS)
 		e.tap(t, next(), "Deny")
-		<-done
+		if r := get(t, ch, time.Minute); r.code != 77 || !strings.Contains(r.stderr, "nyyrikki: error: denied:") {
+			t.Fatalf("after expiry: %+v", r)
+		}
 	})
 
 	step(t, "M3: End now from the chat ends the elevation at once", func(t *testing.T) {
@@ -150,6 +169,18 @@ func TestEndToEnd(t *testing.T) {
 		msg := e.tap(t, next(), "Approve")
 		r := get(t, ch, time.Minute)
 		h := strings.TrimSpace(r.stdout)
+		if r.code != 0 || !strings.HasPrefix(h, "nyel_") {
+			t.Fatalf("elevate: %+v", r)
+		}
+		withH := []string{"NYYRIKKI_ELEVATION=" + h}
+		// Live before End now: a covered request, no prompt.
+		before := len(e.tg.Sent(t))
+		if r := agent.runEnv(t, withH, "", "run", "--reason", "covered", "this-cluster", "--", "get", "pods", "-n", workNS, "-o", "name"); r.code != 0 || !strings.Contains(r.stdout, "pod/box") {
+			t.Fatalf("covered before End now: %+v", r)
+		}
+		if len(e.tg.Sent(t)) != before {
+			t.Fatal("the live elevation asked the approver")
+		}
 		deadline := time.Now().Add(30 * time.Second)
 		for {
 			cur := e.tg.Message(t, msg)
@@ -162,12 +193,12 @@ func TestEndToEnd(t *testing.T) {
 			}
 			time.Sleep(300 * time.Millisecond)
 		}
-		cmd := agent.cmd("run", "--reason", "after end", "this-cluster", "--", "get", "pods", "-n", workNS)
-		cmd.Env = append(append([]string{}, agent.env...), "NYYRIKKI_ELEVATION="+h)
-		done := make(chan error, 1)
-		go func() { done <- cmd.Run() }()
-		e.tap(t, next(), "Deny") // it went back to a one-off
-		<-done
+		// After End now the same handle no longer covers: a one-off prompt.
+		ch = agent.asyncEnv(t, withH, "run", "--reason", "after end", "this-cluster", "--", "get", "pods", "-n", workNS)
+		e.tap(t, next(), "Deny")
+		if r := get(t, ch, time.Minute); r.code != 77 || !strings.Contains(r.stderr, "nyyrikki: error: denied:") {
+			t.Fatalf("after End now: %+v", r)
+		}
 	})
 
 	step(t, "M3: another agent's live handle is denied, never turned into a one-off", func(t *testing.T) {
@@ -235,6 +266,9 @@ func TestEndToEnd(t *testing.T) {
 		}()
 		e.tap(t, next(), "Approve")
 		r := <-done
+		if r == nil {
+			t.Fatal("MCP run returned no result")
+		}
 		b, _ := json.Marshal(r.StructuredContent)
 		var out struct {
 			Stdout string `json:"stdout"`

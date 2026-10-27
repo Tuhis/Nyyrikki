@@ -128,7 +128,14 @@ type result struct {
 
 func (c *cli) run(t *testing.T, stdin string, args ...string) result {
 	t.Helper()
+	return c.runEnv(t, nil, stdin, args...)
+}
+
+// runEnv is run with extra environment variables (an elevation handle).
+func (c *cli) runEnv(t *testing.T, extra []string, stdin string, args ...string) result {
+	t.Helper()
 	cmd := c.cmd(args...)
+	cmd.Env = append(append([]string{}, c.env...), extra...)
 	var so, se bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &so, &se
 	if stdin != "" {
@@ -146,8 +153,12 @@ func (c *cli) run(t *testing.T, stdin string, args ...string) result {
 
 // async runs the CLI in the background.
 func (c *cli) async(t *testing.T, args ...string) chan result {
+	return c.asyncEnv(t, nil, args...)
+}
+
+func (c *cli) asyncEnv(t *testing.T, extra []string, args ...string) chan result {
 	ch := make(chan result, 1)
-	go func() { ch <- c.run(t, "", args...) }()
+	go func() { ch <- c.runEnv(t, extra, "", args...) }()
 	return ch
 }
 
