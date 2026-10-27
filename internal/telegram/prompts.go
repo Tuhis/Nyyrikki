@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/Tuhis/Nyyrikki/internal/approval"
 	"github.com/Tuhis/Nyyrikki/internal/codes"
@@ -72,60 +73,110 @@ func (b *Bot) ask(ctx context.Context, id string, approverID int64, kind, body s
 // is rejected. ElevationLive swaps Approve and Deny for End now. Settle is
 // idempotent: settling a closed prompt, or a live one live again, changes
 // nothing and returns nil. A prompt that was never sent is not an error.
+//
+// A terminal outcome always wins over ElevationLive, whatever order the
+// calls arrive in (review L1): Settles of one prompt are serialised, edits
+// included, and a lost compare-and-set is retried from a fresh read.
 func (b *Bot) Settle(ctx context.Context, id string, o approval.Outcome) error {
 	status, err := statusLine(o, b.now())
 	if err != nil {
 		return codes.Wrap(codes.Internal, err, "unknown outcome")
 	}
-	row, err := b.loadPrompt(ctx, id)
-	if errors.Is(err, errNoPrompt) {
-		return nil
-	}
-	if err != nil {
-		return codes.Wrap(codes.Internal, err, "the approval channel's store failed")
-	}
+	unlock := b.settleLocks.lock(id)
+	defer unlock()
 
-	var from, to string
-	var kb *inlineKeyboard
-	var newKeys []keyedAction
-	switch {
-	case row.state == stateClosed:
-		return nil
-	case o.Kind == approval.ElevationLive:
-		if row.kind != kindElevation {
-			return codes.New(codes.Internal, "ElevationLive for a run prompt")
-		}
-		if row.state == stateLive {
+	// States only move open → live → closed, so after two lost
+	// compare-and-sets the prompt is closed and the next read returns.
+	for attempt := 0; attempt < 3; attempt++ {
+		row, err := b.loadPrompt(ctx, id)
+		if errors.Is(err, errNoPrompt) {
 			return nil
 		}
-		end := newCallbackKey()
-		from, to = stateOpen, stateLive
-		newKeys = []keyedAction{{end, approval.ActionEnd}}
-		kb = &inlineKeyboard{InlineKeyboard: [][]inlineButton{{{Text: "End now", CallbackData: end}}}}
-	case row.state == stateLive:
-		switch o.Kind {
-		case approval.ElevationEnded, approval.ElevationExpired, approval.Failed:
-		default:
-			return codes.New(codes.Internal, "outcome %d does not follow a live elevation", o.Kind)
+		if err != nil {
+			return codes.Wrap(codes.Internal, err, "the approval channel's store failed")
 		}
-		from, to = stateLive, stateClosed
-	default: // open, terminal outcome
-		from, to = stateOpen, stateClosed
-	}
 
-	won, err := b.transition(ctx, id, from, to, newKeys)
-	if err != nil {
-		return codes.Wrap(codes.Internal, err, "the approval channel's store failed")
+		var from, to string
+		var kb *inlineKeyboard
+		var newKeys []keyedAction
+		switch {
+		case row.state == stateClosed:
+			return nil
+		case o.Kind == approval.ElevationLive:
+			if row.kind != kindElevation {
+				return codes.New(codes.Internal, "ElevationLive for a run prompt")
+			}
+			if row.state == stateLive {
+				return nil
+			}
+			end := newCallbackKey()
+			from, to = stateOpen, stateLive
+			newKeys = []keyedAction{{end, approval.ActionEnd}}
+			kb = &inlineKeyboard{InlineKeyboard: [][]inlineButton{{{Text: "End now", CallbackData: end}}}}
+		case row.state == stateLive:
+			switch o.Kind {
+			case approval.ElevationEnded, approval.ElevationExpired, approval.Failed:
+			default:
+				return codes.New(codes.Internal, "outcome %d does not follow a live elevation", o.Kind)
+			}
+			from, to = stateLive, stateClosed
+		default: // open, terminal outcome
+			from, to = stateOpen, stateClosed
+		}
+
+		if h := b.testHookBeforeTransition; h != nil {
+			h()
+		}
+		won, err := b.transition(ctx, id, from, to, newKeys)
+		if err != nil {
+			return codes.Wrap(codes.Internal, err, "the approval channel's store failed")
+		}
+		if !won {
+			continue // the state moved on since the read: decide again
+		}
+		// The keys are already gone, so even if the edit fails no tap on the
+		// old buttons can count. The edit runs to completion even if the
+		// caller's context ends: a half-retired prompt is misleading.
+		if err := b.editMessage(context.WithoutCancel(ctx), row.chatID, row.messageID, withStatus(row.body, status), kb); err != nil {
+			b.log.Warn("editing a settled prompt failed", "prompt", id, "error", err.Error())
+			return codes.Wrap(codes.Unavailable, fmt.Errorf("edit: %w", err), "could not update the approver's message")
+		}
+		return nil
 	}
-	if !won {
-		return nil // a concurrent Settle got there first
+	return codes.New(codes.Internal, "the prompt kept changing while it was settled")
+}
+
+// keyedLocks is one mutex per prompt ID, dropped when nobody holds it.
+type keyedLocks struct {
+	mu sync.Mutex
+	m  map[string]*keyedLock
+}
+
+type keyedLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func (k *keyedLocks) lock(id string) (unlock func()) {
+	k.mu.Lock()
+	if k.m == nil {
+		k.m = make(map[string]*keyedLock)
 	}
-	// The keys are already gone, so even if the edit fails no tap on the old
-	// buttons can count. The edit runs to completion even if the caller's
-	// context ends: a half-retired prompt is misleading.
-	if err := b.editMessage(context.WithoutCancel(ctx), row.chatID, row.messageID, withStatus(row.body, status), kb); err != nil {
-		b.log.Warn("editing a settled prompt failed", "prompt", id, "error", err.Error())
-		return codes.Wrap(codes.Unavailable, fmt.Errorf("edit: %w", err), "could not update the approver's message")
+	l := k.m[id]
+	if l == nil {
+		l = &keyedLock{}
+		k.m[id] = l
 	}
-	return nil
+	l.refs++
+	k.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		k.mu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(k.m, id)
+		}
+		k.mu.Unlock()
+	}
 }

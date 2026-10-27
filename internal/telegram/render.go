@@ -31,24 +31,37 @@ const statusReserve = 64
 // sanitize shows characters that could hide or reorder text as \u{…}:
 // controls, bidi controls, zero-width and other format characters, line and
 // paragraph separators, private-use and surrogate code points, Hangul
-// fillers, and invalid UTF-8 (docs/05 D8). keepNewlines keeps '\n' and '\t'
+// fillers, every default-ignorable code point, the Braille blank, invalid
+// UTF-8, and combining marks past the fourth in a row (docs/05 D8, review
+// L3). keepNewlines keeps '\n' and '\t'
 // as they are, for multi-line blocks (stdin, reason); they can't leave the
 // block they are in.
 func sanitize(s string, keepNewlines bool) string {
 	var sb strings.Builder
 	sb.Grow(len(s))
+	marks := 0 // consecutive combining marks (Mn, Me) so far
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
 		i += size
 		if r == utf8.RuneError && size <= 1 {
 			sb.WriteString(`\u{fffd}`)
+			marks = 0
 			continue
 		}
 		if keepNewlines && (r == '\n' || r == '\t') {
 			sb.WriteRune(r)
+			marks = 0
 			continue
 		}
-		if hidden(r) {
+		// Review L3: a long run of combining marks stacks into an
+		// unreadable smear that can cover the text around it. The first
+		// maxMarks of a run are kept; the rest of the run is shown.
+		if unicode.In(r, unicode.Mn, unicode.Me) {
+			marks++
+		} else {
+			marks = 0
+		}
+		if hidden(r) || marks > maxMarks {
 			fmt.Fprintf(&sb, `\u{%04x}`, r)
 			continue
 		}
@@ -69,9 +82,24 @@ func hidden(r rune) bool {
 		return true
 	case unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp, unicode.Co, unicode.Cs):
 		return true
+	// Review L3: every default-ignorable code point renders as nothing.
+	// Other_Default_Ignorable_Code_Point covers U+034F, U+115F/1160,
+	// U+17B4/17B5, U+3164, U+FFA0 and the reserved ranges; the variation
+	// selectors and Mongolian FVS are listed explicitly, since Go keeps them
+	// in Variation_Selector instead.
+	case unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r),
+		unicode.Is(unicode.Variation_Selector, r),
+		r == 0x034F, r >= 0xFE00 && r <= 0xFE0F, r >= 0xE0100 && r <= 0xE01EF,
+		r >= 0x180B && r <= 0x180F, r == 0x17B4, r == 0x17B5:
+		return true
+	case r == 0x2800: // Braille pattern blank: a visible-width blank
+		return true
 	}
 	return false
 }
+
+// maxMarks is the longest run of combining marks shown as is (review L3).
+const maxMarks = 4
 
 // escapeHTML escapes the three characters HTML parse mode requires
 // (docs/05 M3).

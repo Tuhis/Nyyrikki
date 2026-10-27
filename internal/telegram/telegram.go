@@ -87,6 +87,18 @@ type Bot struct {
 	stopped  atomic.Bool // a 409 or 401 stopped polling for good
 
 	queue sendQueue
+
+	// /start replies run outside the poll loop (review L2): the loop only
+	// enqueues, dropping when full or when the chat had a reply recently.
+	startQ    chan int64
+	startMu   sync.Mutex
+	startLast map[int64]time.Time
+
+	settleLocks keyedLocks
+
+	// testHookBeforeTransition, if set, runs in Settle between reading a
+	// prompt and its compare-and-set (tests only).
+	testHookBeforeTransition func()
 }
 
 type resolverBox struct{ r approval.Resolver }
@@ -159,6 +171,8 @@ func New(cfg Config, db *sql.DB, a audit.Appender) (*Bot, error) {
 		pollSec: pollSec,
 	}
 	b.queue.interval = cfg.SendInterval
+	b.startQ = make(chan int64, startQueueLen)
+	b.startLast = make(map[int64]time.Time)
 	if _, err := b.readToken(); err != nil {
 		return nil, err
 	}
@@ -230,6 +244,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("telegram: loading the update offset: %w", err)
 	}
+	go b.startReplier(ctx)
 	b.polling.Store(true)
 	b.log.Info("polling started")
 

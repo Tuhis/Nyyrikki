@@ -5,9 +5,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Tuhis/Nyyrikki/internal/approval"
 	"github.com/Tuhis/Nyyrikki/internal/codes"
+	"github.com/Tuhis/Nyyrikki/internal/telegram"
 	"github.com/Tuhis/Nyyrikki/internal/telegram/telegramtest"
 )
 
@@ -219,5 +221,39 @@ func TestTextMessages(t *testing.T) {
 	}
 	if got := e.current(m).ButtonTexts(); len(got) != 2 {
 		t.Errorf("prompt changed: %v", got)
+	}
+}
+
+// Review L2: a stranger's burst of /start must not hold up the approver's
+// taps, and /start replies are rate-limited per chat.
+func TestStartBurstDoesNotStallTaps(t *testing.T) {
+	const stranger int64 = 31337
+	// The real per-chat spacing: before the fix each reply blocked the
+	// poll loop for it.
+	e := newEnv(t, withConfig(func(c *telegram.Config) { c.SendInterval = time.Second })).start()
+	m := e.askRun(runPrompt("apr_burst"))
+
+	for i := 0; i < 20; i++ {
+		e.fake.PushMessage(telegramtest.TextMessage{FromID: stranger, ChatID: stranger, Text: "/start"})
+	}
+	start := time.Now()
+	cq := e.fake.Tap(t, m, "Approve", approverID)
+	if a := e.fake.WaitAnswer(t, cq); a.Text != "Approved" {
+		t.Errorf("answer %q", a.Text)
+	}
+	if el := time.Since(start); el > 2*time.Second {
+		t.Errorf("the tap took %v behind a /start burst", el)
+	}
+
+	e.fake.Wait(t, "the /start reply", func() bool { return len(e.fake.Sent()) >= 2 })
+	time.Sleep(1500 * time.Millisecond) // room for any further (wrong) replies
+	replies := 0
+	for _, s := range e.fake.Sent() {
+		if s.ChatID == stranger {
+			replies++
+		}
+	}
+	if replies != 1 {
+		t.Errorf("%d /start replies to one chat in a burst, want 1", replies)
 	}
 }

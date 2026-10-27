@@ -1,9 +1,11 @@
 package telegram
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/Tuhis/Nyyrikki/internal/approval"
 	"github.com/Tuhis/Nyyrikki/internal/telegram/telegramtest"
@@ -92,5 +94,58 @@ func TestCallbackKeys(t *testing.T) {
 		if wellFormedKey(bad) {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+// Review L3: every default-ignorable code point, Braille blank and long runs
+// of combining marks are shown, not rendered invisibly.
+func TestSanitizeInvisibles(t *testing.T) {
+	for _, r := range []rune{
+		0x034F,         // combining grapheme joiner
+		0xFE00, 0xFE0F, // variation selectors
+		0xE0100, 0xE01EF, // variation selectors supplement
+		0x180B, 0x180D, 0x180F, // Mongolian free variation selectors
+		0x180E,         // Mongolian vowel separator
+		0x17B4, 0x17B5, // Khmer inherent vowels
+		0x2800,                 // Braille pattern blank
+		0x115F, 0x3164, 0xFFA0, // Hangul fillers
+		0x2065, 0xFFF0, 0xE0000, 0xE0FFF, // Other_Default_Ignorable_Code_Point
+	} {
+		in := "a" + string(r) + "b"
+		want := fmt.Sprintf(`a\u{%04x}b`, r)
+		if got := sanitize(in, false); got != want {
+			t.Errorf("sanitize(%U) = %q, want %q", r, got, want)
+		}
+	}
+	// Every Other_Default_Ignorable_Code_Point is escaped.
+	for _, rt := range unicode.Other_Default_Ignorable_Code_Point.R16 {
+		for r := rune(rt.Lo); r <= rune(rt.Hi); r += rune(rt.Stride) {
+			if s := sanitize(string(r), false); !strings.HasPrefix(s, `\u{`) {
+				t.Errorf("%U not escaped", r)
+			}
+		}
+	}
+	for _, rt := range unicode.Other_Default_Ignorable_Code_Point.R32 {
+		for r := rune(rt.Lo); r <= rune(rt.Hi); r += rune(rt.Stride) {
+			if s := sanitize(string(r), false); !strings.HasPrefix(s, `\u{`) {
+				t.Errorf("%U not escaped", r)
+			}
+		}
+	}
+
+	// Combining marks: four in a row are kept, the rest of the run is
+	// escaped; the count restarts after any other character.
+	acute := "́"
+	if got := sanitize("e"+strings.Repeat(acute, 4)+"x", false); got != "e"+strings.Repeat(acute, 4)+"x" {
+		t.Errorf("four marks changed: %q", got)
+	}
+	got := sanitize("e"+strings.Repeat(acute, 6)+"x"+acute, false)
+	want := "e" + strings.Repeat(acute, 4) + `\u{0301}\u{0301}` + "x" + acute
+	if got != want {
+		t.Errorf("long mark run: %q, want %q", got, want)
+	}
+	// Enclosing marks (Me) count too.
+	if got := sanitize("o"+strings.Repeat("⃝", 5), false); got != "o"+strings.Repeat("⃝", 4)+`\u{20dd}` {
+		t.Errorf("enclosing marks: %q", got)
 	}
 }

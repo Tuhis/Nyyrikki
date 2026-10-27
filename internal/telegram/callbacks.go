@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Tuhis/Nyyrikki/internal/approval"
 	"github.com/Tuhis/Nyyrikki/internal/audit"
@@ -51,8 +52,10 @@ func (b *Bot) handleUpdate(ctx context.Context, u update) {
 
 // handleMessage ignores every message except /start in a private chat,
 // which is answered with the sender's user ID as a setup aid (docs/05
-// non-goals). Nothing a message says changes any state.
-func (b *Bot) handleMessage(ctx context.Context, m *tgMessage) {
+// non-goals). Nothing a message says changes any state. It never blocks
+// the poll loop (review L2): the reply is queued for startReplier, at most
+// one per chat per startReplyInterval, and dropped when the queue is full.
+func (b *Bot) handleMessage(_ context.Context, m *tgMessage) {
 	if m.From == nil || m.Chat == nil || m.Chat.Type != "private" || m.Chat.ID != m.From.ID {
 		return
 	}
@@ -60,9 +63,57 @@ func (b *Bot) handleMessage(ctx context.Context, m *tgMessage) {
 	if t != "/start" && !strings.HasPrefix(t, "/start ") && !strings.HasPrefix(t, "/start@") {
 		return
 	}
-	text := fmt.Sprintf("Your Telegram user ID is <code>%d</code>.\nSet it as <code>telegram_user_id</code> in Nyyrikki's human registry to receive approval requests here.", m.From.ID)
-	if _, err := b.sendMessage(ctx, m.Chat.ID, text, nil); err != nil && ctx.Err() == nil {
-		b.log.Warn("replying to /start failed", "error", err.Error())
+	if !b.startAllowed(m.Chat.ID, time.Now()) {
+		return
+	}
+	select {
+	case b.startQ <- m.Chat.ID:
+	default:
+		b.log.Info("dropping a /start reply: queue full")
+	}
+}
+
+// Limits on /start replies (review L2).
+const (
+	startQueueLen      = 16
+	startReplyInterval = 10 * time.Second
+	startMapPrune      = 1024
+)
+
+// startAllowed reports whether chat may get a /start reply now, and if so
+// records it.
+func (b *Bot) startAllowed(chat int64, now time.Time) bool {
+	b.startMu.Lock()
+	defer b.startMu.Unlock()
+	if last, ok := b.startLast[chat]; ok && now.Sub(last) < startReplyInterval {
+		return false
+	}
+	if len(b.startLast) >= startMapPrune {
+		for c, last := range b.startLast {
+			if now.Sub(last) >= startReplyInterval {
+				delete(b.startLast, c)
+			}
+		}
+		if len(b.startLast) >= startMapPrune {
+			return false // a flood from many chats: no replies until it passes
+		}
+	}
+	b.startLast[chat] = now
+	return true
+}
+
+// startReplier sends the queued /start replies until ctx ends.
+func (b *Bot) startReplier(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case chat := <-b.startQ:
+			text := fmt.Sprintf("Your Telegram user ID is <code>%d</code>.\nSet it as <code>telegram_user_id</code> in Nyyrikki's human registry to receive approval requests here.", chat)
+			if _, err := b.sendMessage(ctx, chat, text, nil); err != nil && ctx.Err() == nil {
+				b.log.Warn("replying to /start failed", "error", err.Error())
+			}
+		}
 	}
 }
 
