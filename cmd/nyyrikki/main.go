@@ -287,8 +287,7 @@ func (c *cli) run(ctx context.Context, args []string) int {
 	var out api.RunOut
 	if err := s.Call(ctx, api.ToolRun, in, &out); err != nil {
 		// A cut run still has what it printed so far (docs/04 D7).
-		io.WriteString(c.stdout, out.Stdout)
-		io.WriteString(c.stderr, out.Stderr)
+		c.printOutput(out)
 		return c.fail(err)
 	}
 	if interactive {
@@ -311,6 +310,16 @@ func (c *cli) run(ctx context.Context, args []string) int {
 		}
 		return code
 	}
+	c.printOutput(out)
+	if out.ExitCode == nil {
+		return c.fail(errors.New("the server returned no exit code"))
+	}
+	return *out.ExitCode
+}
+
+// printOutput writes a run's output: stdout to stdout (base64 when it
+// isn't text), stderr to stderr, and a note when it was truncated.
+func (c *cli) printOutput(out api.RunOut) {
 	if out.StdoutBase64 != "" {
 		fmt.Fprintln(c.stderr, "nyyrikki: binary output, base64-encoded")
 		io.WriteString(c.stdout, out.StdoutBase64+"\n")
@@ -321,10 +330,6 @@ func (c *cli) run(ctx context.Context, args []string) int {
 	if out.StdoutTruncated || out.StderrTruncated {
 		fmt.Fprintln(c.stderr, "nyyrikki: output truncated")
 	}
-	if out.ExitCode == nil {
-		return c.fail(errors.New("the server returned no exit code"))
-	}
-	return *out.ExitCode
 }
 
 func (c *cli) elevate(ctx context.Context, args []string) int {

@@ -341,6 +341,25 @@ type chatSlot struct {
 	last time.Time
 }
 
+// maxChatSlots bounds the per-chat send state; idle slots are dropped
+// beyond it (a flood of /start from many accounts can't grow it forever).
+const maxChatSlots = 1024
+
+// pruneLocked drops slots that are idle and past their spacing interval.
+// q.mu is held.
+func (q *sendQueue) pruneLocked() {
+	for id, s := range q.chats {
+		select {
+		case s.sem <- struct{}{}:
+			if time.Since(s.last) > q.interval {
+				delete(q.chats, id)
+			}
+			<-s.sem
+		default: // in use
+		}
+	}
+}
+
 func (q *sendQueue) do(ctx context.Context, chatID int64, fn func() error) error {
 	q.mu.Lock()
 	if q.chats == nil {
@@ -348,6 +367,9 @@ func (q *sendQueue) do(ctx context.Context, chatID int64, fn func() error) error
 	}
 	s, ok := q.chats[chatID]
 	if !ok {
+		if len(q.chats) >= maxChatSlots {
+			q.pruneLocked()
+		}
 		s = &chatSlot{sem: make(chan struct{}, 1)}
 		q.chats[chatID] = s
 	}
