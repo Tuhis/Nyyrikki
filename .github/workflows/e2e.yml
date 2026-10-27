@@ -5,6 +5,12 @@ name: E2E
 on:
   push:
     branches: [main]
+  # And on changes to the suite itself, so a fix to it is proven here
+  # before it merges.
+  pull_request:
+    paths:
+      - "test/e2e/**"
+      - ".github/workflows/e2e.yml"
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
