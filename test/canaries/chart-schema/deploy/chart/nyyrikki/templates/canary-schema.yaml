@@ -1,0 +1,8 @@
+# Planted for the chart canary: lints, but fails kubeconform -strict (an
+# unknown field).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canary-schema
+notAField: true
+data: {}
