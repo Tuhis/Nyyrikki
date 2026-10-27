@@ -93,15 +93,19 @@ func TestEndToEnd(t *testing.T) {
 
 	step(t, "M2: a request that leaves the human is refused before any prompt", func(t *testing.T) {
 		before := len(e.tg.Sent(t))
-		for _, args := range [][]string{
-			{"get", "pods", "--as", "system:admin"},
-			{"config", "view", "--raw"},
-			{"apply", "-f", "/var/run/secrets/kubernetes.io/serviceaccount/token"},
+		for _, tc := range []struct {
+			args []string
+			want string // the server's D4/D5 refusal (internal/kubectl/request)
+		}{
+			{[]string{"get", "pods", "--as", "system:admin"}, "flag --as is not allowed"},
+			{[]string{"config", "view", "--raw"}, "kubectl config view is not offered"},
+			{[]string{"apply", "-f", "/var/run/secrets/kubernetes.io/serviceaccount/token"}, "flag --filename is not allowed"},
 		} {
-			r := agent.run(t, "", append([]string{"run", "--reason", "x", "this-cluster", "--"}, args...)...)
-			// The server's refusal, not a local usage error.
-			if r.code != 64 || !strings.Contains(r.stderr, "nyyrikki: error: invalid_request:") {
-				t.Errorf("%v: %+v", args, r)
+			r := agent.run(t, "", append([]string{"run", "--reason", "refusal check", "this-cluster", "--"}, tc.args...)...)
+			// The server's policy refusal: not a local usage error, nor
+			// another kind of invalid request.
+			if r.code != 64 || !strings.Contains(r.stderr, "nyyrikki: error: invalid_request:") || !strings.Contains(r.stderr, tc.want) {
+				t.Errorf("%v: %+v", tc.args, r)
 			}
 		}
 		if len(e.tg.Sent(t)) != before {
@@ -133,11 +137,11 @@ func TestEndToEnd(t *testing.T) {
 		elevated = append(elevated, "NYYRIKKI_ELEVATION="+handle)
 		before := len(e.tg.Sent(t))
 		for i := 0; i < 2; i++ {
-			cmd := agent.cmd("run", "--reason", "covered", "this-cluster", "--", "get", "pods", "-n", workNS, "-o", "name")
-			cmd.Env = elevated
-			out, err := cmd.Output()
-			if err != nil || !strings.Contains(string(out), "pod/box") {
-				t.Fatalf("covered run %d: %v %s", i, err, out)
+			// Fails fast if coverage regressed, instead of waiting out the
+			// approval timeout.
+			ch := agent.asyncEnv(t, []string{"NYYRIKKI_ELEVATION=" + handle}, "run", "--reason", "covered", "this-cluster", "--", "get", "pods", "-n", workNS, "-o", "name")
+			if r := get(t, ch, 20*time.Second); r.code != 0 || !strings.Contains(r.stdout, "pod/box") {
+				t.Fatalf("covered run %d: %+v", i, r)
 			}
 		}
 		if len(e.tg.Sent(t)) != before {
@@ -147,13 +151,17 @@ func TestEndToEnd(t *testing.T) {
 		cmd := agent.cmd("run", "-t", "--reason", "long session", "this-cluster", "--",
 			"exec", "-it", "box", "-n", workNS, "--", "sleep", "600")
 		cmd.Env = elevated
-		_, wait := startPTY(t, cmd)
+		out, wait := startPTY(t, cmd)
 		code := wait(2 * time.Minute)
 		lasted := time.Since(approvedAt)
-		// The stream must stay up until the expiry and be cut then: a quick
-		// failure (a refusal, a broken /stream) doesn't count.
-		if code == 0 || lasted < 55*time.Second || lasted > 80*time.Second {
-			t.Fatalf("stream not cut at expiry: code %d after %v", code, lasted)
+		// Cut by the elevation's expiry, and by nothing else (a dropped
+		// connection, another cut, kubectl failing): exit 75 with the
+		// server's reason, after the stream stayed up the whole minute.
+		if code != 75 || !strings.Contains(out(), "the elevation expired") || lasted < 55*time.Second || lasted > 80*time.Second {
+			t.Fatalf("stream not cut at expiry: code %d after %v, output %q", code, lasted, out())
+		}
+		if len(e.tg.Sent(t)) != before {
+			t.Fatal("the covered exec asked the approver")
 		}
 		t.Logf("stream cut %v after the approval of a 1m elevation", lasted.Round(time.Second))
 		// After expiry the handle no longer covers: back to a one-off.
@@ -223,6 +231,22 @@ func TestEndToEnd(t *testing.T) {
 		}
 		if len(e.tg.Sent(t)) != before {
 			t.Fatal("a foreign handle reached the approver")
+		}
+		// Within one agent the handle, not the agent key, is what covers
+		// (docs/01 D24, OD15): without it the request is a one-off ...
+		ch = agent.async(t, "run", "--reason", "no handle", "this-cluster", "--", "get", "pods", "-n", workNS)
+		e.tap(t, next(), "Deny")
+		if r := get(t, ch, time.Minute); r.code != 77 || !strings.Contains(r.stderr, "nyyrikki: error: denied:") {
+			t.Fatalf("no handle while an elevation is live: %+v", r)
+		}
+		before = len(e.tg.Sent(t))
+		// ... and a handle never issued is denied, never a one-off.
+		made := "nyel_" + strings.Repeat("Q", 43)
+		if r := agent.runEnv(t, []string{"NYYRIKKI_ELEVATION=" + made}, "", "run", "--reason", "made-up handle", "this-cluster", "--", "get", "pods"); r.code != 77 || !strings.Contains(r.stderr, "handle_unknown") {
+			t.Fatalf("made-up handle: %+v", r)
+		}
+		if len(e.tg.Sent(t)) != before {
+			t.Fatal("a made-up handle reached the approver")
 		}
 		// The handle was live: its own agent still runs with it, unprompted.
 		cmd = agent.cmd("run", "--reason", "own handle", "this-cluster", "--", "get", "pods", "-n", workNS, "-o", "name")
