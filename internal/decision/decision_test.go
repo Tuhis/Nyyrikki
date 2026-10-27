@@ -588,3 +588,25 @@ func TestStreamTicket(t *testing.T) {
 		t.Fatal("ticket for a non-interactive request")
 	}
 }
+
+// TestElevateValidatesBeforeAuditing: an elevate naming too many targets is
+// refused before anything is written, so one call can't write an
+// arbitrarily large audit row (docs/02 D13; found in review of #10, L7).
+func TestElevateValidatesBeforeAuditing(t *testing.T) {
+	e := newEnv(t)
+	targets := make([]string, 11)
+	for i := range targets {
+		targets[i] = strings.Repeat("x", 60)
+	}
+	if _, err := e.p.Elevate(context.Background(), decision.ElevateRequest{Principal: principal("a"), Targets: targets, Reason: "r"}); codes.Of(err) != codes.InvalidRequest {
+		t.Fatal(err)
+	}
+	db, _ := store.Open(context.Background(), filepath.Join(e.dir, "db"))
+	defer db.Close()
+	var n int
+	db.QueryRow("SELECT COUNT(*) FROM audit WHERE record LIKE '%xxxxxxxxxxxxxxxxxxxx%'").Scan(&n)
+	if n != 0 {
+		t.Fatalf("%d audit records carry the unvalidated targets", n)
+	}
+	e.noPrompt()
+}

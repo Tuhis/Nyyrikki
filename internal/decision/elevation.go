@@ -14,6 +14,7 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/audit"
 	"github.com/Tuhis/Nyyrikki/internal/authn"
 	"github.com/Tuhis/Nyyrikki/internal/codes"
+	"github.com/Tuhis/Nyyrikki/internal/config"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl/request"
 )
 
@@ -61,19 +62,25 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 	if err != nil {
 		return nil, err
 	}
+	// Validate before anything is written (docs/02 D13).
+	dur, err := ClampDuration(r.Duration)
+	if err != nil {
+		return nil, err
+	}
+	if len(r.Targets) == 0 || len(r.Targets) > MaxTargets {
+		return nil, codes.New(codes.InvalidRequest, "an elevation names 1 to %d targets", MaxTargets)
+	}
+	for _, t := range r.Targets {
+		if !config.IsSlug(t) {
+			return nil, codes.New(codes.InvalidRequest, "targets must be target names")
+		}
+	}
 	rec := p.base_(pr, codes.KindElevationRequested)
 	rec.Targets = r.Targets
 	rec.Reason = r.Reason
 	rec.RunAs = &audit.RunAs{User: h.Kubernetes.User, Groups: h.Kubernetes.Groups}
 	if err := p.audit.Append(ctx, rec); err != nil {
 		return nil, codes.Wrap(codes.Unavailable, err, "audit log unavailable")
-	}
-	dur, err := ClampDuration(r.Duration)
-	if err != nil {
-		return nil, p.deny(ctx, rec, err)
-	}
-	if len(r.Targets) == 0 || len(r.Targets) > MaxTargets {
-		return nil, p.deny(ctx, rec, codes.New(codes.InvalidRequest, "an elevation names 1 to %d targets", MaxTargets))
 	}
 	if err := p.intro.Introspect(ctx, pr); err != nil {
 		if codes.Of(err) != codes.SessionInactive {
@@ -182,7 +189,7 @@ func (p *Point) approveElevation(approvalID string) (bool, error) {
 	p.mu.Lock()
 	p.handles[approvalID] = handle
 	p.mu.Unlock()
-	ok := p.settle(approvalID, statePending, stateApproved, func(tx *sql.Tx) error {
+	ok := p.settleThen(approvalID, statePending, stateApproved, func(tx *sql.Tx) error {
 		var (
 			human, agentKey, targets string
 			approver, durMS          int64
@@ -197,14 +204,13 @@ func (p *Point) approveElevation(approvalID string) (bool, error) {
 			VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)`,
 			elevID, approvalID, hash[:], stateLive, human, agentKey, approver, targets, now.UnixMilli(), expires.UnixMilli())
 		return err
-	})
+	}, func() { p.arm(elevID, approvalID, expires) })
 	if !ok {
 		p.mu.Lock()
 		delete(p.handles, approvalID)
 		p.mu.Unlock()
 		return false, nil
 	}
-	p.arm(elevID, approvalID, expires)
 	_ = p.audit.Append(p.base, audit.Record{Kind: codes.KindElevationLive, ElevationID: elevID, ApprovalID: approvalID})
 	go p.settlePrompt(approvalID, approval.Outcome{Kind: approval.ElevationLive, At: now, Until: expires})
 	return true, nil

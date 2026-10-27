@@ -493,6 +493,13 @@ func (p *Point) ask(ctx context.Context, rec audit.Record, id, kind string, appr
 // changes nothing and returns false (CODE-REVIEW.md: one event, one
 // authoritative signal).
 func (p *Point) settle(id, from, to string, inTx func(*sql.Tx) error) bool {
+	return p.settleThen(id, from, to, inTx, nil)
+}
+
+// settleThen is settle with afterCommit run by the winner after the commit
+// and before the waiter is notified, so that what the waiter is handed (a
+// live elevation) is in place when it wakes.
+func (p *Point) settleThen(id, from, to string, inTx func(*sql.Tx) error, afterCommit func()) bool {
 	ctx, cancel := context.WithTimeout(p.base, 10*time.Second)
 	defer cancel()
 	ok, err := p.settleTx(ctx, id, from, to, inTx)
@@ -506,6 +513,9 @@ func (p *Point) settle(id, from, to string, inTx func(*sql.Tx) error) bool {
 	}
 	if !ok {
 		return false
+	}
+	if afterCommit != nil {
+		afterCommit()
 	}
 	p.notify(id, to)
 	code := map[string]codes.Code{stateApproved: "", stateDenied: codes.Denied, stateExpired: codes.Expired,
@@ -623,6 +633,15 @@ func (p *Point) Resolve(ctx context.Context, id string, action approval.Action, 
 	switch action {
 	case approval.ActionApprove:
 		if state != statePending || !p.now().Before(time.UnixMilli(expiresMS)) {
+			return false, nil
+		}
+		// An approval counts only for a call that is still waiting for it
+		// (docs/01 D24): one left pending by a failed settle, or by an
+		// earlier process, has no one to hand the authority to.
+		p.mu.Lock()
+		_, waiting := p.waiters[id]
+		p.mu.Unlock()
+		if !waiting {
 			return false, nil
 		}
 		if kind == "elevation" {
