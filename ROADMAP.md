@@ -33,9 +33,9 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 | # | Item | Status |
 |---|------|--------|
 | R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 🔧 in progress 2026-10-27: [docs/01](docs/01-foundations.md) approved; FD1 (skeleton) and FD2 (gates, canaries, CI) implemented, G3–G6 verified in CI; open: FD3 measurements M9–M11 (G7) |
-| R2 | [Gateway core: MCP and CLI, identity, targets, one decision point](#r2--gateway-core) | 🔧 implemented 2026-10-27, [docs/02](docs/02-gateway-core.md) approved: GW1–GW6 with integration tests against a test authorization server and fakes; open: verification against Keycloak (docs/01 M9) |
+| R2 | [Gateway core: MCP and CLI, identity, targets, one decision point](#r2--gateway-core) | 🔧 implemented 2026-10-27, [docs/02](docs/02-gateway-core.md) approved: GW1–GW6 with integration tests against a test authorization server and fakes; verified end to end with Keycloak 26.8.1 2026-10-27; open: the rest of docs/01 M9 (DCR policies, refresh, two logins in one browser) |
 | R3 | [Audit log](#r3--audit-log) | 🔧 implemented 2026-10-27, [docs/03](docs/03-audit-log.md) approved |
-| R4 | [Pass-through, identity propagation and credential custody](#r4--pass-through-identity-propagation-and-credential-custody) | 🔧 implemented 2026-10-27, [docs/04](docs/04-kubectl-passthrough.md) approved: PT1–PT4 tested against a fake apiserver; open: PT5 (end to end against kind) |
+| R4 | [Pass-through, identity propagation and credential custody](#r4--pass-through-identity-propagation-and-credential-custody) | 🔧 implemented 2026-10-27, [docs/04](docs/04-kubectl-passthrough.md) approved: PT1–PT5 done: tested against a fake apiserver, and end to end on kind with Keycloak (test/e2e, 2026-10-27) |
 | R5 | [Telegram escalation: one-off approvals and time-boxed elevation](#r5--telegram-escalation) | 🔧 implemented 2026-10-27, [docs/05](docs/05-telegram-escalation.md) approved: TG1–TG4 tested against a fake Bot API; open: G8, a real approval on a real phone (manual, owner) |
 | R6 | [Packaging and deployment](#r6--packaging-and-deployment) | 🔧 implemented 2026-10-27, [docs/06](docs/06-packaging-and-deployment.md) approved: image, chart, setup docs, release workflow; open: G4 (owner's deployment), G5 (first release) |
 | R7 | [Operator surface](#r7--operator-surface) | 💡 proposed 2026-10-25 |
@@ -69,9 +69,9 @@ item, the doc's chunks say which part.
 | # | Milestone | Draws from | Status |
 |---|---|---|---|
 | M0 | [Decisions locked](#m0--decisions-locked) | R1 | done when this lands 2026-10-27: docs/01 approved, CLAUDE.md lists what it locked, CI runs the gates on the skeleton and every gate fails on its canary; FD3 (needed by M1 at the latest) is still open |
-| M1 | [Walking skeleton that only says no](#m1--walking-skeleton-that-only-says-no) | R2, R3 | implemented 2026-10-27; verified by integration tests against fakes; open: Keycloak (docs/01 M9) |
-| M2 | [One-off escalation, end to end, on one target](#m2--one-off-escalation-end-to-end-on-one-target) | R2, R4, R5 | implemented 2026-10-27; verified against fakes; open: kind e2e (docs/04 PT5), manual checks on real Telegram and a real cluster's audit log |
-| M3 | [Time-boxed elevation](#m3--time-boxed-elevation) | R2, R4, R5 | implemented 2026-10-27; verified against fakes; open: as M2, plus an exec stream cut at expiry on a real cluster |
+| M1 | [Walking skeleton that only says no](#m1--walking-skeleton-that-only-says-no) | R2, R3 | ✅ done 2026-10-27: verified by integration tests and end to end on kind with Keycloak 26.8.1 (test/e2e): listing through MCP and the CLI, unauthenticated and revoked sessions denied, each audited |
+| M2 | [One-off escalation, end to end, on one target](#m2--one-off-escalation-end-to-end-on-one-target) | R2, R4, R5 | verified end to end on kind with Keycloak 2026-10-27 (test/e2e: approve, deny, refused requests, runs as the human per the apiserver, interactive exec); open: the manual checks on a real Telegram client and the owner's cluster |
+| M3 | [Time-boxed elevation](#m3--time-boxed-elevation) | R2, R4, R5 | verified end to end on kind with Keycloak 2026-10-27 (test/e2e: covered requests without prompts, an exec stream cut at expiry, End now, a foreign handle denied); open: as M2 |
 | M4 | [Running against a real target](#m4--running-against-a-real-target) | R6 (minimal) | ready to deploy 2026-10-27: image, chart, setup docs, release workflow; open: the owner's deployment and manual checks, the first release |
 
 **Not in the first version**, so no milestone covers it: a second target

@@ -225,8 +225,14 @@ targets:
   denied global `--profile`. A per-command rule could allow it later.
 - **D7, cut runs**: a cut returns the partial output and `expired`, with
   detail `run_timeout`, `grant_expired` or `grant_ended`.
-- **PT5 (e2e against kind)** isn't done yet: G6 and G8 are verified with
-  a fake apiserver, not a real cluster.
+- **PT5 (e2e against kind)**, 2026-10-27: `test/e2e` installs the chart on
+  a kind cluster running Kubernetes 1.35 with Keycloak 26.8.1. It shows G6
+  (`kubectl auth whoami` through Nyyrikki reports the human, as the
+  apiserver sees it) and G8 (interactive exec over `/stream`, and an exec
+  under a 1-minute elevation cut at its expiry). CI runs it on merge to
+  `main` and nightly. It leaves to unit and integration tests: an
+  elevation meeting a target it doesn't name (there is one target), and
+  a callback from anyone but the approver (docs/05 G2).
 
 ## 11. Post-implementation review (YYYY-MM-DD)
 
