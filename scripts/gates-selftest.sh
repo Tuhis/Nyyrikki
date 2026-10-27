@@ -20,7 +20,9 @@ canaries=(
   "secret|secrets|nyyrikki-stream-ticket"
   "secret|secrets|github-pat"
   "chart|chart|\[ERROR\] templates/canary\.yaml"
-  "pinning|pinning|not pinned to a SHA"
+  "pinning|pinning|canary\.yml: action not pinned to a SHA: actions/checkout@v4"
+  "pinning|pinning|canary-ext\.yaml: action not pinned to a SHA: actions/setup-go@v5"
+  "pinning|pinning|actions/canary/action\.yml: action not pinned to a SHA: actions/cache@v4"
   "pinning|pinning|canary-write\.yml: top-level permissions grant write"
   "pinning|pinning|canary-nodefault\.yml: no top-level 'permissions: contents: read'"
 )
@@ -37,10 +39,10 @@ for entry in "${canaries[@]}"; do
       # These gates read the repository's own paths and config (the chart,
       # the workflows, .gitleaks.toml); run them on a copy with the canary
       # dropped in, outside any allowlisted path.
-      # The copy holds only tracked files, so a stray local file can't
-      # satisfy a marker.
-      tmp=$(mktemp -d); tmps+=("$tmp"); mkdir "$tmp/repo"
-      git ls-files -z | xargs -0 cp --parents -t "$tmp/repo"
+      # The copy is the index (git add canary edits while iterating), so
+      # neither a stray file nor a local edit can satisfy a marker.
+      tmp=$(mktemp -d); tmps+=("$tmp")
+      git checkout-index -a --prefix="$tmp/repo/" || { echo "FAIL: could not copy the repository"; exit 1; }
       cp -r "$dir/." "$tmp/repo/"; dir=$tmp/repo ;;
   esac
   out=$(scripts/gates.sh "$gate" "$dir" 2>&1); rc=$?

@@ -1,6 +1,9 @@
-# Planted for the pinning canary: no top-level default for the token.
+# Planted for the pinning canary: "contents: read" only in a comment.
 name: canary-nodefault
 on: push
+permissions:
+  # contents: read
+  actions: read
 jobs:
   x:
     runs-on: ubuntu-latest

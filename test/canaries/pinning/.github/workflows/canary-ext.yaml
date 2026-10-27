@@ -1,0 +1,10 @@
+# Planted for the pinning canary: a .yaml workflow with an unpinned action.
+name: canary-ext
+on: push
+permissions:
+  contents: read
+jobs:
+  x:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-go@v5

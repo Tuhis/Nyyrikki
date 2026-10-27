@@ -1,18 +1,31 @@
 #!/usr/bin/env bash
-# Every third-party action is pinned to a commit SHA, and every workflow
-# defaults its token to contents: read (docs/01 D18, G5).
+# Every third-party action is pinned to a commit SHA, in workflows and in
+# composite actions, and every workflow defaults its token to
+# contents: read (docs/01 D18, G5).
 set -euo pipefail
+shopt -s nullglob
 status=0
-for f in .github/workflows/*.yml; do
+
+workflows=(.github/workflows/*.yml .github/workflows/*.yaml)
+mapfile -t actions < <(find .github/actions -name 'action.yml' -o -name 'action.yaml' 2>/dev/null | sort)
+
+for f in "${workflows[@]}" "${actions[@]}"; do
   while IFS= read -r line; do
     ref=${line#*uses:}; ref=${ref%%#*}; ref=$(echo "$ref" | tr -d ' "'"'"'')
     case $ref in ./*) continue ;; esac
     if ! [[ $ref =~ @[0-9a-f]{40}$ ]]; then echo "$f: action not pinned to a SHA: $ref"; status=1; fi
-  done < <(grep -E '^\s*-?\s*uses:' "$f")
-  if ! awk '/^permissions:/{p=1;next} p&&/^[^ ]/{exit} p&&/contents: read/{ok=1} END{exit !ok}' "$f"; then
+  done < <(grep -E '^\s*-?\s*uses:' "$f" || true)
+done
+
+# The top-level permissions block: comment lines are skipped (a column-0
+# comment must not end the block, and "# contents: read" must not count),
+# and trailing comments are stripped.
+perms='/^[[:space:]]*#/{next} {sub(/[[:space:]]+#.*/,"")} /^permissions:/{p=1;next} p&&/^[^ ]/{exit}'
+for f in "${workflows[@]}"; do
+  if ! awk "$perms"' p&&/^[[:space:]]+contents:[[:space:]]*read[[:space:]]*$/{ok=1} END{exit !ok}' "$f"; then
     echo "$f: no top-level 'permissions: contents: read'"; status=1
   fi
-  if awk '/^permissions:/{p=1;next} p&&/^[^ ]/{exit} p&&/: write/{bad=1} END{exit !bad}' "$f"; then
+  if awk "$perms"' p&&/:[[:space:]]*write/{bad=1} END{exit !bad}' "$f"; then
     echo "$f: top-level permissions grant write"; status=1
   fi
 done
