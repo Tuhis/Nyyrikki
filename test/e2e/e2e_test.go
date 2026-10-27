@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -249,10 +248,9 @@ func TestEndToEnd(t *testing.T) {
 			t.Fatal("a made-up handle reached the approver")
 		}
 		// The handle was live: its own agent still runs with it, unprompted.
-		cmd = agent.cmd("run", "--reason", "own handle", "this-cluster", "--", "get", "pods", "-n", workNS, "-o", "name")
-		cmd.Env = append(append([]string{}, agent.env...), "NYYRIKKI_ELEVATION="+live)
-		if out, err := cmd.Output(); err != nil || !strings.Contains(string(out), "pod/box") {
-			t.Fatalf("own live handle: %v %s", err, out)
+		ch = agent.asyncEnv(t, []string{"NYYRIKKI_ELEVATION=" + live}, "run", "--reason", "own handle", "this-cluster", "--", "get", "pods", "-n", workNS, "-o", "name")
+		if r := get(t, ch, 20*time.Second); r.code != 0 || !strings.Contains(r.stdout, "pod/box") {
+			t.Fatalf("own live handle: %+v", r)
 		}
 		if len(e.tg.Sent(t)) != before {
 			t.Fatal("the live elevation asked again")
@@ -276,6 +274,9 @@ func TestEndToEnd(t *testing.T) {
 		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_targets", Arguments: map[string]any{}})
 		if err != nil || res.IsError {
 			t.Fatalf("list_targets: %v %+v", err, res)
+		}
+		if b, _ := json.Marshal(res.StructuredContent); !strings.Contains(string(b), `"this-cluster"`) {
+			t.Fatalf("list_targets: %s", b)
 		}
 		done := make(chan *mcp.CallToolResult, 1)
 		go func() {
@@ -356,9 +357,6 @@ func startPTY(t *testing.T, cmd *exec.Cmd) (func() string, func(time.Duration) i
 			buf.Write(b[:n])
 			mu.Unlock()
 			if err != nil {
-				if err != io.EOF {
-					return
-				}
 				return
 			}
 		}

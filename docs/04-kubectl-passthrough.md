@@ -230,7 +230,9 @@ targets:
   (`kubectl auth whoami` through Nyyrikki reports the human, as the
   apiserver sees it) and G8 (interactive exec over `/stream`, and an exec
   under a 1-minute elevation cut at its expiry). CI runs it on merge to
-  `main` and nightly.
+  `main` and nightly. It leaves to unit and integration tests: an
+  elevation meeting a target it doesn't name (there is one target), and
+  a callback from anyone but the approver (docs/05 G2).
 
 ## 11. Post-implementation review (YYYY-MM-DD)
 
