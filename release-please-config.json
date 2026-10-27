@@ -6,9 +6,19 @@
       "package-name": "nyyrikki",
       "include-component-in-tag": false,
       "extra-files": [
-        {"type": "yaml", "path": "deploy/chart/nyyrikki/Chart.yaml", "jsonpath": "$.version"},
-        {"type": "yaml", "path": "deploy/chart/nyyrikki/Chart.yaml", "jsonpath": "$.appVersion"}
-      ]
+        {
+          "type": "yaml",
+          "path": "deploy/chart/nyyrikki/Chart.yaml",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "yaml",
+          "path": "deploy/chart/nyyrikki/Chart.yaml",
+          "jsonpath": "$.appVersion"
+        }
+      ],
+      "initial-version": "0.1.0",
+      "bump-minor-pre-major": true
     }
   }
 }
