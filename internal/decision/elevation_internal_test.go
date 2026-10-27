@@ -98,3 +98,41 @@ func TestApproveWithoutWaiterRefused(t *testing.T) {
 		t.Fatalf("%d elevations created without a waiter", n)
 	}
 }
+
+// TestApproveElevationWaiterGoneAtCommit: if the waiting call goes away
+// between the tap's waiter check and the commit, the elevation must end at
+// once and its handle be dropped (found in review of #10, N4).
+func TestApproveElevationWaiterGoneAtCommit(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	w, _ := audit.NewWriter(ctx, db, io.Discard, time.Now)
+	p, err := New(ctx, Config{Config: config.Defaults(), DB: db, Audit: w, Asker: nopAsker{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	id := "apr_gone"
+	if _, err := db.Exec(`INSERT INTO approvals (id, kind, state, human, agent_key, approver_id, targets, duration_ms, created_ms, expires_ms)
+		VALUES (?, 'elevation', 'pending', 'owner', 'k', 1, '["prod"]', 600000, ?, ?)`, id, time.Now().UnixMilli(), time.Now().Add(time.Minute).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	// No waiter is registered: approveElevation is what Resolve calls after
+	// a waiter check that the call then outran.
+	if ok, err := p.approveElevation(id); !ok || err != nil {
+		t.Fatalf("approve: %v %v", ok, err)
+	}
+	var state string
+	if err := db.QueryRow("SELECT state FROM elevations WHERE approval_id = ?", id).Scan(&state); err != nil || state != stateEnded {
+		t.Fatalf("elevation %q: %v", state, err)
+	}
+	p.mu.Lock()
+	n, live := len(p.handles), len(p.elevations)
+	p.mu.Unlock()
+	if n != 0 || live != 0 {
+		t.Fatalf("leaked %d handles, %d live elevations", n, live)
+	}
+}

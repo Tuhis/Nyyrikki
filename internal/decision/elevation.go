@@ -186,6 +186,7 @@ func (p *Point) approveElevation(approvalID string) (bool, error) {
 	elevID := "elv_" + ulid.Make().String()
 	now := p.now()
 	var expires time.Time
+	waiting := false
 	p.mu.Lock()
 	p.handles[approvalID] = handle
 	p.mu.Unlock()
@@ -204,12 +205,28 @@ func (p *Point) approveElevation(approvalID string) (bool, error) {
 			VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)`,
 			elevID, approvalID, hash[:], stateLive, human, agentKey, approver, targets, now.UnixMilli(), expires.UnixMilli())
 		return err
-	}, func() { p.arm(elevID, approvalID, expires) })
+	}, func() {
+		p.arm(elevID, approvalID, expires)
+		// Checked after the commit and before the waiter is notified (it
+		// removes itself once woken): the call may have gone between the
+		// tap's waiter check and the commit, and then nobody will collect
+		// the handle (docs/01 D24).
+		p.mu.Lock()
+		_, waiting = p.waiters[approvalID]
+		if !waiting {
+			delete(p.handles, approvalID)
+		}
+		p.mu.Unlock()
+	})
 	if !ok {
 		p.mu.Lock()
 		delete(p.handles, approvalID)
 		p.mu.Unlock()
 		return false, nil
+	}
+	if !waiting {
+		p.endElevation(elevID, stateEnded, "no call was waiting for the approval")
+		return true, nil
 	}
 	_ = p.audit.Append(p.base, audit.Record{Kind: codes.KindElevationLive, ElevationID: elevID, ApprovalID: approvalID})
 	go p.settlePrompt(approvalID, approval.Outcome{Kind: approval.ElevationLive, At: now, Until: expires})
