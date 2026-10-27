@@ -127,7 +127,22 @@ type Fake struct {
 // New starts a Fake; it is closed when the test ends.
 func New(t testing.TB) *Fake {
 	t.Helper()
-	f := &Fake{
+	f := newFake()
+	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+// NewStandalone returns a Fake to serve outside a test, through Handler:
+// the end-to-end tests run it as the fake Bot API in a container
+// (test/e2e/fakebot). Methods that take a testing.TB need a test.
+func NewStandalone() *Fake { return newFake() }
+
+// Handler serves the fake Bot API.
+func (f *Fake) Handler() http.Handler { return http.HandlerFunc(f.serve) }
+
+func newFake() *Fake {
+	return &Fake{
 		token:        DefaultToken,
 		current:      make(map[[2]int64]*Message),
 		fail:         make(map[string][]int),
@@ -136,9 +151,6 @@ func New(t testing.TB) *Fake {
 		nextMsgID:    1,
 		wake:         make(chan struct{}),
 	}
-	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
-	t.Cleanup(f.srv.Close)
-	return f
 }
 
 // URL is the base URL to configure as the bot's API URL.

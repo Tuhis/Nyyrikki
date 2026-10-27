@@ -83,6 +83,13 @@ scripts/gates.sh test       # one gate
 scripts/gates-selftest.sh   # every gate fails on its canary
 ```
 
+The end-to-end test needs docker, kind, helm and kubectl, and takes a few
+minutes (it creates a kind cluster and a Keycloak container):
+
+```sh
+go test -tags e2e -timeout 40m -v ./test/e2e/
+```
+
 The tools and their versions are listed in `CODE-REVIEW.md` §Gates; install
 them with `go install` at those versions. The chart gate also needs
 `helm`.
