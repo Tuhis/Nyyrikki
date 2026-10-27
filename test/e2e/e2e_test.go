@@ -100,13 +100,12 @@ func TestEndToEnd(t *testing.T) {
 		}
 	})
 
-	var handle string
 	step(t, "M3: an elevation covers requests without asking, and cuts a stream at expiry", func(t *testing.T) {
 		ch := agent.async(t, "elevate", "--reason", "a burst of work", "--for", "1m", "this-cluster")
 		e.tap(t, next(), "Approve")
 		approvedAt := time.Now()
 		r := get(t, ch, time.Minute)
-		handle = strings.TrimSpace(r.stdout)
+		handle := strings.TrimSpace(r.stdout)
 		if r.code != 0 || !strings.HasPrefix(handle, "nyel_") {
 			t.Fatalf("elevate: %+v", r)
 		}
@@ -131,7 +130,9 @@ func TestEndToEnd(t *testing.T) {
 		_, wait := startPTY(t, cmd)
 		code := wait(2 * time.Minute)
 		lasted := time.Since(approvedAt)
-		if code == 0 || lasted > 80*time.Second {
+		// The stream must stay up until the expiry and be cut then: a quick
+		// failure (a refusal, a broken /stream) doesn't count.
+		if code == 0 || lasted < 55*time.Second || lasted > 80*time.Second {
 			t.Fatalf("stream not cut at expiry: code %d after %v", code, lasted)
 		}
 		t.Logf("stream cut %v after the approval of a 1m elevation", lasted.Round(time.Second))
@@ -169,20 +170,37 @@ func TestEndToEnd(t *testing.T) {
 		<-done
 	})
 
-	step(t, "M3: another agent's handle is denied, never turned into a one-off", func(t *testing.T) {
+	step(t, "M3: another agent's live handle is denied, never turned into a one-off", func(t *testing.T) {
+		// A live elevation's handle, leaked to another agent (docs/01 D24).
+		ch := agent.async(t, "elevate", "--reason", "leak test", "--for", "5m", "this-cluster")
+		e.tap(t, next(), "Approve")
+		r := get(t, ch, time.Minute)
+		live := strings.TrimSpace(r.stdout)
+		if r.code != 0 || !strings.HasPrefix(live, "nyel_") {
+			t.Fatalf("elevate: %+v", r)
+		}
 		other := e.newCLI(t)
 		other.login(t)
 		before := len(e.tg.Sent(t))
-		cmd := other.cmd("run", "--reason", "borrowed", "this-cluster", "--", "get", "pods")
-		cmd.Env = append(append([]string{}, other.env...), "NYYRIKKI_ELEVATION="+handle)
+		cmd := other.cmd("run", "--reason", "borrowed", "this-cluster", "--", "get", "pods", "-n", workNS)
+		cmd.Env = append(append([]string{}, other.env...), "NYYRIKKI_ELEVATION="+live)
 		var se bytes.Buffer
 		cmd.Stderr = &se
 		err := cmd.Run()
 		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 77 || !strings.Contains(se.String(), "handle_unknown") {
-			t.Fatalf("foreign handle: %v %s", err, se.String())
+			t.Fatalf("foreign live handle: %v %s", err, se.String())
 		}
 		if len(e.tg.Sent(t)) != before {
 			t.Fatal("a foreign handle reached the approver")
+		}
+		// The handle was live: its own agent still runs with it, unprompted.
+		cmd = agent.cmd("run", "--reason", "own handle", "this-cluster", "--", "get", "pods", "-n", workNS, "-o", "name")
+		cmd.Env = append(append([]string{}, agent.env...), "NYYRIKKI_ELEVATION="+live)
+		if out, err := cmd.Output(); err != nil || !strings.Contains(string(out), "pod/box") {
+			t.Fatalf("own live handle: %v %s", err, out)
+		}
+		if len(e.tg.Sent(t)) != before {
+			t.Fatal("the live elevation asked again")
 		}
 	})
 
