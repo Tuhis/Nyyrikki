@@ -307,6 +307,11 @@ the elevation half of GW3 and GW6.
 - **§5.5**: the CLI sends stdin when `-i` is given or the kubectl args
   contain `-f -` (in its usual spellings); the server still decides
   whether the command reads it.
+- **DPoP after a restart** (docs/01 D9): proofs dated before start or up to
+  30 s after it are refused, so a proof made before a restart can't be
+  replayed into the new process's empty replay cache. CLI calls fail with
+  401 for those 30 s after nyyrikkid starts; a retry succeeds. Replay
+  cache entries expire on the proof's `iat`. Found in review of #10.
 - **Introspection**: a DPoP-bound token whose introspection answer has no
   `cnf.jkt` is refused, not only one whose `cnf.jkt` differs. docs/01 M9
   will show whether Keycloak reports it; if not, this is relaxed by a

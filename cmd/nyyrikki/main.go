@@ -286,6 +286,9 @@ func (c *cli) run(ctx context.Context, args []string) int {
 	fmt.Fprintln(c.stderr, "nyyrikki: waiting for the approver…")
 	var out api.RunOut
 	if err := s.Call(ctx, api.ToolRun, in, &out); err != nil {
+		// A cut run still has what it printed so far (docs/04 D7).
+		io.WriteString(c.stdout, out.Stdout)
+		io.WriteString(c.stderr, out.Stderr)
 		return c.fail(err)
 	}
 	if interactive {
@@ -296,7 +299,13 @@ func (c *cli) run(ctx context.Context, args []string) int {
 		if err != nil {
 			return c.fail(err)
 		}
-		code, err := attach.AttachTerminal(ctx, l.StreamURL, out.StreamTicket, h, stdinFile, c.stdout)
+		// The login's client: its CA file, no proxy from the environment,
+		// no redirects (as for /mcp).
+		hc, err := client.HTTPClient(l.CAFile)
+		if err != nil {
+			return c.fail(err)
+		}
+		code, err := attach.AttachTerminal(ctx, hc, l.StreamURL, out.StreamTicket, h, stdinFile, c.stdout)
 		if err != nil {
 			return c.fail(err)
 		}

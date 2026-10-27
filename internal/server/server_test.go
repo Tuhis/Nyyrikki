@@ -59,15 +59,15 @@ func call(t *testing.T, cs *mcp.ClientSession, name string, args, out any) *api.
 		rb, _ := json.Marshal(res)
 		t.Logf("%s → %s", name, rb)
 	}
+	if out != nil {
+		if err := json.Unmarshal(b, out); err != nil {
+			t.Fatalf("decode %s: %v", b, err)
+		}
+	}
 	if res.IsError {
 		var e api.ErrorResult
 		if json.Unmarshal(b, &e) == nil && e.Error.Code != "" {
 			return &e.Error
-		}
-	}
-	if out != nil {
-		if err := json.Unmarshal(b, out); err != nil {
-			t.Fatalf("decode %s: %v", b, err)
 		}
 	}
 	return nil
@@ -407,5 +407,22 @@ func TestTelegramConflictKeepsServingAndDenies(t *testing.T) {
 	var targets api.ListTargetsOut
 	if eb := call(t, cs, api.ToolListTargets, map[string]any{}, &targets); eb != nil || len(targets.Targets) == 0 {
 		t.Fatalf("listing stopped working: %+v", eb)
+	}
+}
+
+// TestCutRunKeepsPartialOutput: a run cut at its time limit returns what it
+// printed so far together with the expired error (docs/04 D7; found in
+// review of #10, M2).
+func TestCutRunKeepsPartialOutput(t *testing.T) {
+	e := servertest.Start(t)
+	cs := mcpAgent(t, e, "claude-code", "s1")
+	ch := runAsync(t, cs, api.RunIn{Target: "prod", Args: []string{"logs", "-f", "api-7f", "-n", "shop", "-c", "app"}, Reason: "watch", Timeout: "3s"})
+	e.Tap(t, 1, "Approve")
+	r := <-ch
+	if r.eb == nil || r.eb.Code != codes.Expired {
+		t.Fatalf("want expired, got %+v", r)
+	}
+	if !strings.Contains(r.out.Stdout, "partial-log-line") {
+		t.Fatalf("partial output lost: %+v", r.out)
 	}
 }

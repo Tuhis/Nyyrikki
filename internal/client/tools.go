@@ -94,6 +94,10 @@ func (s *Session) Call(ctx context.Context, name string, args, out any) error {
 			} `json:"error"`
 		}
 		if json.Unmarshal(b, &e) == nil && e.Error.Code != "" {
+			if out != nil {
+				// The result may still carry partial output (a cut run).
+				_ = json.Unmarshal(b, out)
+			}
 			return &ToolError{Code: e.Error.Code, Message: e.Error.Message}
 		}
 		// A run whose command failed is IsError too, but carries a

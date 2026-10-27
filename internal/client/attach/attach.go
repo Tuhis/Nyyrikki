@@ -138,7 +138,10 @@ func refusal(resp *http.Response, err error) error {
 // AttachTerminal is Attach on the local terminal: stdin is put in raw mode
 // for the session and restored on every path, and window size changes
 // (SIGWINCH) are sent as resizes.
-func AttachTerminal(ctx context.Context, streamURL, ticket string, header http.Header, stdin *os.File, stdout io.Writer) (int, error) {
+//
+// client carries the login's TLS trust and refuses proxies and redirects;
+// nil means http.DefaultClient, which the CLI must not use.
+func AttachTerminal(ctx context.Context, client *http.Client, streamURL, ticket string, header http.Header, stdin *os.File, stdout io.Writer) (int, error) {
 	fd := int(stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return -1, errors.New("stdin is not a terminal")
@@ -181,5 +184,5 @@ func AttachTerminal(ctx context.Context, streamURL, ticket string, header http.H
 			}
 		}
 	}()
-	return Attach(ctx, streamURL, ticket, header, stdin, stdout, resizes)
+	return AttachClient(ctx, client, streamURL, ticket, header, stdin, stdout, resizes)
 }

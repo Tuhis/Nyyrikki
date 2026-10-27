@@ -260,12 +260,14 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "approved; attach to the stream with the nyyrikki CLI"}}}, out, nil
 	}
 	res, err := s.d.Runner.Run(g, c, timeout)
-	if err != nil {
+	if err != nil && res == nil {
 		r, b := errOut(err)
 		return r, api.RunOut{Error: b}, nil
 	}
-	code := res.ExitCode
-	out.ExitCode = &code
+	if err == nil {
+		code := res.ExitCode
+		out.ExitCode = &code
+	}
 	if utf8.Valid(res.Stdout) {
 		out.Stdout = string(res.Stdout)
 	} else {
@@ -280,8 +282,16 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 	if out.Stderr != "" {
 		text += "\n--- stderr ---\n" + out.Stderr
 	}
-	text += fmt.Sprintf("\n--- exit code %d ---", code)
-	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}, IsError: code != 0}, out, nil
+	if err != nil {
+		// A cut run (timeout, elevation expiry or end) keeps what it
+		// printed so far, next to the error (docs/04 D7).
+		r, b := errOut(err)
+		out.Error = b
+		r.Content = append([]mcp.Content{&mcp.TextContent{Text: text}}, r.Content...)
+		return r, out, nil
+	}
+	text += fmt.Sprintf("\n--- exit code %d ---", *out.ExitCode)
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}, IsError: *out.ExitCode != 0}, out, nil
 }
 
 func (s *Server) elevate(ctx context.Context, req *mcp.CallToolRequest, in api.ElevateIn) (*mcp.CallToolResult, api.ElevateOut, error) {
@@ -296,6 +306,10 @@ func (s *Server) elevate(ctx context.Context, req *mcp.CallToolRequest, in api.E
 			r, b := errOut(s.invalid(ctx, p, in.Targets, codes.New(codes.InvalidRequest, "duration must be a positive Go duration")))
 			return r, api.ElevateOut{Error: b}, nil
 		}
+	}
+	if len(in.Targets) == 0 || len(in.Targets) > decision.MaxTargets {
+		r, b := errOut(s.invalid(ctx, p, nil, codes.New(codes.InvalidRequest, "an elevation names 1 to %d targets", decision.MaxTargets)))
+		return r, api.ElevateOut{Error: b}, nil
 	}
 	for _, t := range in.Targets {
 		if !config.IsSlug(t) {
