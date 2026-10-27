@@ -1,4 +1,7 @@
 {{- /* The config file of docs/02 §5.6. Paths are fixed by the chart's mounts; no secret is in it (docs/01 D12). */ -}}
+{{- if le (int64 (.Values.human.telegramUserID | default 0)) 0 -}}
+{{- fail "human.telegramUserID must be the approver's Telegram user ID (docs/setup/telegram.md)" -}}
+{{- end -}}
 {{- $targets := list -}}
 {{- range .Values.targets -}}
 {{- $k := dict -}}

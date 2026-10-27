@@ -33,7 +33,7 @@ human:
   kubernetes:
     user: ""                       # the Kubernetes user requests run as (impersonated)
     groups: []
-  telegramUserID: 0                # send /start to the bot to learn it
+  telegramUserID: 0                # required: see docs/setup/telegram.md for how to learn it
 
 # Targets (docs/02 D5, docs/04 D9). A remote target names a Secret in this
 # namespace with keys `ca.crt` and `token` (deploy/remote-target/).

@@ -29,7 +29,7 @@ human:
   kubernetes:
     user: owner@example.com      # who requests run as
     groups: [admins]
-  telegramUserID: 0              # fill in after /start
+  telegramUserID: 123456789      # from docs/setup/telegram.md, before installing
 targets:
   - name: this-cluster
     description: The cluster Nyyrikki runs in
