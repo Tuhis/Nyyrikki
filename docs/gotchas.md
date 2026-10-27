@@ -107,6 +107,16 @@ the doc.
   Cookie authenticator). Keying an agent on it merges sign-ins.
   ([docs/01](01-foundations.md) OD14)
 
+- **Keycloak 26.8 introspects a token only for a client in the token's
+  audience.** Any other client gets `active: false`, logged as `Client '…'
+  is not in the token audience`, which looks exactly like a revoked
+  session. Name the introspection client after the resource's audience.
+  ([docs/01](01-foundations.md) M9, D7)
+- **Keycloak's default `roles` client scope adds `account` to `aud`**
+  (through its audience-resolve mapper), so a resource that requires a
+  single audience refuses every token. Remove the scope from the clients.
+  ([docs/01](01-foundations.md) M9)
+
 **MCP**
 
 - **The go-sdk's `auth.RequireBearerToken` accepts only the `Bearer`
