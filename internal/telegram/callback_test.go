@@ -177,14 +177,16 @@ func TestCallbackInaccessibleMessageAccepted(t *testing.T) {
 	}
 }
 
-// Elevation taps are audited with the elevation ID.
-func TestCallbackRejectedElevationAuditsElevationID(t *testing.T) {
+// An elevation prompt's ID is its approval's ID (apr_…): the elv_ ID
+// exists only once it is approved. A rejected tap is audited under the
+// approval (found in review of #10).
+func TestCallbackRejectedElevationAuditsApprovalID(t *testing.T) {
 	e := newEnv(t).start()
-	m := e.askElevation(elevationPrompt("elv_cb"))
+	m := e.askElevation(elevationPrompt("apr_cb"))
 	approve, _ := m.Button("Approve")
 	cq := e.fake.PushCallback(telegramtest.Callback{FromID: 999, ChatID: 999, MessageID: m.MessageID, Data: approve.CallbackData})
-	assertRejected(t, e, cq, approve.CallbackData, "wrong_user", "elv_cb", 0)
-	if r := e.audit.records()[0]; r.ElevationID != "elv_cb" || r.ApprovalID != "" {
+	assertRejected(t, e, cq, approve.CallbackData, "wrong_user", "apr_cb", 0)
+	if r := e.audit.records()[0]; r.ApprovalID != "apr_cb" || r.ElevationID != "" {
 		t.Errorf("record %+v", r)
 	}
 }

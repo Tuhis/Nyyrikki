@@ -171,11 +171,9 @@ func (b *Bot) rejected(ctx context.Context, cq *tgCallbackQuery, reason string, 
 	}
 	attrs := []any{"reason", reason, "from", from}
 	if p != nil {
-		if p.kind == kindElevation {
-			rec.ElevationID = p.id
-		} else {
-			rec.ApprovalID = p.id
-		}
+		// Every prompt's ID is its approval's ID, elevations included: the
+		// elv_ ID exists only once the elevation is approved.
+		rec.ApprovalID = p.id
 		attrs = append(attrs, "prompt", p.id)
 	}
 	b.log.Info("callback rejected", attrs...)
