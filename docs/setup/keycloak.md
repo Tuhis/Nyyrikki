@@ -26,6 +26,11 @@ client scope to every client below.
 
 Make sure the scope's tokens carry `sid` (Keycloak's "basic" scope does).
 
+**Remove the `roles` client scope** from the default scopes of every
+client that signs in to Nyyrikki. Its audience-resolve mapper adds
+`account` to `aud`, and Nyyrikki accepts only tokens whose `aud` is
+exactly its own URL (docs/01 D9). Nyyrikki doesn't use roles.
+
 ## The CLI client
 
 Clients → Create:
@@ -54,9 +59,17 @@ in the registration policies.
 
 ## The introspection client
 
-Clients → Create `nyyrikki-introspect`, client authentication **on**, no
-flows enabled (it only introspects). Put its secret in the Secret named by
-the chart's `secrets.introspection`.
+Clients → Create, with **Client ID equal to Nyyrikki's audience**,
+`NYYRIKKI/mcp` (the same URL as the audience mapper above). Client
+authentication **on**, no flows enabled: it only introspects.
+
+Keycloak 26.8 introspects a token only for a client that is in the
+token's audience (it logs `Client '…' is not in the token audience` and
+answers `active: false` otherwise). Naming the introspection client after
+the audience keeps `aud` exactly one value, as Nyyrikki requires, and
+satisfies that check. The chart uses this client ID by default
+(`auth.introspectionClientID` empty). Put its secret in the Secret named
+by the chart's `secrets.introspection`.
 
 ## Revoking an agent
 

@@ -17,7 +17,10 @@ auth:
   issuer: ""                       # e.g. https://keycloak.example.com/realms/nyyrikki
   cliClientID: nyyrikki-cli
   scope: nyyrikki                  # the optional scope whose Audience mapper sets aud
-  introspectionClientID: nyyrikki-introspect
+  # Keycloak 26.8 introspects a token only for a client in its audience, so
+  # the introspection client is named after Nyyrikki's audience; empty means
+  # canonicalURL + "/mcp" (docs/setup/keycloak.md).
+  introspectionClientID: ""
 
 approval:
   timeout: 3m

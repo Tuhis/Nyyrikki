@@ -24,7 +24,7 @@
   "auth" (dict
     "issuer" (required "auth.issuer is required" .Values.auth.issuer)
     "cli_client_id" .Values.auth.cliClientID "scope" .Values.auth.scope
-    "introspection_client_id" .Values.auth.introspectionClientID
+    "introspection_client_id" (.Values.auth.introspectionClientID | default (printf "%s/mcp" (trimSuffix "/" .Values.canonicalURL)))
     "introspection_secret_file" "/etc/nyyrikki/keycloak/client-secret")
   "approval" (dict "timeout" .Values.approval.timeout)
   "run" (dict "default_timeout" .Values.run.defaultTimeout "max_timeout" .Values.run.maxTimeout
