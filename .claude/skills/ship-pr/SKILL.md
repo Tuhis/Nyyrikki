@@ -113,38 +113,56 @@ review job that never answers produces none. So whenever you start waiting
 the background (`sleep 1800` with `run_in_background`, never a foreground
 wait) and note the time and its task ID. Stop the previous timer by its
 ID first, so only one runs. If you can't (after a context reset), ignore
-it when it fires: only the age check below counts. Whenever you wake, by the timer or anything else, and the thing you
-are waiting for is older than 30 minutes, investigate before waiting any
-longer. Don't just say "still waiting".
+it when it fires: only the age check below counts. Whenever you wake, by
+the timer or anything else, and the thing you are waiting for is older
+than 30 minutes, investigate before waiting any longer. Don't just say
+"still waiting".
 
 ```sh
 gh pr checks <N> | awk -F'\t' '$2!="pass" && $2!="skipping"'   # what is not done
 gh run list --branch <branch> --limit 5 --json databaseId,name,status,conclusion,headSha,createdAt
 gh run view <run-id> --json jobs --jq '.jobs[] | {name,databaseId,status}'   # job IDs
+gh run list --status queued --json databaseId,workflowName,createdAt          # other queued runs
+# A round's claude.yml run: take its ID from the "View job" link in the round's
+# claude[bot] comment. Only if there is none (the job died before posting), list
+# the runs since the round comment, drop skipped ones (every comment in the repo
+# makes a run) and match displayTitle to the PR title:
+gh run list --workflow claude.yml --event issue_comment --created ">=<round comment created_at>" \
+  --json databaseId,displayTitle,status,conclusion,createdAt
 gh api repos/{owner}/{repo}/actions/jobs/<job-id> \
   --jq '{status,started_at,runner_name}, (.steps[] | "\(.name) \(.status) \(.conclusion)")'
 ```
 
-Compare each unfinished job against how long the same job usually takes
-on `main` (`gh api repos/{owner}/{repo}/actions/runs/<main-run-id>/jobs`),
-then act on what you find:
+Measure each unfinished job from its `started_at` against its
+`timeout-minutes` in the workflow. A job still `in_progress` more than 10
+minutes past its timeout is stuck, whatever its steps show: GitHub should
+already have killed it (a runner pod that died mid-step leaves a step
+`in_progress`). For a sense of normal, compare with the same job on
+`main` (`gh api repos/{owner}/{repo}/actions/runs/<main-run-id>/jobs`).
+Then act on what you find:
 
 - **Every step `completed`, but the job is still `in_progress`** (or the
-  run says `success` while a check stays pending): the runner's completion
-  never reached GitHub. It will never finish by itself. If the run is
-  `completed`, re-run that job (`gh run rerun --job <job-id>`, with the
-  job's `databaseId` from `gh run view`, not the run's). If the run is
-  still `in_progress`, GitHub refuses a re-run, so cancel the run first
-  (`gh run cancel <run-id>`, or `gh api -X POST
+  run says `success` while a check stays pending, or the job is more than
+  10 minutes past its timeout): the job will never finish by itself. If
+  the run is `completed`, re-run that job (`gh run rerun --job
+  <job-id>`, with the job's `databaseId` from `gh run view`, not the
+  run's). If the run is still `in_progress`, GitHub refuses a re-run, so
+  cancel the run first (`gh run cancel <run-id>`, or `gh api -X POST
   repos/{owner}/{repo}/actions/runs/<run-id>/force-cancel` if that doesn't
   take), wait until it shows `completed`, then `gh run rerun <run-id>
-  --failed`.
+  --failed`. If it still isn't `completed` a few minutes after
+  `force-cancel`, stop and report: the run can't be cleared from here.
+  A re-run `claude-review` job whose `## Code review` summary was already
+  posted posts its review again; reply to the duplicates once.
 - **`queued` with no `runner_name`**: no runner picked it up. Look for
-  other queued jobs on the same label. If the pool looks stuck, stop and
-  report it, because rerunning won't help.
-- **Running much longer than on `main`**: read the live log (`gh api
-  repos/{owner}/{repo}/actions/jobs/<id>/logs`) for a hang. Cancel and
-  rerun once only if it is clearly stuck, and say so in the PR.
+  other queued runs. Every workflow here runs on `ubuntu-latest`, so a
+  queued job points at GitHub-hosted capacity or an Actions outage. Stop
+  and report: rerunning won't help.
+- **Running much longer than on `main`, but within its timeout**: read
+  the live log (`gh api repos/{owner}/{repo}/actions/jobs/<id>/logs`) for
+  a hang. Cancel and rerun once only if it is clearly stuck, and say so in
+  the PR. Otherwise its timeout will end it, as an ordinary failure under
+  *CI failures*.
 - **An `@claude` round with no reply**: check its `claude.yml` run, as in
   §3 (a failed run gets one retry). **Never rerun or cancel a `claude.yml`
   job**, even under the bullets above. A rerun replays the old comment, and
@@ -159,13 +177,17 @@ then act on what you find:
   the stuck-pool bullet instead. If a late reply arrives anyway, §3 counts
   the round once.
 
-A **stall** is a wake where you found one of these: a job stuck after its
-steps, a stuck pool, a hung job or a silent round. A job that is slow but
-healthy is not one. Tell the user what you found and what you did, then,
-unless a bullet above says to stop, start a new 30-minute timer. A second
-stall of the same kind **on the same thing you are waiting for** (the same
-job after its rerun, or a round's retry) is a hand-back (§ *Stop and hand
-back*). Each new job or round gets its own retry, as in §3.
+A **stall** is a wake where you found one of these: a job that won't
+finish (stuck after its steps, or more than 10 minutes past its timeout),
+a stuck pool, a hung job or a silent round. A job that is slow but healthy
+is not one, and neither is a job past its timeout by less than 10
+minutes: GitHub's kill is due, so wait. Tell the user what you found and
+what you did, then, unless a bullet above says to stop, start a new
+30-minute timer. A second stall, of any kind, **on the same thing you are
+waiting for** (the same job after its rerun, matched by run ID and job
+name because a rerun gets a new job ID, or a round's retry) is a
+hand-back (§ *Stop and hand back*). Each new job or round gets its own
+retry, as in §3.
 
 ### CI failures
 
@@ -182,7 +204,9 @@ back*). Each new job or round gets its own retry, as in §3.
      `gh run rerun <run-id> --failed` and note it in the PR for the owner.
    - **Infrastructure** (the runner died, a registry 5xx, a cancelled run
      that wasn't superseded): run `gh run rerun <run-id> --failed`. If it
-     fails the same way twice, stop and report.
+     fails the same way twice, stop and report. A cancel you made yourself
+     under *Waited 30 minutes?* is not one: that section reruns it and
+     counts it.
 3. Run the matching local gate before pushing.
 
 ### Review comments
@@ -287,7 +311,8 @@ PR in round 1, instead of "since your last review".
   posts within ~20 minutes of the run finishing, check the job with
   `gh run view`. A failed run doesn't use up a round, so retry it once by
   posting the same round's comment again, with the current head SHA. If
-  the retry fails too, stop and hand back.
+  the retry fails too, stop and hand back, unless the original has replied
+  meanwhile: then the round counts, with the original's SHA as its marker.
 - Handle the round's findings as in §2, then request the next round.
   Don't post any other `@claude` comment while a round is open. One job at
   a time keeps every reply attributable. A `claude.yml` job past its
@@ -384,8 +409,9 @@ The steps above also stop and hand back in these cases:
 
 - An `@claude` round's retry fails too (§3).
 - The review-thread query reports `hasNextPage` (§2).
-- A second stall of the same kind on the same job or round, or a stuck
-  runner pool (§2 *Waited 30 minutes?*).
+- A second stall on the same job or round, a stuck runner pool, or a
+  stuck run still not `completed` after `force-cancel` (§2 *Waited 30
+  minutes?*).
 - The round cap is used up and a rebase changed reviewed code (§4).
 - The round cap is used up and a commit after round 3's marker isn't a fix
   named in a reply to one of its findings (§4).
