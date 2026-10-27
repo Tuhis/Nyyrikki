@@ -23,10 +23,11 @@ gate() {
       licenses)    go-licenses check ./... --allowed_licenses="$LICENSES" "${LICENSE_IGNORE[@]}"
                    [ "$dir" != . ] || scripts/check-pinned-licenses.sh ;;
       secrets)     gitleaks dir . --redact --no-banner --verbose --config .gitleaks.toml ;;
-      chart)       # Runs once the chart exists (docs/01 D17).
+      chart)       # Runs once the chart exists (docs/01 D17). --kube-version: Helm's
+                   # offline default is the Kubernetes it was built against.
                    [ -d deploy/chart/nyyrikki ] || { echo "no chart yet"; exit 0; }
-                   helm lint deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml
-                   helm template t deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml \
+                   helm lint deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml --kube-version 1.35.0
+                   helm template t deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml --kube-version 1.35.0 \
                      | kubeconform -strict -summary -kubernetes-version 1.35.0
                    NYYRIKKI_CHART_TESTS=1 go test -count=1 ./deploy/... ;;
       pinning)     scripts/check-pinning.sh ;;

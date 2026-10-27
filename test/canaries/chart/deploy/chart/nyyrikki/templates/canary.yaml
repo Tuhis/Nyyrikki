@@ -1,0 +1,8 @@
+# Planted for the chart canary: not a valid Deployment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canary
+spec:
+  replicas: "one"
+  notAField: true

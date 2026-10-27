@@ -110,9 +110,18 @@ mounted, `rbac.impersonate` (users, groups), `networkPolicy`, `image`,
 - **Attestations** (M3) may not be available on the plan; then releases
   ship SHA256SUMS only.
 
-## 10. How it was implemented (YYYY-MM-DD)
+## 10. How it was implemented (2026-10-27)
 
-<!-- Added during implementation. -->
+- The chart builds `config.yaml` itself from values and fixes every file
+  path to its mounts, so a path in values can't point at the wrong file.
+  `TestChartConfigIsValid` parses the rendered file with nyyrikkid's own
+  config loader, so every value reaches the binary.
+- The ClusterRole's groups rule is left out when the human has no groups:
+  an empty `resourceNames` would mean "any group". `TestChartRBAC` covers
+  both cases.
+- The image is about 95 MB, mostly kubectl's code (docs/04 M9).
+- M3 (attestations) is not measured yet; the release workflow publishes
+  SHA256SUMS.
 
 ## 11. Post-implementation review (YYYY-MM-DD)
 

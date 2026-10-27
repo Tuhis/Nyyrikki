@@ -19,7 +19,9 @@ canaries=(
   "secret|secrets|nyyrikki-elevation-handle"
   "secret|secrets|nyyrikki-stream-ticket"
   "secret|secrets|github-pat"
-  "chart|chart|\[ERROR\] templates/canary\.yaml"
+  "chart|chart|\[ERROR\] templates/canary\.yaml: a Deployment must contain matchLabels"
+  "chart-schema|chart|ConfigMap canary-schema is invalid"
+  "chart-rbac|chart|2 ClusterRoles"
   "pinning|pinning|workflows/canary\.yml: action not pinned to a SHA: actions/checkout@v4"
   "pinning|pinning|canary-ext\.yaml: action not pinned to a SHA: actions/setup-go@v5"
   "pinning|pinning|actions/canary/action\.yml: action not pinned to a SHA: actions/cache@v4"
@@ -35,9 +37,9 @@ trap 'rm -rf "${tmps[@]}"' EXIT
 for entry in "${canaries[@]}"; do
   IFS='|' read -r c gate marker <<<"$entry"
   dir=test/canaries/$c
-  if [ "$c" = chart ] && [ ! -d deploy/chart/nyyrikki ]; then echo "skip: no chart yet"; continue; fi
+  case $c in chart*) [ -d deploy/chart/nyyrikki ] || { echo "skip: no chart yet"; continue; } ;; esac
   case $c in
-    chart|pinning|secret)
+    chart*|pinning|secret)
       # These gates read the repository's own paths and config (the chart,
       # the workflows, .gitleaks.toml); run them on a copy with the canary
       # dropped in, outside any allowlisted path.

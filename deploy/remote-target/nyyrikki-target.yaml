@@ -1,0 +1,58 @@
+# Apply on a remote cluster that Nyyrikki should reach (docs/06 D3).
+# Replace OWNER_USER and OWNER_GROUP with the human's Kubernetes identity
+# (the chart's human.kubernetes.user and .groups). Remove the groups rule if
+# there are no groups: an empty resourceNames would allow every group.
+#
+# Then copy the token and CA into a Secret in Nyyrikki's namespace:
+#   kubectl -n nyyrikki-system get secret nyyrikki-impersonator-token -o jsonpath='{.data.token}' | base64 -d > token
+#   kubectl -n nyyrikki-system get secret nyyrikki-impersonator-token -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+#   kubectl --context <nyyrikki-cluster> -n <nyyrikki-ns> create secret generic nyyrikki-target-<name> --from-file=token --from-file=ca.crt
+# Rotate by deleting the token Secret here, re-applying, and replacing the
+# Secret there; Nyyrikki re-reads it on use (docs/06 D4).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nyyrikki-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nyyrikki-impersonator
+  namespace: nyyrikki-system
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nyyrikki-impersonator-token
+  namespace: nyyrikki-system
+  annotations:
+    kubernetes.io/service-account.name: nyyrikki-impersonator
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nyyrikki-impersonate
+rules:
+  - apiGroups: [""]
+    resources: [users]
+    verbs: [impersonate]
+    resourceNames: ["OWNER_USER"]
+  - apiGroups: [""]
+    resources: [groups]
+    verbs: [impersonate]
+    resourceNames: ["OWNER_GROUP"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nyyrikki-impersonate
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nyyrikki-impersonate
+subjects:
+  - kind: ServiceAccount
+    name: nyyrikki-impersonator
+    namespace: nyyrikki-system

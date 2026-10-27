@@ -1,0 +1,10 @@
+# Planted for the chart canary: valid, but a second ClusterRole, which the
+# chart's template tests refuse (docs/06 G2).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: canary-rbac
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
