@@ -57,12 +57,15 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=${{ needs.release-please.outputs.version }}
           tags: ghcr.io/tuhis/nyyrikki:${{ needs.release-please.outputs.version }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
       - name: CLI binaries, chart and checksums
         env:
           CGO_ENABLED: "0"
           GH_TOKEN: ${{ github.token }}
           DIGEST: ${{ steps.image.outputs.digest }}
         run: |
+          # Fail closed: never publish a reference without a digest.
+          [[ $DIGEST == sha256:* ]] || { echo "no image digest: '$DIGEST'"; exit 1; }
           mkdir dist
           for os in linux darwin; do for arch in amd64 arm64; do
             GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
@@ -70,10 +73,13 @@ jobs:
           done; done
           helm package deploy/chart/nyyrikki --version "$VERSION" --app-version "$VERSION" -d dist
           # The image digest, so the chart's image.digest can be pinned
-          # (docs/06 D6).
-          echo "ghcr.io/tuhis/nyyrikki:$VERSION@$DIGEST" > dist/IMAGE
+          # (docs/06 D6). Line 1: the full reference; line 2: the value for
+          # image.digest.
+          printf 'ghcr.io/tuhis/nyyrikki:%s@%s\n%s\n' "$VERSION" "$DIGEST" "$DIGEST" > dist/IMAGE
           (cd dist && sha256sum * > SHA256SUMS)
           gh release upload "$TAG" dist/* --clobber
-          gh release view "$TAG" --json body --jq .body > notes.md
-          printf '\n\nImage: `ghcr.io/tuhis/nyyrikki:%s@%s`\n' "$VERSION" "$DIGEST" >> notes.md
+          # Idempotent on re-run: replace any earlier Image line.
+          body=$(gh release view "$TAG" --json body --jq .body)
+          printf '%s\n' "$body" | grep -v '^Image: ' > notes.md || true
+          printf '\nImage: `ghcr.io/tuhis/nyyrikki:%s@%s` (set `image.digest` to `%s`)\n' "$VERSION" "$DIGEST" "$DIGEST" >> notes.md
           gh release edit "$TAG" --notes-file notes.md

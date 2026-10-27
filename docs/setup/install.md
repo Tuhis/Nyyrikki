@@ -43,7 +43,8 @@ helm install nyyrikki deploy/chart/nyyrikki -n nyyrikki -f values.yaml
 ```
 
 Pin the image by digest: each release lists it in its notes and in the
-`IMAGE` asset (`image.digest` in values). If the image is in a private
+`IMAGE` asset. Set `image.digest` to the `sha256:…` part only (the
+second line of `IMAGE`), not the whole reference. If the image is in a private
 registry, or the GHCR package hasn't been made public yet (a new GHCR
 package is private), create a pull Secret and list it in
 `image.pullSecrets`.
