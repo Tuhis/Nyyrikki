@@ -95,3 +95,14 @@ func TestTwoDocumentsRejected(t *testing.T) {
 		t.Fatal("accepted a second document")
 	}
 }
+
+// Found in review of #10 (L8).
+func TestStrictnessGaps(t *testing.T) {
+	if _, err := Parse([]byte(valid(t) + "\n---\n: : not yaml [\n")); err == nil {
+		t.Error("a second document that doesn't parse was ignored")
+	}
+	src := strings.Replace(valid(t), "groups: [admins]", "groups: [admins, system:nodes]", 1)
+	if _, err := Parse([]byte(src)); err == nil {
+		t.Error("a system: group was accepted")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -172,7 +173,7 @@ func Parse(b []byte) (*Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	var extra any
-	if err := dec.Decode(&extra); err == nil {
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, errors.New("config: more than one YAML document")
 	}
 	if err := c.Validate(); err != nil {
@@ -267,7 +268,7 @@ func (c *Config) Validate() error {
 			bad("humans[%d].kubernetes.user is required and must not be a system: identity", i)
 		}
 		for _, g := range h.Kubernetes.Groups {
-			if g == "" || g == "system:masters" {
+			if g == "" || strings.HasPrefix(g, "system:") {
 				bad("humans[%d].kubernetes.groups must not contain %q", i, g)
 			}
 		}
