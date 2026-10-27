@@ -88,7 +88,8 @@ Wait for events. Don't spin:
   it and end the turn. It wakes you on check, review and comment events.
 - Otherwise, run `gh pr checks <N> --watch --interval 60` in the
   background and get notified when it exits. Then read the comments.
-- Either way, start the 30-minute timer described below.
+- After a push, a rerun or an `@claude` request, also start the
+  30-minute timer described below.
 
 Each time you wake, collect **everything new** before changing anything,
 then fix it all in one batch, so one push follows one round of findings:
@@ -110,8 +111,9 @@ A wake is not guaranteed: a watch fires on events, and a stuck check or a
 review job that never answers produces none. So whenever you start waiting
 (a push, a rerun, an `@claude` request), also start a **30-minute timer** in
 the background (`sleep 1800` with `run_in_background`, never a foreground
-wait) and note the time. Stop the previous timer first, so only one
-runs. Whenever you wake, by the timer or anything else, and the thing you
+wait) and note the time and its task ID. Stop the previous timer by its
+ID first, so only one runs. If you can't (after a context reset), ignore
+it when it fires: only the age check below counts. Whenever you wake, by the timer or anything else, and the thing you
 are waiting for is older than 30 minutes, investigate before waiting any
 longer. Don't just say "still waiting".
 
@@ -143,13 +145,19 @@ then act on what you find:
   job**, even under the bullets above. A rerun replays the old comment, and
   if the reply was already posted it adds a second one, which §3 counts as
   another round. Look for the reply first; retry only by posting the
-  round's comment again, as §3 says.
+  round's comment again, as §3 says. A run with no reply that started
+  more than 40 minutes ago (its job timeout is 30) can't post any more:
+  treat it as a **failed run** for §3, even while GitHub still shows it
+  `in_progress`. It uses no round, and the retry may be posted although
+  that run looks open. If a late reply arrives anyway, count only one.
 
 A **stall** is a wake where you found one of these: a job stuck after its
 steps, a stuck pool, a hung job or a silent round. A job that is slow but
-healthy is not one. Tell the user what you found and what you did, then
-start a new 30-minute timer. A second stall of the same kind is a
-hand-back (§ *Stop and hand back*).
+healthy is not one. Tell the user what you found and what you did, then,
+unless a bullet above says to stop, start a new 30-minute timer. A second
+stall of the same kind **on the same thing you are waiting for** (the same
+job after its rerun, or a round's retry) is a hand-back (§ *Stop and hand
+back*). Each new job or round gets its own retry, as in §3.
 
 ### CI failures
 
@@ -364,8 +372,8 @@ The steps above also stop and hand back in these cases:
 
 - An `@claude` round's retry fails too (§3).
 - The review-thread query reports `hasNextPage` (§2).
-- A second stall of the same kind, or a stuck runner pool (§2 *Waited 30
-  minutes?*).
+- A second stall of the same kind on the same job or round, or a stuck
+  runner pool (§2 *Waited 30 minutes?*).
 - The round cap is used up and a rebase changed reviewed code (§4).
 - The round cap is used up and a commit after round 3's marker isn't a fix
   named in a reply to one of its findings (§4).
