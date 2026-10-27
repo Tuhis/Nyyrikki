@@ -126,8 +126,8 @@ then act on what you find:
 
 - **Every step `completed`, but the job is still `in_progress`** (or the
   run says `success` while a check stays pending): the runner's completion
-  never reached GitHub. Re-run that job (`gh run rerun <run-id> --job
-  <job-id>`). It will never finish by itself.
+  never reached GitHub. Re-run that job (`gh run rerun --job <job-id>`,
+  with the job's `databaseId`). It will never finish by itself.
 - **`queued` with no `runner_name`**: no runner picked it up. Look for
   other queued jobs on the same label. If the pool looks stuck, report it,
   because rerunning won't help.
