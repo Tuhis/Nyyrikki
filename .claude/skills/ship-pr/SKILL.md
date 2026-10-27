@@ -40,6 +40,14 @@ Verify them if something behaves unexpectedly, because they can drift:
   mentions it. The comment must come from a writer or `tuhokuutio[bot]`. The
   reply is an issue comment from `claude[bot]` that starts with
   "**Claude finished …**" and links the job.
+- **A PR that changes `claude-code-review.yml` or `claude.yml` is never
+  reviewed, and the check still goes green.** The action refuses to run
+  unless both files are identical to `main`'s, logs "Workflow validation
+  failed", and exits with success. `@claude` rounds are skipped the same
+  way. Land workflow changes in a PR of their own, reviewed by the owner,
+  and keep them out of PRs that need a Claude review. When a
+  `claude-review` run finishes in seconds, read its log before trusting
+  it.
 - Only checks for the **current head SHA** count.
 
 ## 1. Open the PR
