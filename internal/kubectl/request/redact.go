@@ -22,8 +22,8 @@ const lastApplied = "kubectl.kubernetes.io/last-applied-configuration"
 // stdin is decoded with the same YAML-or-JSON stream decoder kubectl uses
 // for -f -. Without a Secret in it, the original bytes are shown as sent.
 // With one, the decoded documents are shown re-serialised, so only what
-// was decoded, redacted, reaches the approver. A stream that doesn't
-// decode is shown as sent unless it mentions a Secret at all.
+// was decoded, redacted, reaches the approver. A stream that fails to
+// decode anywhere is not shown at all (ok=false).
 func redactManifests(stdin []byte) (out []byte, ok bool) {
 	dec := k8syaml.NewYAMLOrJSONDecoder(bytes.NewReader(stdin), 4096)
 	var docs []any
@@ -35,10 +35,10 @@ func redactManifests(stdin []byte) (out []byte, ok bool) {
 			break
 		}
 		if err != nil {
-			if bytes.Contains(bytes.ToLower(stdin), []byte("secret")) {
-				return nil, false
-			}
-			return stdin, true
+			// Fail closed: escapes ("\u0053ecret") or a Secret before the
+			// broken part defeat any check of the raw bytes, so a stream
+			// that doesn't decode in full is never shown as text.
+			return nil, false
 		}
 		d := json.NewDecoder(bytes.NewReader(raw))
 		d.UseNumber()
@@ -49,7 +49,7 @@ func redactManifests(stdin []byte) (out []byte, ok bool) {
 		if doc == nil {
 			continue
 		}
-		if redactObject(doc, "") {
+		if redactObject(doc, nil) {
 			redacted = true
 		}
 		docs = append(docs, doc)
@@ -71,37 +71,49 @@ func redactManifests(stdin []byte) (out []byte, ok bool) {
 	return b.Bytes(), true
 }
 
-// redactObject redacts v in place if it is a Secret, and recurses into
-// the items of a list. Kind and keys are matched case-insensitively, which
-// redacts more than Kubernetes would read, never less. inherited is the
-// kind an item takes from its list when it names none: apimachinery gives
-// such an item the list's kind without "List" (decodeToList).
-func redactObject(v any, inherited string) bool {
+// redactObject redacts v in place if it may be a Secret, and recurses
+// into the items of a list. inherited are the kinds an item takes from its
+// list when it has no "kind" of its own: apimachinery gives such an item
+// the list's kind without "List" (decodeToList).
+//
+// kubectl reads only the exact key "kind", so that key alone decides
+// whether an item inherits. Whether to redact is decided more widely: an
+// object is treated as a Secret if its exact kind, any key that folds to
+// "kind" (in any case, Kelvin sign included), or an inherited kind says
+// so. The redactor only ever redacts more than Kubernetes would read, and
+// never depends on map order.
+func redactObject(v any, inherited []string) bool {
 	obj, ok := v.(map[string]any)
 	if !ok {
 		return false
 	}
-	kind, hasKind := kindOf(obj)
-	if !hasKind {
-		kind = inherited
+	kinds := foldedKinds(obj)
+	if _, hasKind := exactKind(obj); !hasKind {
+		kinds = append(kinds, inherited...)
 	}
-	itemKind := ""
-	if len(kind) > 4 && strings.EqualFold(kind[len(kind)-4:], "List") {
-		itemKind = kind[:len(kind)-4]
+	var itemKinds []string
+	secret := false
+	for _, k := range kinds {
+		if strings.EqualFold(k, "Secret") {
+			secret = true
+		}
+		if len(k) > 4 && strings.EqualFold(k[len(k)-4:], "List") {
+			itemKinds = append(itemKinds, k[:len(k)-4])
+		}
 	}
 	redacted := false
 	for k, val := range obj {
 		if strings.EqualFold(k, "items") {
 			if items, ok := val.([]any); ok {
 				for _, it := range items {
-					if redactObject(it, itemKind) {
+					if redactObject(it, itemKinds) {
 						redacted = true
 					}
 				}
 			}
 		}
 	}
-	if !strings.EqualFold(kind, "Secret") {
+	if !secret {
 		return redacted
 	}
 	for k, val := range obj {
@@ -134,16 +146,26 @@ func redactObject(v any, inherited string) bool {
 	return true
 }
 
-// kindOf returns the object's own kind, if it names one.
-func kindOf(obj map[string]any) (string, bool) {
+// exactKind returns the value of the exact key "kind", the only one
+// kubectl and apimachinery read.
+func exactKind(obj map[string]any) (string, bool) {
+	s, ok := obj["kind"].(string)
+	s = strings.TrimSpace(s)
+	return s, ok && s != ""
+}
+
+// foldedKinds returns the values of every key that folds to "kind",
+// the exact key included.
+func foldedKinds(obj map[string]any) []string {
+	var kinds []string
 	for k, v := range obj {
 		if strings.EqualFold(k, "kind") {
 			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-				return strings.TrimSpace(s), true
+				kinds = append(kinds, strings.TrimSpace(s))
 			}
 		}
 	}
-	return "", false
+	return kinds
 }
 
 func valueBytes(v any) []byte {

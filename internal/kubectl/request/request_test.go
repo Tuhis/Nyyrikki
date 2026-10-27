@@ -3,6 +3,7 @@ package request
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -577,5 +578,106 @@ func TestDisplayRedactsKindlessListItems(t *testing.T) {
 	}
 	if !strings.Contains(c.DisplayStdin(), "visible") {
 		t.Errorf("a ConfigMap item was redacted: %s", c.DisplayStdin())
+	}
+}
+
+// TestDisplayRedactsSecretPatchAnyPositional covers review findings H1
+// and H4 of #10: the Secret can be named after "--" or in a
+// comma-separated type list, and its patch must still be redacted.
+func TestDisplayRedactsSecretPatchAnyPositional(t *testing.T) {
+	const value = "hunter2"
+	for _, args := range [][]string{
+		{"patch", "-p", `{"stringData":{"password":"` + value + `"}}`, "--", "secret", "db"},
+		{"patch", "-p", `{"stringData":{"password":"` + value + `"}}`, "--", "secrets/db"},
+		{"patch", "configmap,secret", "x", "-p", `{"stringData":{"password":"` + value + `"}}`},
+		{"patch", "ConfigMap,Secrets.v1.", "x", "-p", `{"stringData":{"password":"` + value + `"}}`},
+		{"patch", "-p", `{"stringData":{"password":"` + value + `"}}`, "--", "cm,secret", "x"},
+	} {
+		c := mustParse(t, args, nil, false)
+		shown := c.DisplayArgv() + " " + strings.Join(c.Audit().Argv, " ")
+		if strings.Contains(shown, value) {
+			t.Errorf("%q: secret value shown: %s", args, shown)
+		}
+	}
+}
+
+// TestDisplayStdinUndecodableFailsClosed covers review finding H2 of
+// #10: a stream that fails to decode anywhere is never shown as text,
+// whatever its raw bytes say.
+func TestDisplayStdinUndecodableFailsClosed(t *testing.T) {
+	for _, stdin := range []string{
+		// JSON escape hides "Secret" from a byte search.
+		`{"kind":"\u0053ecret","stringData":{"password":"hunter2"}} {`,
+		// YAML double-quoted escape.
+		"kind: \"\\x53ecret\"\nstringData:\n  password: hunter2\n---\n{ [\n",
+		// A valid Secret, then a stray "{".
+		"{\"kind\":\"Secret\",\"stringData\":{\"password\":\"hunter2\"}}\n{",
+		// No secret at all, still undecodable.
+		"a: [unclosed\n",
+	} {
+		c := mustParse(t, []string{"apply", "-f", "-"}, []byte(stdin), false)
+		got := c.DisplayStdin()
+		if strings.Contains(got, "hunter2") || strings.Contains(got, "unclosed") || !strings.HasPrefix(got, "‹binary: ") {
+			t.Errorf("DisplayStdin(%q) = %q, want only the size-and-hash form", stdin, got)
+		}
+	}
+	// A stream that decodes fully is still shown.
+	ok := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"
+	if got := mustParse(t, []string{"apply", "-f", "-"}, []byte(ok), false).DisplayStdin(); got != ok {
+		t.Errorf("decodable stream = %q", got)
+	}
+}
+
+// TestDisplayRedactsKindKeyTricks covers review finding H3 of #10: kubectl
+// reads only the exact key "kind", but the redactor must redact whenever
+// any reading says Secret, independent of map order.
+func TestDisplayRedactsKindKeyTricks(t *testing.T) {
+	cases := []string{
+		// A SecretList item with no "kind" inherits Secret; its "KIND" is
+		// not read by kubectl.
+		`{"apiVersion":"v1","kind":"SecretList","items":[{"KIND":"ConfigMap","metadata":{"name":"db"},"stringData":{"password":"hunter2"}}]}`,
+		// Exact kind Secret next to a case-folded decoy.
+		`{"apiVersion":"v1","kind":"Secret","KIND":"ConfigMap","metadata":{"name":"db"},"data":{"password":"hunter2"}}`,
+		// A decoy exact kind next to a case-folded Secret: redact more.
+		`{"apiVersion":"v1","kind":"ConfigMap","Kind":"Secret","metadata":{"name":"db"},"data":{"password":"hunter2"}}`,
+		// Kelvin sign K (U+212A) folds to "k": kubectl ignores the key.
+		`{"apiVersion":"v1","kind":"SecretList","items":[{"` + "\u212a" + `ind":"ConfigMap","stringData":{"password":"hunter2"}}]}`,
+		`{"apiVersion":"v1","kind":"ConfigMap","` + "\u212a" + `ind":"Secret","data":{"password":"hunter2"}}`,
+	}
+	for i := 0; i < 50; i++ {
+		for _, stdin := range cases {
+			got := mustParse(t, []string{"apply", "-f", "-"}, []byte(stdin), false).DisplayStdin()
+			if strings.Contains(got, "hunter2") {
+				t.Fatalf("round %d: secret shown for %s:\n%s", i, stdin, got)
+			}
+		}
+	}
+}
+
+// TestDisplayEscapesIgnorables covers review finding L3 of #10: every
+// default-ignorable code point, U+2800 and long runs of combining marks
+// are escaped, so nothing hides text from the approver.
+func TestDisplayEscapesIgnorables(t *testing.T) {
+	for _, r := range []rune{0x034F, 0xFE00, 0xFE0F, 0xE0100, 0xE01EF, 0x180B, 0x180F, 0x17B4, 0x17B5, 0x2800, 0x115F, 0xE0001} {
+		c := mustParse(t, []string{"exec", "web", "--", "echo", "a" + string(r) + "b"}, nil, false)
+		want := fmt.Sprintf(`\u{%x}`, r)
+		if !strings.Contains(c.DisplayArgv(), want) {
+			t.Errorf("U+%04X not escaped: %s", r, c.DisplayArgv())
+		}
+	}
+	// Four combining marks pass; the rest of the run is escaped.
+	run := "e" + strings.Repeat("\u0301", 7)
+	got := mustParse(t, []string{"exec", "web", "--", "echo", run}, nil, false).DisplayArgv()
+	want := "'e" + strings.Repeat("\u0301", 4) + strings.Repeat(`\u{301}`, 3) + "'"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("combining run = %s, want suffix %s", got, want)
+	}
+	// Ordinary accents are untouched.
+	if got := mustParse(t, []string{"exec", "web", "--", "echo", "caf\u00e9 e\u0301"}, nil, false).DisplayArgv(); strings.Contains(got, `\u{`) {
+		t.Errorf("plain accents escaped: %s", got)
+	}
+	// In stdin they make the text non-plain.
+	if got := mustParse(t, []string{"exec", "-i", "web", "--", "cat"}, []byte("a\u2800b"), false).DisplayStdin(); !strings.HasPrefix(got, "‹binary: ") {
+		t.Errorf("stdin with U+2800 = %q", got)
 	}
 }

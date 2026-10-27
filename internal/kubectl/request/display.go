@@ -38,9 +38,11 @@ func (c *Canonical) redactedArgv() []string {
 }
 
 // patchesSecret reports whether the command is a patch that may target a
-// Secret, whose --patch then carries secret values (docs/04 D14): a
-// positional names one, or the target comes from -f, where it can't be
-// told from the argv.
+// Secret, whose --patch then carries secret values (docs/04 D14): any
+// positional names one, before or after "--", alone or in a
+// comma-separated type list (kubectl's ResourceTypeOrNameArgs splits
+// types on commas), or the target comes from -f, where it can't be told
+// from the argv.
 func (c *Canonical) patchesSecret() bool {
 	if len(c.path) != 1 || c.path[0] != "patch" {
 		return false
@@ -48,15 +50,13 @@ func (c *Canonical) patchesSecret() bool {
 	if _, ok := c.flag("filename"); ok {
 		return true
 	}
-	pos := c.positionals
-	if c.dash >= 0 && c.dash <= len(pos) {
-		pos = pos[:c.dash]
-	}
-	for _, a := range pos {
-		kind, _, _ := strings.Cut(strings.ToLower(a), "/")
-		kind, _, _ = strings.Cut(kind, ".") // secret.v1, secrets.v1.
-		if kind == "secret" || kind == "secrets" {
-			return true
+	for _, a := range c.positionals {
+		types, _, _ := strings.Cut(strings.ToLower(a), "/")
+		for _, typ := range strings.Split(types, ",") {
+			typ, _, _ = strings.Cut(typ, ".") // secret.v1, secrets.v1.
+			if typ == "secret" || typ == "secrets" {
+				return true
+			}
 		}
 	}
 	return false
@@ -135,14 +135,20 @@ func quote(s string) string {
 	}
 	var b strings.Builder
 	b.WriteByte('\'')
+	run := 0 // consecutive combining marks
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
+		if isCombining(r) {
+			run++
+		} else {
+			run = 0
+		}
 		switch {
 		case r == utf8.RuneError && size == 1:
 			fmt.Fprintf(&b, `\x{%02x}`, s[i])
 		case r == '\'':
 			b.WriteString(`'\''`)
-		case invisible(r):
+		case invisible(r) || run > maxCombiningRun:
 			fmt.Fprintf(&b, `\u{%x}`, r)
 		default:
 			b.WriteRune(r)
@@ -155,25 +161,49 @@ func quote(s string) string {
 
 // invisible reports characters that could hide or reorder what the
 // approver reads: control characters, format characters (bidi controls,
-// zero-width characters, BOM) and line/paragraph separators.
+// zero-width characters, BOM), line/paragraph separators, every Unicode
+// default-ignorable code point (variation selectors, fillers, tags and
+// the like) and the blank braille pattern U+2800.
 func invisible(r rune) bool {
 	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) ||
 		unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) ||
-		r == 'ᅟ' || r == 'ᅠ' || r == 'ㅤ' || r == 'ﾠ' // Hangul fillers render as blanks
+		unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r) ||
+		unicode.Is(unicode.Variation_Selector, r) ||
+		r == 0x034F || // combining grapheme joiner
+		r == 0x115F || r == 0x1160 || r == 0x3164 || r == 0xFFA0 || // Hangul fillers
+		(r >= 0x17B4 && r <= 0x17B5) || // Khmer inherent vowels
+		(r >= 0x180B && r <= 0x180F) || // Mongolian free variation selectors, vowel separator
+		(r >= 0xFE00 && r <= 0xFE0F) || (r >= 0xE0100 && r <= 0xE01EF) || // variation selectors
+		(r >= 0xE0000 && r <= 0xE0FFF) || // tags and unassigned default-ignorables
+		r == 0x2800 // braille pattern blank
 }
 
-// isPlainText reports whether b can be shown as text: valid UTF-8, and no
-// invisible characters other than tab, newline and CR before a newline.
+// maxCombiningRun is how many combining marks in a row are shown as they
+// are; the rest of a longer run is escaped, so stacked marks can't paint
+// over neighbouring text.
+const maxCombiningRun = 4
+
+func isCombining(r rune) bool { return unicode.In(r, unicode.Mn, unicode.Me) }
+
+// isPlainText reports whether b can be shown as text: valid UTF-8, no
+// invisible characters other than tab, newline and CR before a newline,
+// and no run of more than maxCombiningRun combining marks.
 func isPlainText(b []byte) bool {
 	if !utf8.Valid(b) {
 		return false
 	}
+	run := 0
 	for i := 0; i < len(b); {
 		r, size := utf8.DecodeRune(b[i:])
+		if isCombining(r) {
+			run++
+		} else {
+			run = 0
+		}
 		switch {
 		case r == '\n' || r == '\t':
 		case r == '\r' && bytes.HasPrefix(b[i+1:], []byte("\n")):
-		case invisible(r):
+		case invisible(r) || run > maxCombiningRun:
 			return false
 		}
 		i += size
