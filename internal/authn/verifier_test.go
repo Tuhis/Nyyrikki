@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,10 +26,15 @@ import (
 
 const mcpURL = "https://nyyrikki.example.com/mcp"
 
-type recAudit struct{ recs []audit.Record }
+type recAudit struct {
+	mu   sync.Mutex
+	recs []audit.Record
+}
 
 func (r *recAudit) Append(_ context.Context, rec audit.Record) error {
+	r.mu.Lock()
 	r.recs = append(r.recs, rec)
+	r.mu.Unlock()
 	return nil
 }
 
@@ -37,7 +43,6 @@ type fixture struct {
 	v     *authn.Verifier
 	audit *recAudit
 	now   time.Time
-	start time.Time
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -64,10 +69,6 @@ func newFixture(t *testing.T) *fixture {
 		Now:                     func() time.Time { return f.now },
 		Audit:                   f.audit,
 	})
-	// Proofs dated in the first window after start are refused (no replay
-	// across a restart); tests run after it.
-	f.start = f.now
-	f.now = f.now.Add(31 * time.Second)
 	return f
 }
 
@@ -121,8 +122,8 @@ func jkt(t *testing.T, k *ecdsa.PrivateKey) string {
 	return j
 }
 
-func proof(t *testing.T, k *ecdsa.PrivateKey, method, u, tok string, at time.Time) string {
-	p, err := dpop.Proof(k, method, u, tok, "", at)
+func proof(t *testing.T, nonce string, k *ecdsa.PrivateKey, method, u, tok string, at time.Time) string {
+	p, err := dpop.Proof(k, method, u, tok, nonce, at)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,7 @@ func TestDPoPCLITokenAccepted(t *testing.T) {
 	f := newFixture(t)
 	k := mustKey(t)
 	tok := f.as.Token(t, authntest.Claims{AZP: "nyyrikki-cli", SID: "s1", JKT: jkt(t, k)})
-	p, code := f.do(t, req{scheme: "DPoP", token: tok, proofs: []string{proof(t, k, "POST", mcpURL, tok, f.now)}})
+	p, code := f.do(t, req{scheme: "DPoP", token: tok, proofs: []string{proof(t, f.v.Nonce(), k, "POST", mcpURL, tok, f.now)}})
 	if code != 200 || p == nil {
 		t.Fatalf("code %d", code)
 	}
@@ -156,7 +157,7 @@ func TestDPoPCLITokenAccepted(t *testing.T) {
 	// (docs/01 OD14).
 	k2 := mustKey(t)
 	tok2 := f.as.Token(t, authntest.Claims{AZP: "nyyrikki-cli", SID: "s1", JKT: jkt(t, k2)})
-	p2, _ := f.do(t, req{scheme: "DPoP", token: tok2, proofs: []string{proof(t, k2, "POST", mcpURL, tok2, f.now)}})
+	p2, _ := f.do(t, req{scheme: "DPoP", token: tok2, proofs: []string{proof(t, f.v.Nonce(), k2, "POST", mcpURL, tok2, f.now)}})
 	if p2 == nil || p2.AgentKey == p.AgentKey {
 		t.Fatal("two DPoP logins got the same agent key")
 	}
@@ -225,7 +226,7 @@ func TestDPoPRejected(t *testing.T) {
 	tok := f.as.Token(t, authntest.Claims{AZP: "nyyrikki-cli", SID: "s1", JKT: jkt(t, k)})
 	// Any DPoP-bound token, whatever its azp.
 	other := f.as.Token(t, authntest.Claims{AZP: "some-mcp-client", SID: "s1", JKT: jkt(t, k)})
-	good := func() string { return proof(t, k, "POST", mcpURL, tok, f.now) }
+	good := func() string { return proof(t, f.v.Nonce(), k, "POST", mcpURL, tok, f.now) }
 	sign := func(c dpop.Claims, hdr map[jose.HeaderKey]any, key *ecdsa.PrivateKey) string {
 		p, err := dpop.Sign(key, c, hdr)
 		if err != nil {
@@ -234,7 +235,7 @@ func TestDPoPRejected(t *testing.T) {
 		return p
 	}
 	claims := func(mod func(*dpop.Claims)) dpop.Claims {
-		c := dpop.Claims{JTI: "j-" + time.Now().String(), HTM: "POST", HTU: mcpURL, IAT: f.now.Unix(), ATH: dpop.ATH(tok)}
+		c := dpop.Claims{JTI: "j-" + time.Now().String(), HTM: "POST", HTU: mcpURL, IAT: f.now.Unix(), ATH: dpop.ATH(tok), Nonce: f.v.Nonce()}
 		mod(&c)
 		return c
 	}
@@ -254,7 +255,7 @@ func TestDPoPRejected(t *testing.T) {
 		"wrong ath":             {scheme: "DPoP", token: tok, proofs: []string{sign(claims(func(c *dpop.Claims) { c.ATH = dpop.ATH("other") }), nil, k)}},
 		"old iat":               {scheme: "DPoP", token: tok, proofs: []string{sign(claims(func(c *dpop.Claims) { c.IAT = f.now.Add(-61 * time.Second).Unix() }), nil, k)}},
 		"future iat":            {scheme: "DPoP", token: tok, proofs: []string{sign(claims(func(c *dpop.Claims) { c.IAT = f.now.Add(31 * time.Second).Unix() }), nil, k)}},
-		"different key":         {scheme: "DPoP", token: tok, proofs: []string{proof(t, mustKey(t), "POST", mcpURL, tok, f.now)}},
+		"different key":         {scheme: "DPoP", token: tok, proofs: []string{proof(t, f.v.Nonce(), mustKey(t), "POST", mcpURL, tok, f.now)}},
 		"wrong typ":             {scheme: "DPoP", token: tok, proofs: []string{sign(claims(func(*dpop.Claims) {}), map[jose.HeaderKey]any{jose.HeaderType: "JWT"}, k)}},
 		"private jwk":           {scheme: "DPoP", token: tok, proofs: []string{sign(claims(func(*dpop.Claims) {}), map[jose.HeaderKey]any{"jwk": jose.JSONWebKey{Key: k}}, k)}},
 		"alg none":              {scheme: "DPoP", token: tok, proofs: []string{unsignedProof(claims(func(*dpop.Claims) {}))}},
@@ -278,7 +279,7 @@ func TestProofBeforeProcessStartRejected(t *testing.T) {
 	f := newFixture(t)
 	k := mustKey(t)
 	tok := f.as.Token(t, authntest.Claims{AZP: "nyyrikki-cli", SID: "s1", JKT: jkt(t, k)})
-	p := proof(t, k, "POST", mcpURL, tok, f.now.Add(-5*time.Second))
+	p := proof(t, f.v.Nonce(), k, "POST", mcpURL, tok, f.now.Add(-5*time.Second))
 	if _, code := f.do(t, req{scheme: "DPoP", token: tok, proofs: []string{p}}); code != 401 {
 		t.Fatalf("proof from before start accepted: %d", code)
 	}
@@ -288,7 +289,7 @@ func TestIntrospect(t *testing.T) {
 	f := newFixture(t)
 	k := mustKey(t)
 	tok := f.as.Token(t, authntest.Claims{AZP: "nyyrikki-cli", SID: "s9", JKT: jkt(t, k)})
-	p, code := f.do(t, req{scheme: "DPoP", token: tok, proofs: []string{proof(t, k, "POST", mcpURL, tok, f.now)}})
+	p, code := f.do(t, req{scheme: "DPoP", token: tok, proofs: []string{proof(t, f.v.Nonce(), k, "POST", mcpURL, tok, f.now)}})
 	if code != 200 {
 		t.Fatal(code)
 	}
@@ -320,16 +321,35 @@ func TestIntrospectMismatch(t *testing.T) {
 	}
 }
 
-// TestProofInRestartWindowRejected: a proof dated up to proofFuture after
-// the process started may have been made before a restart, when the replay
-// cache was another process's; it is refused (found in review of #10, L4).
-func TestProofInRestartWindowRejected(t *testing.T) {
+// TestDPoPNonce: a proof without the server's nonce, or with another
+// process's (one made before a restart), is answered with use_dpop_nonce and
+// the current nonce, and isn't audited as a failure. Replaces a 30 s window
+// after start (found in review of #10, N2).
+func TestDPoPNonce(t *testing.T) {
 	f := newFixture(t)
 	k := mustKey(t)
 	tok := f.as.Token(t, authntest.Claims{AZP: "nyyrikki-cli", SID: "s1", JKT: jkt(t, k)})
-	p := proof(t, k, "POST", mcpURL, tok, f.start.Add(20*time.Second))
-	if _, code := f.do(t, req{scheme: "DPoP", token: tok, proofs: []string{p}}); code != 401 {
-		t.Fatalf("proof from the restart window accepted: %d", code)
+	other := authn.NewVerifier(authn.Config{Issuer: f.as.Issuer()}).Nonce()
+	if other == f.v.Nonce() {
+		t.Fatal("two processes share a nonce")
+	}
+	for name, nonce := range map[string]string{"no nonce": "", "previous process": other} {
+		before := len(f.audit.recs)
+		h := f.v.Middleware(mcpURL, http.NotFoundHandler())
+		r := httptest.NewRequest("POST", mcpURL, nil)
+		r.Header.Set("Authorization", "DPoP "+tok)
+		r.Header.Set("DPoP", proof(t, nonce, k, "POST", mcpURL, tok, f.now))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 401 || w.Header().Get("DPoP-Nonce") != f.v.Nonce() || !strings.Contains(w.Header().Get("WWW-Authenticate"), "use_dpop_nonce") {
+			t.Fatalf("%s: %d %v", name, w.Code, w.Header())
+		}
+		if len(f.audit.recs) != before {
+			t.Errorf("%s: a nonce challenge was audited as a failure", name)
+		}
+	}
+	if _, code := f.do(t, req{scheme: "DPoP", token: tok, proofs: []string{proof(t, f.v.Nonce(), k, "POST", mcpURL, tok, f.now)}}); code != 200 {
+		t.Fatalf("proof with the nonce: %d", code)
 	}
 }
 
@@ -355,5 +375,34 @@ func TestRemovedKeyStopsVerifying(t *testing.T) {
 	f.now = f.now.Add(2 * time.Hour)
 	if _, code := f.do(t, req{scheme: "Bearer", token: tok}); code != 401 {
 		t.Fatalf("token signed by a removed key still accepted: %d", code)
+	}
+}
+
+// TestConcurrentRefetchWaits: when the key set is due for its hourly
+// refetch, concurrent calls wait for the one fetch in flight instead of
+// being refused (found in review of #10, N3).
+func TestConcurrentRefetchWaits(t *testing.T) {
+	f := newFixture(t)
+	tok := f.as.Token(t, authntest.Claims{AZP: "claude-code", SID: "s1", Expiry: f.now.Add(3 * time.Hour)})
+	if _, code := f.do(t, req{scheme: "Bearer", token: tok}); code != 200 {
+		t.Fatalf("first use: %d", code)
+	}
+	f.now = f.now.Add(2 * time.Hour)
+	var wg sync.WaitGroup
+	codes := make(chan int, 20)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, code := f.do(t, req{scheme: "Bearer", token: tok})
+			codes <- code
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	for c := range codes {
+		if c != 200 {
+			t.Fatalf("a concurrent call was refused during the refetch: %d", c)
+		}
 	}
 }

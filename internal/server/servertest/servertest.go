@@ -168,9 +168,7 @@ func Start(t *testing.T, opts ...Option) *Env {
 			Version: "test", AuditOut: e.Audit, Executable: exe,
 			Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 			AuthHTTPClient: e.AS.Client(),
-			// The DPoP restart window is tested in internal/authn.
-			DPoPRestartWindow: time.Nanosecond,
-			Ready:             func(net.Addr, net.Addr) { close(ready) },
+			Ready:          func(net.Addr, net.Addr) { close(ready) },
 		})
 	}()
 	select {

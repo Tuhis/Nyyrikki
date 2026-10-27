@@ -47,6 +47,7 @@ type issuer struct {
 	now    func() time.Time
 
 	mu          sync.Mutex
+	fetchMu     sync.Mutex // serialises refetches
 	meta        *discovery
 	keys        *jose.JSONWebKeySet
 	lastFetch   time.Time
@@ -117,24 +118,29 @@ const maxKeyAge = time.Hour
 // and attempts (failed ones included) are made at most once a minute
 // (docs/02 D2).
 func (i *issuer) key(ctx context.Context, kid string) (*jose.JSONWebKey, error) {
+	if k := i.freshKey(kid); k != nil {
+		return k, nil
+	}
+	// One refetch at a time: concurrent callers wait for the one in
+	// flight and then use what it fetched, instead of being refused.
+	i.fetchMu.Lock()
+	defer i.fetchMu.Unlock()
+	if k := i.freshKey(kid); k != nil {
+		return k, nil
+	}
 	i.mu.Lock()
 	fresh := !i.lastFetch.IsZero() && i.now().Sub(i.lastFetch) < maxKeyAge
 	recent := !i.lastAttempt.IsZero() && i.now().Sub(i.lastAttempt) < time.Minute
-	i.mu.Unlock()
-	if fresh {
-		if k := i.cached(kid); k != nil {
-			return k, nil
-		}
+	if !recent {
+		i.lastAttempt = i.now()
 	}
+	i.mu.Unlock()
 	if recent {
 		if fresh {
 			return nil, errNoKey
 		}
 		return nil, errors.New("key set expired and refetch rate-limited")
 	}
-	i.mu.Lock()
-	i.lastAttempt = i.now()
-	i.mu.Unlock()
 	m, err := i.metadata(ctx)
 	if err != nil {
 		return nil, err
@@ -150,6 +156,17 @@ func (i *issuer) key(ctx context.Context, kid string) (*jose.JSONWebKey, error) 
 		return k, nil
 	}
 	return nil, errNoKey
+}
+
+// freshKey returns the key with kid from a key set younger than maxKeyAge.
+func (i *issuer) freshKey(kid string) *jose.JSONWebKey {
+	i.mu.Lock()
+	fresh := !i.lastFetch.IsZero() && i.now().Sub(i.lastFetch) < maxKeyAge
+	i.mu.Unlock()
+	if !fresh {
+		return nil
+	}
+	return i.cached(kid)
 }
 
 func (i *issuer) cached(kid string) *jose.JSONWebKey {

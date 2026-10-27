@@ -3,6 +3,7 @@ package authn
 import (
 	"context"
 	"crypto"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -62,10 +63,6 @@ type Config struct {
 	Now                     func() time.Time
 	Audit                   audit.Appender
 	Logger                  *slog.Logger
-	// RestartWindow is how long after start proofs are refused, so none
-	// made before a restart can be replayed; zero means proofFuture.
-	// Only tests shorten it.
-	RestartWindow time.Duration
 }
 
 // Verifier checks tokens and proofs and introspects sessions.
@@ -73,6 +70,7 @@ type Verifier struct {
 	cfg     Config
 	iss     *issuer
 	start   time.Time
+	nonce   string
 	replays *replayCache
 }
 
@@ -93,6 +91,7 @@ func NewVerifier(cfg Config) *Verifier {
 		cfg:     cfg,
 		iss:     newIssuer(cfg.Issuer, cfg.HTTPClient, cfg.Now),
 		start:   start,
+		nonce:   newNonce(),
 		replays: newReplayCache(maxReplaySize),
 	}
 }
@@ -124,6 +123,14 @@ func (v *Verifier) Middleware(endpointURL string, next http.Handler) http.Handle
 	want := normalizeHTU(endpointURL)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, err := v.Authenticate(r, want)
+		var ne *nonceError
+		if errors.As(err, &ne) {
+			// A protocol step, not a failure: not audited.
+			w.Header().Set("DPoP-Nonce", v.nonce)
+			w.Header().Set("WWW-Authenticate", `DPoP error="use_dpop_nonce", error_description="use the server's DPoP nonce"`)
+			http.Error(w, "use_dpop_nonce", http.StatusUnauthorized)
+			return
+		}
 		if err != nil {
 			reason := err.Error()
 			var ae *authError
@@ -306,16 +313,15 @@ func (v *Verifier) verifyProof(r *http.Request, token, jkt, wantHTU string) erro
 	if iat.Before(now.Add(-proofPast)) || iat.After(now.Add(proofFuture)) {
 		return fail("proof: iat outside the window")
 	}
-	// A proof dated before start, or up to proofFuture after it, may have
-	// been made before a restart, when the replay cache was another
-	// process's: refuse it. Calls in the first seconds after a start fail
-	// closed and are retried.
-	window := v.cfg.RestartWindow
-	if window <= 0 {
-		window = proofFuture
-	}
-	if iat.Before(v.start.Add(window)) {
+	if iat.Before(v.start) {
 		return fail("proof: iat before the process started")
+	}
+	// The server nonce (RFC 9449 §8) is made per process, so a proof made
+	// before a restart can't be replayed into the new process's empty
+	// replay cache. A missing or stale nonce is answered with the current
+	// one, and the client retries.
+	if subtle.ConstantTimeCompare([]byte(c.Nonce), []byte(v.nonce)) != 1 {
+		return &nonceError{}
 	}
 	if subtle.ConstantTimeCompare([]byte(c.ATH), []byte(dpop.ATH(token))) != 1 {
 		return fail("proof: ath")
@@ -338,6 +344,22 @@ func (v *Verifier) verifyProof(r *http.Request, token, jkt, wantHTU string) erro
 	}
 	return nil
 }
+
+// nonceError asks the client to retry with the server's DPoP nonce.
+type nonceError struct{}
+
+func (*nonceError) Error() string { return "unauthenticated: proof without the server's DPoP nonce" }
+
+func newNonce() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // crypto/rand never fails on supported platforms
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// Nonce returns the server's current DPoP nonce.
+func (v *Verifier) Nonce() string { return v.nonce }
 
 // replayCache remembers proof jtis for the acceptance window. When full,
 // it refuses rather than evicts (docs/01 D9).

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,6 +23,33 @@ type authTransport struct {
 }
 
 func (t *authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := t.try(r)
+	if err != nil || resp.StatusCode != http.StatusUnauthorized || t.login.key == nil {
+		return resp, err
+	}
+	// Nyyrikki asks for its DPoP nonce on the first call, and again after
+	// it restarts (RFC 9449 §8): learn it and retry once.
+	n := resp.Header.Get("DPoP-Nonce")
+	if n == "" || !strings.Contains(resp.Header.Get("WWW-Authenticate"), "use_dpop_nonce") {
+		return resp, nil
+	}
+	if r.Body != nil && r.GetBody == nil {
+		return resp, nil
+	}
+	resp.Body.Close()
+	t.login.SetNonce(n)
+	if r.GetBody != nil {
+		body, err := r.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		r = r.Clone(r.Context())
+		r.Body = body
+	}
+	return t.try(r)
+}
+
+func (t *authTransport) try(r *http.Request) (*http.Response, error) {
 	h, err := t.login.Header(r.Context(), r.Method, t.login.MCPURL, t.now)
 	if err != nil {
 		return nil, err

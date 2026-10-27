@@ -307,11 +307,19 @@ the elevation half of GW3 and GW6.
 - **§5.5**: the CLI sends stdin when `-i` is given or the kubectl args
   contain `-f -` (in its usual spellings); the server still decides
   whether the command reads it.
-- **DPoP after a restart** (docs/01 D9): proofs dated before start or up to
-  30 s after it are refused, so a proof made before a restart can't be
-  replayed into the new process's empty replay cache. CLI calls fail with
-  401 for those 30 s after nyyrikkid starts; a retry succeeds. Replay
-  cache entries expire on the proof's `iat`. Found in review of #10.
+- **DPoP server nonce** (docs/01 D9, RFC 9449 §8): each nyyrikkid process
+  makes a random nonce, and a proof must carry it. A proof without it, or
+  with a previous process's, is answered 401 with `use_dpop_nonce` and the
+  current `DPoP-Nonce`, not audited; the CLI learns it and retries once. So
+  a proof made before a restart can't be replayed into the new process's
+  empty replay cache, with no outage window. Replay cache entries expire
+  on the proof's `iat`. Found in review of #10, replacing a first fix that
+  refused proofs for 30 s after start.
+- **Key set age** (D2): the issuer's key set is trusted for at most an
+  hour; then it is refetched, one fetch at a time, with the other callers
+  waiting for it, and attempts at most once a minute. If the authorization
+  server is down when the hour is up, every call (listing targets
+  included) is refused until a fetch succeeds. Found in review of #10.
 - **Introspection**: a DPoP-bound token whose introspection answer has no
   `cnf.jkt` is refused, not only one whose `cnf.jkt` differs. docs/01 M9
   will show whether Keycloak reports it; if not, this is relaxed by a
