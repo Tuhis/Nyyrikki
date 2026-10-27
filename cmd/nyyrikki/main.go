@@ -92,9 +92,13 @@ type cli struct {
 func (c *cli) fail(err error) int {
 	code, exit := codes.Unavailable, exitUnavailable
 	var te *client.ToolError
+	var ce *codes.Error // from /stream (internal/client/attach)
 	switch {
 	case errors.Is(err, client.ErrNotSignedIn):
 		code, exit = codes.Unauthenticated, exitNotSignedIn
+	case errors.As(err, &ce):
+		te = &client.ToolError{Code: ce.Code}
+		fallthrough
 	case errors.As(err, &te):
 		code = te.Code
 		switch te.Code {

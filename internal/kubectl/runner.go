@@ -264,6 +264,7 @@ type runLimits struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	byNotAfter bool
+	notAfter   time.Time // the deadline when byNotAfter
 	clientGone atomic.Bool
 	grant      context.Context
 }
@@ -276,12 +277,16 @@ func (r *Runner) limitsFor(g *decision.Grant, limit time.Duration) *runLimits {
 		deadline, byNotAfter = na, true
 	}
 	ctx, cancel := context.WithDeadline(g.Context(), deadline)
-	return &runLimits{ctx: ctx, cancel: cancel, byNotAfter: byNotAfter, grant: g.Context()}
+	return &runLimits{ctx: ctx, cancel: cancel, byNotAfter: byNotAfter, notAfter: deadline, grant: g.Context()}
 }
 
 // cutDetail says why a killed run was cut.
 func (l *runLimits) cutDetail() string {
 	switch {
+	// At an elevation's expiry the decision point also ends the grant, at
+	// the same instant as this deadline: past it, the cut was the expiry.
+	case l.byNotAfter && !time.Now().Before(l.notAfter):
+		return DetailGrantExpired
 	case l.grant.Err() != nil:
 		return DetailGrantEnded
 	case l.clientGone.Load():

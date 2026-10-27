@@ -87,3 +87,14 @@ func TestOutcomeLineNamesCode(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// TestStreamErrorsKeepTheirCode: /stream reports a cut run as a
+// *codes.Error; the CLI maps its code like a tool error's (found by the
+// e2e test: an exec cut at expiry exited 69 instead of 75).
+func TestStreamErrorsKeepTheirCode(t *testing.T) {
+	var stderr bytes.Buffer
+	got := (&cli{stderr: &stderr}).fail(&codes.Error{Code: codes.Expired, Message: "the run was cut: the elevation expired"})
+	if got != exitNoAnswer || stderr.String() != "nyyrikki: error: expired: the run was cut: the elevation expired\n" {
+		t.Fatalf("exit %d, %q", got, stderr.String())
+	}
+}
