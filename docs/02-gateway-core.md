@@ -314,7 +314,13 @@ the elevation half of GW3 and GW6.
   a proof made before a restart can't be replayed into the new process's
   empty replay cache, with no outage window. Replay cache entries expire
   on the proof's `iat`. Found in review of #10, replacing a first fix that
-  refused proofs for 30 s after start.
+  refused proofs for 30 s after start. The nonce also replaces docs/01
+  D9's "not earlier than the process's start time": a proof carrying this
+  process's nonce can't predate it, and the iat check refused CLIs whose
+  clocks lag.
+- **Key refetch context**: the refetch runs on a context that isn't
+  cancelled with the request that started it, so a caller hanging up
+  can't leave every call refused for a minute.
 - **Key set age** (D2): the issuer's key set is trusted for at most an
   hour; then it is refetched, one fetch at a time, with the other callers
   waiting for it, and attempts at most once a minute. If the authorization

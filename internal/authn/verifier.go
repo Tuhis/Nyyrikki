@@ -69,13 +69,12 @@ type Config struct {
 type Verifier struct {
 	cfg     Config
 	iss     *issuer
-	start   time.Time
 	nonce   string
 	replays *replayCache
 }
 
-// NewVerifier returns a Verifier. The process start time it records is the
-// earliest iat a proof may have (docs/01 D9).
+// NewVerifier returns a Verifier, with a DPoP nonce of its own
+// (RFC 9449 §8; docs/02 §10).
 func NewVerifier(cfg Config) *Verifier {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -86,11 +85,9 @@ func NewVerifier(cfg Config) *Verifier {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	start := cfg.Now().Truncate(time.Second)
 	return &Verifier{
 		cfg:     cfg,
 		iss:     newIssuer(cfg.Issuer, cfg.HTTPClient, cfg.Now),
-		start:   start,
 		nonce:   newNonce(),
 		replays: newReplayCache(maxReplaySize),
 	}
@@ -312,9 +309,6 @@ func (v *Verifier) verifyProof(r *http.Request, token, jkt, wantHTU string) erro
 	iat := time.Unix(c.IAT, 0)
 	if iat.Before(now.Add(-proofPast)) || iat.After(now.Add(proofFuture)) {
 		return fail("proof: iat outside the window")
-	}
-	if iat.Before(v.start) {
-		return fail("proof: iat before the process started")
 	}
 	// The server nonce (RFC 9449 §8) is made per process, so a proof made
 	// before a restart can't be replayed into the new process's empty

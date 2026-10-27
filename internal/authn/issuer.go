@@ -141,12 +141,15 @@ func (i *issuer) key(ctx context.Context, kid string) (*jose.JSONWebKey, error) 
 		}
 		return nil, errors.New("key set expired and refetch rate-limited")
 	}
-	m, err := i.metadata(ctx)
+	// The fetch serves every waiter, so it must not die with the request
+	// that happened to start it; the HTTP client's timeout bounds it.
+	fctx := context.WithoutCancel(ctx)
+	m, err := i.metadata(fctx)
 	if err != nil {
 		return nil, err
 	}
 	var set jose.JSONWebKeySet
-	if err := i.getJSON(ctx, m.JWKSURI, &set); err != nil {
+	if err := i.getJSON(fctx, m.JWKSURI, &set); err != nil {
 		return nil, err
 	}
 	i.mu.Lock()

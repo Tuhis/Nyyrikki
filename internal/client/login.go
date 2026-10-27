@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Tuhis/Nyyrikki/internal/dpop"
@@ -47,11 +48,22 @@ type Login struct {
 	path string
 	// nonce is Nyyrikki's current DPoP nonce (RFC 9449 §8), learnt from
 	// its use_dpop_nonce answer; kept in memory only.
-	nonce string
+	nonceMu sync.Mutex
+	nonce   string
 }
 
 // SetNonce records the server's DPoP nonce.
-func (l *Login) SetNonce(n string) { l.nonce = n }
+func (l *Login) SetNonce(n string) {
+	l.nonceMu.Lock()
+	l.nonce = n
+	l.nonceMu.Unlock()
+}
+
+func (l *Login) currentNonce() string {
+	l.nonceMu.Lock()
+	defer l.nonceMu.Unlock()
+	return l.nonce
+}
 
 // DefaultPath returns the default login file path.
 func DefaultPath(mcp bool) (string, error) {
@@ -490,7 +502,7 @@ func (l *Login) Header(ctx context.Context, method, endpointURL string, now func
 	if l.key == nil {
 		return http.Header{"Authorization": {"Bearer " + tok}}, nil
 	}
-	p, err := dpop.Proof(l.key, method, endpointURL, tok, l.nonce, now())
+	p, err := dpop.Proof(l.key, method, endpointURL, tok, l.currentNonce(), now())
 	if err != nil {
 		return nil, err
 	}

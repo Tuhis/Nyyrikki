@@ -275,13 +275,35 @@ func unsignedProof(c dpop.Claims) string {
 	return "eyJhbGciOiJub25lIiwidHlwIjoiZHBvcCtqd3QifQ." + b64json(c) + "."
 }
 
-func TestProofBeforeProcessStartRejected(t *testing.T) {
+// TestSlowClockProofAccepted: a proof carrying this process's nonce can't
+// predate the process, so a CLI whose clock lags isn't refused after a
+// restart (found in review of #10, R1; replaces an iat-before-start check).
+func TestSlowClockProofAccepted(t *testing.T) {
 	f := newFixture(t)
 	k := mustKey(t)
 	tok := f.as.Token(t, authntest.Claims{AZP: "nyyrikki-cli", SID: "s1", JKT: jkt(t, k)})
-	p := proof(t, f.v.Nonce(), k, "POST", mcpURL, tok, f.now.Add(-5*time.Second))
-	if _, code := f.do(t, req{scheme: "DPoP", token: tok, proofs: []string{p}}); code != 401 {
-		t.Fatalf("proof from before start accepted: %d", code)
+	p := proof(t, f.v.Nonce(), k, "POST", mcpURL, tok, f.now.Add(-10*time.Second))
+	if _, code := f.do(t, req{scheme: "DPoP", token: tok, proofs: []string{p}}); code != 200 {
+		t.Fatalf("proof from a slow clock refused: %d", code)
+	}
+}
+
+// TestCancelledCallerDoesNotBlockRefetch: a caller that hangs up during the
+// hourly refetch must not leave everyone refused for a minute (R3).
+func TestCancelledCallerDoesNotBlockRefetch(t *testing.T) {
+	f := newFixture(t)
+	tok := f.as.Token(t, authntest.Claims{AZP: "claude-code", SID: "s1", Expiry: f.now.Add(3 * time.Hour)})
+	if _, code := f.do(t, req{scheme: "Bearer", token: tok}); code != 200 {
+		t.Fatalf("first use: %d", code)
+	}
+	f.now = f.now.Add(2 * time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest("POST", mcpURL, nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer "+tok)
+	f.v.Middleware(mcpURL, http.NotFoundHandler()).ServeHTTP(httptest.NewRecorder(), r)
+	if _, code := f.do(t, req{scheme: "Bearer", token: tok}); code != 200 {
+		t.Fatalf("refused after another caller hung up during the refetch: %d", code)
 	}
 }
 

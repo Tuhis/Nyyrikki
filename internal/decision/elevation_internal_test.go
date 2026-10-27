@@ -136,3 +136,48 @@ func TestApproveElevationWaiterGoneAtCommit(t *testing.T) {
 		t.Fatalf("leaked %d handles, %d live elevations", n, live)
 	}
 }
+
+// TestAbandonedApprovedElevationEnded: if ask returns without "approved"
+// (its own settle failed) while a tap's approval commits before the waiter
+// is removed, Elevate must end the elevation it won't deliver (R2).
+func TestAbandonedApprovedElevationEnded(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	w, _ := audit.NewWriter(ctx, db, io.Discard, time.Now)
+	p, err := New(ctx, Config{Config: config.Defaults(), DB: db, Audit: w, Asker: nopAsker{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	id := "apr_abandoned"
+	if _, err := db.Exec(`INSERT INTO approvals (id, kind, state, human, agent_key, approver_id, targets, duration_ms, created_ms, expires_ms)
+		VALUES (?, 'elevation', 'pending', 'owner', 'k', 1, '["prod"]', 600000, ?, ?)`, id, time.Now().UnixMilli(), time.Now().Add(time.Minute).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	// The waiter is still registered when the tap commits...
+	p.mu.Lock()
+	p.waiters[id] = make(chan string, 1)
+	p.mu.Unlock()
+	if ok, err := p.approveElevation(id); !ok || err != nil {
+		t.Fatalf("approve: %v %v", ok, err)
+	}
+	// ...then ask returns "failed", removes it, and Elevate gives up.
+	p.mu.Lock()
+	delete(p.waiters, id)
+	p.mu.Unlock()
+	p.abandonElevation(id)
+	var state string
+	if err := db.QueryRow("SELECT state FROM elevations WHERE approval_id = ?", id).Scan(&state); err != nil || state != stateEnded {
+		t.Fatalf("elevation %q: %v", state, err)
+	}
+	p.mu.Lock()
+	n, live := len(p.handles), len(p.elevations)
+	p.mu.Unlock()
+	if n != 0 || live != 0 {
+		t.Fatalf("leaked %d handles, %d live elevations", n, live)
+	}
+}

@@ -111,6 +111,11 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 	tj, _ := json.Marshal(targets)
 	state, err := p.ask(ctx, rec, id, "elevation", h.TelegramUserID, pr, string(tj), nil, dur, expires,
 		func(ctx context.Context) error { return p.asker.AskElevation(ctx, prompt) }, r.Progress)
+	if err != nil || state != stateApproved {
+		// A tap may still have approved it after ask gave up (its own
+		// settle failed): end what nobody will receive.
+		p.abandonElevation(id)
+	}
 	if err != nil {
 		return nil, p.deny(ctx, rec, err)
 	}
@@ -156,6 +161,15 @@ func (p *Point) deliverElevation(ctx context.Context, approvalID string, rec aud
 		return nil, codes.Wrap(codes.Unavailable, err, "audit log unavailable")
 	}
 	return &Elevation{ID: elevID, Handle: handle, Targets: targets, ExpiresAt: time.UnixMilli(expiresM).UTC()}, nil
+}
+
+// abandonElevation drops the handle of an approval its call gave up on, and
+// ends its elevation if one was created.
+func (p *Point) abandonElevation(approvalID string) {
+	p.mu.Lock()
+	delete(p.handles, approvalID)
+	p.mu.Unlock()
+	p.endElevationByApproval(approvalID)
 }
 
 // endElevationByApproval ends the in-memory elevation of an approval when
