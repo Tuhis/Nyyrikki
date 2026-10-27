@@ -98,7 +98,11 @@ func (c *Canonical) DisplayStdin() string {
 		return ""
 	}
 	shown, ok := c.stdin, true
-	if c.manifestStdin() {
+	if _, raw := c.flag("raw"); raw {
+		// With --raw the URL, not the body, decides the kind: a body with
+		// no kind can still create a Secret (docs/04 D14).
+		ok = false
+	} else if c.manifestStdin() {
 		shown, ok = redactManifests(c.stdin)
 	}
 	if !ok || !isPlainText(shown) {

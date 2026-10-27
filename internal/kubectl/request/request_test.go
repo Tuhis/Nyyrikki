@@ -681,3 +681,19 @@ func TestDisplayEscapesIgnorables(t *testing.T) {
 		t.Errorf("stdin with U+2800 = %q", got)
 	}
 }
+
+// TestDisplayRawStdinNeverShown: with --raw the URL decides the kind, so a
+// body with no kind of its own can be a Secret; such stdin is shown only by
+// size and hash (docs/04 D14; found in review of #10, N1).
+func TestDisplayRawStdinNeverShown(t *testing.T) {
+	body := []byte(`{"metadata":{"name":"db"},"stringData":{"password":"hunter2"}}`)
+	for _, cmd := range []string{"create", "replace"} {
+		c, err := Parse([]string{cmd, "--raw", "/api/v1/namespaces/default/secrets", "-f", "-"}, body, false)
+		if err != nil {
+			t.Fatalf("%s: %v", cmd, err)
+		}
+		if got := c.DisplayStdin(); strings.Contains(got, "hunter2") || !strings.HasPrefix(got, "‹binary:") {
+			t.Errorf("%s --raw: stdin shown: %s", cmd, got)
+		}
+	}
+}
