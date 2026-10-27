@@ -25,7 +25,9 @@ func render(t *testing.T, extra ...string) []object {
 	if os.Getenv("NYYRIKKI_CHART_TESTS") != "1" {
 		t.Skip("set NYYRIKKI_CHART_TESTS=1 (the chart gate does)")
 	}
-	args := append([]string{"template", "t", "nyyrikki", "-f", "nyyrikki/ci/test-values.yaml"}, extra...)
+	// Helm's offline default Kubernetes is the one it was built against,
+	// which may be older than the chart's kubeVersion.
+	args := append([]string{"template", "t", "nyyrikki", "-f", "nyyrikki/ci/test-values.yaml", "--kube-version", "1.35.0"}, extra...)
 	out, err := exec.Command("helm", args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template: %v\n%s", err, out)
@@ -131,8 +133,34 @@ func TestChartRequiresValues(t *testing.T) {
 	if os.Getenv("NYYRIKKI_CHART_TESTS") != "1" {
 		t.Skip("set NYYRIKKI_CHART_TESTS=1")
 	}
-	out, err := exec.Command("helm", "template", "t", "nyyrikki").CombinedOutput()
+	out, err := exec.Command("helm", "template", "t", "nyyrikki", "--kube-version", "1.35.0").CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "required") {
 		t.Fatalf("rendered without required values: %s", out)
+	}
+}
+
+// TestChartTwoInClusterTargets: the ServiceAccount token is mounted when
+// any target is in-cluster, however many are (found in review of #11).
+func TestChartTwoInClusterTargets(t *testing.T) {
+	objs := render(t, "--set", "targets[0].name=a", "--set", "targets[0].inCluster=true",
+		"--set", "targets[1].name=b", "--set", "targets[1].inCluster=true")
+	for _, d := range kind(objs, "Deployment") {
+		spec := d["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		if spec["automountServiceAccountToken"] != true {
+			t.Fatalf("automountServiceAccountToken = %v with two in-cluster targets", spec["automountServiceAccountToken"])
+		}
+	}
+}
+
+// TestChartRefusesNoTelegramID: a missing Telegram user ID fails at render
+// time instead of crash-looping the pod (found in review of #11).
+func TestChartRefusesNoTelegramID(t *testing.T) {
+	if os.Getenv("NYYRIKKI_CHART_TESTS") != "1" {
+		t.Skip("set NYYRIKKI_CHART_TESTS=1")
+	}
+	out, err := exec.Command("helm", "template", "t", "nyyrikki", "-f", "nyyrikki/ci/test-values.yaml",
+		"--kube-version", "1.35.0", "--set", "human.telegramUserID=0").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "telegramUserID") {
+		t.Fatalf("rendered with telegramUserID 0: %s", out)
 	}
 }
