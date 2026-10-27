@@ -1,0 +1,11 @@
+# Planted for the pinning canary: a write grant with a quoted value.
+name: canary-quoted
+on: push
+permissions:
+  contents: read
+  packages: "write"
+jobs:
+  x:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
