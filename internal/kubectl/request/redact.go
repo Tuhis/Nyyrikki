@@ -49,7 +49,7 @@ func redactManifests(stdin []byte) (out []byte, ok bool) {
 		if doc == nil {
 			continue
 		}
-		if redactObject(doc) {
+		if redactObject(doc, "") {
 			redacted = true
 		}
 		docs = append(docs, doc)
@@ -73,25 +73,35 @@ func redactManifests(stdin []byte) (out []byte, ok bool) {
 
 // redactObject redacts v in place if it is a Secret, and recurses into
 // the items of a list. Kind and keys are matched case-insensitively, which
-// redacts more than Kubernetes would read, never less.
-func redactObject(v any) bool {
+// redacts more than Kubernetes would read, never less. inherited is the
+// kind an item takes from its list when it names none: apimachinery gives
+// such an item the list's kind without "List" (decodeToList).
+func redactObject(v any, inherited string) bool {
 	obj, ok := v.(map[string]any)
 	if !ok {
 		return false
+	}
+	kind, hasKind := kindOf(obj)
+	if !hasKind {
+		kind = inherited
+	}
+	itemKind := ""
+	if len(kind) > 4 && strings.EqualFold(kind[len(kind)-4:], "List") {
+		itemKind = kind[:len(kind)-4]
 	}
 	redacted := false
 	for k, val := range obj {
 		if strings.EqualFold(k, "items") {
 			if items, ok := val.([]any); ok {
 				for _, it := range items {
-					if redactObject(it) {
+					if redactObject(it, itemKind) {
 						redacted = true
 					}
 				}
 			}
 		}
 	}
-	if !isSecret(obj) {
+	if !strings.EqualFold(kind, "Secret") {
 		return redacted
 	}
 	for k, val := range obj {
@@ -124,15 +134,16 @@ func redactObject(v any) bool {
 	return true
 }
 
-func isSecret(obj map[string]any) bool {
+// kindOf returns the object's own kind, if it names one.
+func kindOf(obj map[string]any) (string, bool) {
 	for k, v := range obj {
 		if strings.EqualFold(k, "kind") {
-			if s, ok := v.(string); ok && strings.EqualFold(strings.TrimSpace(s), "Secret") {
-				return true
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s), true
 			}
 		}
 	}
-	return false
+	return "", false
 }
 
 func valueBytes(v any) []byte {

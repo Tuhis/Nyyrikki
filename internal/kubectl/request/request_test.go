@@ -552,3 +552,30 @@ func TestDisplayRedactsSecretPatch(t *testing.T) {
 		t.Errorf("a non-Secret patch was redacted: %s", c.DisplayArgv())
 	}
 }
+
+// TestDisplayRedactsKindlessListItems: an item of a SecretList with no
+// kind of its own becomes a Secret when apimachinery decodes the list, so
+// its values must be redacted too (docs/04 D14; found in review of #10).
+func TestDisplayRedactsKindlessListItems(t *testing.T) {
+	for _, stdin := range []string{
+		`{"apiVersion":"v1","kind":"SecretList","items":[{"metadata":{"name":"db"},"stringData":{"password":"hunter2"}}]}`,
+		"apiVersion: v1\nkind: secretlist\nitems:\n- metadata: {name: db}\n  data: {password: aHVudGVyMg==}\n",
+	} {
+		c, err := Parse([]string{"apply", "-f", "-"}, []byte(stdin), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shown := c.DisplayStdin()
+		if strings.Contains(shown, "hunter2") || strings.Contains(shown, "aHVudGVyMg==") {
+			t.Errorf("secret value shown:\n%s", shown)
+		}
+	}
+	// An item that names another kind is left alone.
+	c, err := Parse([]string{"apply", "-f", "-"}, []byte(`{"apiVersion":"v1","kind":"SecretList","items":[{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"x"},"data":{"k":"visible"}}]}`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c.DisplayStdin(), "visible") {
+		t.Errorf("a ConfigMap item was redacted: %s", c.DisplayStdin())
+	}
+}
