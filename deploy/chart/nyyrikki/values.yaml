@@ -56,6 +56,13 @@ targets:
 telegram:
   apiURL: https://api.telegram.org
 
+# Extra CA certificates to trust (a private CA for the authorization
+# server, for example), as a ConfigMap in this namespace. They are added to
+# the system roots, not instead of them.
+trustedCA:
+  configMap: ""
+  key: ca.crt
+
 secrets:
   tls: nyyrikki-tls                # type kubernetes.io/tls
   telegram:

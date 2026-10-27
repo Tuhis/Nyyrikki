@@ -52,6 +52,13 @@ spec:
             capabilities:
               drop: [ALL]
           resources: {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.trustedCA.configMap }}
+          # Extra roots, added to the system ones (Go reads every file in
+          # SSL_CERT_DIR). Not a secret.
+          env:
+            - name: SSL_CERT_DIR
+              value: /etc/ssl/certs:/etc/nyyrikki/trusted-ca
+          {{- end }}
           # Credentials are files from Secrets, never env vars (docs/01 D15).
           volumeMounts:
             - {name: config, mountPath: /etc/nyyrikki/config, readOnly: true}
@@ -61,6 +68,9 @@ spec:
             - {name: state, mountPath: /var/lib/nyyrikki}
             - {name: runtime, mountPath: /run/nyyrikki}
             - {name: tmp, mountPath: /tmp}
+            {{- if .Values.trustedCA.configMap }}
+            - {name: trusted-ca, mountPath: /etc/nyyrikki/trusted-ca, readOnly: true}
+            {{- end }}
             {{- range .Values.targets }}{{ if not .inCluster }}
             - {name: target-{{ .name }}, mountPath: /etc/nyyrikki/targets/{{ .name }}, readOnly: true}
             {{- end }}{{ end }}
@@ -86,6 +96,12 @@ spec:
           emptyDir: {medium: Memory, sizeLimit: 16Mi}
         - name: tmp
           emptyDir: {medium: Memory, sizeLimit: 16Mi}
+        {{- if .Values.trustedCA.configMap }}
+        - name: trusted-ca
+          configMap:
+            name: {{ .Values.trustedCA.configMap }}
+            items: [{key: {{ .Values.trustedCA.key }}, path: ca.crt}]
+        {{- end }}
         {{- range .Values.targets }}{{ if not .inCluster }}
         - name: target-{{ .name }}
           secret:
