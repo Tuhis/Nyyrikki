@@ -14,6 +14,9 @@ kubectl -n nyyrikki create secret generic nyyrikki-keycloak --from-file=client-s
 The certificate must be valid for the canonical URL's host. Nyyrikki
 terminates TLS itself (docs/01 D10). An Ingress in front must use TLS
 passthrough, or re-encrypt and log neither `Authorization` nor `DPoP`.
+It must also pass the `DPoP-Nonce` and `WWW-Authenticate` response
+headers through unchanged: the CLI needs them to learn Nyyrikki's DPoP
+nonce, and without them every CLI call fails with 401.
 
 ## Values
 
