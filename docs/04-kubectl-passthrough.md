@@ -73,7 +73,7 @@ All checked on 2026-10-26 with Go 1.26.8.
 | D11 | **Target version check.** Before the first run on a target, and then at most every 10 minutes, Nyyrikki reads `/version` with its own credential (no impersonation) and refuses the target below 1.35 (`unavailable`, `target_version`). An unreachable target is `unavailable`. | docs/01 D13; M6. |
 | D12 | **Interactive runs.** `run` with `interactive: true` is allowed only for `exec` and `attach` with `stdin` and `tty` set. The approval is the same as for any run. The run starts only when the client attaches to `/stream` with the ticket (docs/02 D10): the child gets a pseudo-terminal (M8), WebSocket binary messages carry terminal bytes both ways, and a text message `{"resize": {"cols", "rows"}}` resizes it. When the child exits, the server sends `{"exit_code": n}` and closes. | OD2. A pty is what makes kubectl ask for a TTY, as it does on the owner's laptop. |
 | D13 | **Output to the agent.** The result is kubectl's exit status and its stdout and stderr, as they came, apart from truncation (D7). Nyyrikki adds none of its credentials to them: the kubeconfig holds no secret (D9), verbosity flags don't exist (M1), and `config` isn't offered (D5). *Revised 2026-10-27 (OD3)*: a request, approved one-off or under an elevation, that reads Nyyrikki's credentials on the target, because the human can, returns them like any response; that is an accepted risk. | `CLAUDE.md`: responses unredacted; Nyyrikki's credentials never put in a response by Nyyrikki. |
-| D14 | **Secret-bearing values in what Nyyrikki shows and logs.** In the approver's view and the audit record, these are replaced by `‹redacted: N bytes, sha256:<first 12 hex>›`: the values of `--from-literal` (the part after the first `=`) and `--docker-password`; `patch`'s `--patch` when a positional names a Secret (the resource token, matched case-insensitively up to the first `/` or `.`, is `secret` or `secrets`) or when the target comes from `-f`; and, in stdin, `data`, `stringData` and the `kubectl.kubernetes.io/last-applied-configuration` annotation of every document whose `kind` is `Secret`, including Secrets inside a `List`'s `items`. They still run as sent; the hash binds the approval to them. Not covered, and accepted: a Secret's values typed into another command's positional argument (for example `annotate secret x kubectl.kubernetes.io/last-applied-configuration='{…}'`). *Revised 2026-10-27 (review of the docs PR)*: the patch, `List` and annotation cases were added. | `CLAUDE.md`: secrets never reach logs or Telegram. The approver still sees that a secret is being set, and its size. |
+| D14 | **Secret-bearing values in what Nyyrikki shows and logs.** In the approver's view and the audit record, these are replaced by `‹redacted: N bytes, sha256:<first 12 hex>›`: the values of `--from-literal` (the part after the first `=`) and `--docker-password`; `patch`'s `--patch` when a positional names a Secret (the resource token, matched case-insensitively up to the first `/` or `.`, is `secret` or `secrets`) or when the target comes from `-f`; and, in stdin, `data`, `stringData` and the `kubectl.kubernetes.io/last-applied-configuration` annotation of every document whose `kind` is `Secret`, including Secrets inside a `List`'s `items`. They still run as sent; the hash binds the approval to them. Not covered, and accepted: a Secret's values typed into another command's positional argument (for example `annotate secret x kubectl.kubernetes.io/last-applied-configuration='{…}'`). *Revised 2026-10-27 (review of the docs PR)*: the patch, `List` and annotation cases were added. *Revised 2026-10-27 (review of #10)*: with `--raw` the URL decides the kind, so stdin of a `--raw` request is shown only by size and hash; stdin that fails to decode anywhere is shown the same way. | `CLAUDE.md`: secrets never reach logs or Telegram. The approver still sees that a secret is being set, and its size. |
 
 ### Rejected alternatives
 
@@ -205,9 +205,28 @@ targets:
   refusing them, is a possible strengthening of the one defence, the
   approver's tap.
 
-## 10. How it was implemented (YYYY-MM-DD)
+## 10. How it was implemented (2026-10-26)
 
-<!-- Added during implementation. -->
+- **D4** gained four file-reading flags (dated note in the row). Found by
+  reading kubectl's flag set while writing PT1's tests.
+- **§5.3, the digest** also encodes the number of argv elements. Without
+  it the encoding is ambiguous at the argv/stdin boundary; PT1 built a
+  colliding pair to show it.
+- **D2**: building kubectl's command tree writes a package-level global,
+  so `Parse` is serialised behind a mutex. strace shows the build reads
+  no files, opens no connection and starts no process; it only lists the
+  `$PATH` directories for plugin names in help text.
+- **§5.4**: bare `rollout` and `set` are refused (they only print help).
+- **D14** also redacts the `last-applied-configuration` annotation of a
+  Secret and Secrets inside a `List`. stdin that doesn't decode but
+  mentions "secret" is shown only as its size and hash. `patch`'s
+  `--patch` is redacted as D14 says, after review of the docs PR.
+- **`debug --profile`** is refused, because it shares the name of the
+  denied global `--profile`. A per-command rule could allow it later.
+- **D7, cut runs**: a cut returns the partial output and `expired`, with
+  detail `run_timeout`, `grant_expired` or `grant_ended`.
+- **PT5 (e2e against kind)** isn't done yet: G6 and G8 are verified with
+  a fake apiserver, not a real cluster.
 
 ## 11. Post-implementation review (YYYY-MM-DD)
 

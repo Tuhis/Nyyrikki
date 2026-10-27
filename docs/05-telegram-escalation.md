@@ -142,9 +142,20 @@ telegram:
   Telegram M16.) Measured by the owner in M4; no text command acts, so
   the answer isn't critical.
 
-## 10. How it was implemented (YYYY-MM-DD)
+## 10. How it was implemented (2026-10-26)
 
-<!-- Added during implementation. -->
+- `Healthy()` is false until the poller has called `deleteWebhook`, and
+  after it stops: before that a prompt could go out with no way for the
+  answer to come back.
+- The 4096-character limit is counted as Telegram counts it (text after
+  entity parsing, in UTF-16 units), keeping 64 characters spare for the
+  status line `Settle` adds.
+- The rendered prompt is kept in SQLite until it is settled, so it can be
+  edited without rendering again; it holds the already-redacted request.
+- Bot API requests never follow redirects, which would carry the
+  token-bearing URL elsewhere.
+- Every rejected tap is answered "No longer valid"; the audit detail
+  tells the reasons apart.
 
 ## 11. Post-implementation review (YYYY-MM-DD)
 

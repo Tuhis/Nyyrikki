@@ -281,10 +281,66 @@ the elevation half of GW3 and GW6.
   waits for. Codex's timeout is set explicitly in the setup docs (M3).
 - **One human only.** D4 refuses a second one until a doc designs it.
 
-## 10. How it was implemented (YYYY-MM-DD)
+## 10. How it was implemented (2026-10-26)
 
-<!-- Added during implementation. -->
+- **D6**: the decision point has two entry points, `DecideRun` and
+  `Elevate`, in the one package that makes Grants, rather than a single
+  `Decide`. `Grant` lives in `internal/decision/internal/grant` so that
+  only the decision tree (and `decisiontest`, for tests) can construct
+  one; `TestOnlyDecisionMakesGrants` enforces G7.
+- **D7, settle order**: a waiter that loses the compare-and-set to a
+  settle it isn't told about (another process's restart expiry) reads
+  the final state from SQLite instead of blocking. Found by
+  `TestStartupExpiresPending`, which hung before the fix.
+- **D9 audience**: tokens must have exactly one `aud`, the canonical
+  `/mcp` URL, which is also the `resource` in the protected-resource
+  metadata. The metadata is served at both
+  `/.well-known/oauth-protected-resource` and `…/mcp`, and carries
+  `scopes_supported` (config `auth.scope`) and a
+  `nyyrikki_cli_client_id` field that `nyyrikki login` reads.
+- **D14**: the error travels in the tool result's own `error` field
+  (`{"error": {"code", "message"}}` next to the other result fields),
+  because the go-sdk replaces `structuredContent` with the typed result.
+- **D1**: MCP methods other than the handshake, `ping` and `tools/*` are
+  refused with "method not found" by a receiving middleware, not merely
+  left empty.
+- **§5.5**: the CLI sends stdin when `-i` is given or the kubectl args
+  contain `-f -` (in its usual spellings); the server still decides
+  whether the command reads it.
+- **DPoP server nonce** (docs/01 D9, RFC 9449 §8): each nyyrikkid process
+  makes a random nonce, and a proof must carry it. A proof without it, or
+  with a previous process's, is answered 401 with `use_dpop_nonce` and the
+  current `DPoP-Nonce`, not audited; the CLI learns it and retries once. So
+  a proof made before a restart can't be replayed into the new process's
+  empty replay cache, with no outage window. Replay cache entries expire
+  on the proof's `iat`. Found in review of #10, replacing a first fix that
+  refused proofs for 30 s after start. The nonce also replaces docs/01
+  D9's "not earlier than the process's start time": a proof carrying this
+  process's nonce can't predate it, and the iat check refused CLIs whose
+  clocks lag.
+- **Key refetch context**: the refetch runs on a context that isn't
+  cancelled with the request that started it, so a caller hanging up
+  can't leave every call refused for a minute.
+- **Key set age** (D2): the issuer's key set is trusted for at most an
+  hour; then it is refetched, one fetch at a time, with the other callers
+  waiting for it, and attempts at most once a minute. If the authorization
+  server is down when the hour is up, every call (listing targets
+  included) is refused until a fetch succeeds. Found in review of #10.
+- **Introspection**: a DPoP-bound token whose introspection answer has no
+  `cnf.jkt` is refused, not only one whose `cnf.jkt` differs. docs/01 M9
+  will show whether Keycloak reports it; if not, this is relaxed by a
+  dated note.
 
-## 11. Post-implementation review (YYYY-MM-DD)
+## 11. Post-implementation review (2026-10-27)
 
-<!-- Added at close-out. -->
+An adversarial review of the gateway code, before merge, found no path
+that runs a request without cover. Its findings and fixes:
+
+| Finding | Fix | Test |
+|---|---|---|
+| An elevation approved as its call was cancelled stayed live with nobody holding the handle: the lookup after approval used the cancelled context and returned before ending it | `deliverElevation` takes the handle first and queries on the server's context, and every failure after the approval ends the elevation | `TestDeliverElevationCallerGone` |
+| A Telegram 409 or 401 made nyyrikkid exit, so the kubelet restarted it into the retry loop docs/05 D2 forbids | the server keeps serving with the poller stopped; escalations are denied | `TestTelegramConflictKeepsServingAndDenies` |
+| An approve tap could commit just after the expiry | the expiry is part of the approve compare-and-set | none: the window between the check and the commit can't be forced in a test |
+| The chat showed "Approved" for a run that was then withdrawn or failed | a run's prompt is edited only once its grant exists, otherwise to "Withdrawn" or "Failed" | `TestDependencyFailuresDeny/audit_fails_after_approval` |
+| Any token with the audience was accepted, an ID token included | `typ` must be `Bearer` or `DPoP` (docs/01 M9 confirms Keycloak's values) | `TestTokenRejected` |
+| `telegram.api_url` accepted plain http, which would send the bot token in cleartext | https only, except on loopback | `TestTelegramAPIURL` |
