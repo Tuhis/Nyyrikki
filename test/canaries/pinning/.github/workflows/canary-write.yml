@@ -1,0 +1,10 @@
+# Planted for the pinning canary: the default token can write.
+name: canary-write
+on: push
+permissions:
+  contents: write
+jobs:
+  x:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true

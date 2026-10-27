@@ -1,0 +1,8 @@
+# Planted for the pinning canary: no top-level default for the token.
+name: canary-nodefault
+on: push
+jobs:
+  x:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true

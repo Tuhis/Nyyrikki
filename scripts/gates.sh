@@ -22,7 +22,7 @@ gate() {
       vuln)        govulncheck ./... ;;
       licenses)    go-licenses check ./... --allowed_licenses="$LICENSES" "${LICENSE_IGNORE[@]}"
                    [ "$dir" != . ] || scripts/check-pinned-licenses.sh ;;
-      secrets)     gitleaks dir . --redact --no-banner --verbose $([ -f .gitleaks.toml ] && echo --config .gitleaks.toml) ;;
+      secrets)     gitleaks dir . --redact --no-banner --verbose --config .gitleaks.toml ;;
       chart)       # Runs once the chart exists (docs/01 D17).
                    [ -d deploy/chart/nyyrikki ] || { echo "no chart yet"; exit 0; }
                    helm lint deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml
