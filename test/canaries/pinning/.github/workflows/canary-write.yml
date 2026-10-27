@@ -1,0 +1,13 @@
+# Planted for the pinning canary: the default token can write, behind a
+# column-0 comment that must not end the permissions block.
+name: canary-write
+on: push
+permissions:
+  contents: read
+# releases need this
+  packages: write
+jobs:
+  x:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true

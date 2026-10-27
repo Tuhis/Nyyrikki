@@ -1,0 +1,7 @@
+# Planted for the pinning canary: a composite action with an unpinned step.
+name: canary
+description: canary
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4

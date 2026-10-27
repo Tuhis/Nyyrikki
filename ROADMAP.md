@@ -32,7 +32,7 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 
 | # | Item | Status |
 |---|------|--------|
-| R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 📝 designing 2026-10-26: [docs/01](docs/01-foundations.md) drafted, OD1–OD16 decided; open: FD1–FD3 (skeleton, gates, measurements) |
+| R1 | [Foundations: architecture, threat model, toolchain](#r1--foundations) | 🔧 in progress 2026-10-27: [docs/01](docs/01-foundations.md) approved; FD1 (skeleton) and FD2 (gates, canaries, CI) implemented, G3–G6 verified in CI; open: FD3 measurements M9–M11 (G7) |
 | R2 | [Gateway core: MCP and CLI, identity, targets, one decision point](#r2--gateway-core) | 📝 designing 2026-10-26: [docs/02](docs/02-gateway-core.md) drafted, OD1–OD3 decided; awaiting approval |
 | R3 | [Audit log](#r3--audit-log) | 📝 designing 2026-10-26: [docs/03](docs/03-audit-log.md) drafted; awaiting approval |
 | R4 | [Pass-through, identity propagation and credential custody](#r4--pass-through-identity-propagation-and-credential-custody) | 📝 designing 2026-10-26: [docs/04](docs/04-kubectl-passthrough.md) drafted, OD1–OD2 decided (kubectl 1:1, interactive exec and attach); awaiting approval |
@@ -68,7 +68,7 @@ item, the doc's chunks say which part.
 
 | # | Milestone | Draws from | Status |
 |---|---|---|---|
-| M0 | [Decisions locked](#m0--decisions-locked) | R1 | in progress 2026-10-26: decisions in docs/01; open: CI running the gates on a skeleton (FD1, FD2) |
+| M0 | [Decisions locked](#m0--decisions-locked) | R1 | done when this lands 2026-10-27: docs/01 approved, CLAUDE.md lists what it locked, CI runs the gates on the skeleton and every gate fails on its canary; FD3 (needed by M1 at the latest) is still open |
 | M1 | [Walking skeleton that only says no](#m1--walking-skeleton-that-only-says-no) | R2, R3 | not started 2026-10-26 |
 | M2 | [One-off escalation, end to end, on one target](#m2--one-off-escalation-end-to-end-on-one-target) | R2, R4, R5 | not started 2026-10-26 |
 | M3 | [Time-boxed elevation](#m3--time-boxed-elevation) | R2, R4, R5 | not started 2026-10-26 |

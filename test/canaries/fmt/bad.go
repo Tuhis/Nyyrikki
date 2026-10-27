@@ -1,0 +1,3 @@
+package canary
+
+func  Bad( ) {}

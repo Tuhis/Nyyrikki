@@ -77,8 +77,15 @@ exactly one authoritative home.
 
 ## Running the gates before you push
 
-None are defined yet. R1's design doc picks the toolchain, and the PR that
-implements it adds the exact commands here. See `CODE-REVIEW.md` §Gates.
+```sh
+scripts/gates.sh            # every gate
+scripts/gates.sh test       # one gate
+scripts/gates-selftest.sh   # every gate fails on its canary
+```
+
+The tools and their versions are listed in `CODE-REVIEW.md` §Gates; install
+them with `go install` at those versions. The chart gate also needs
+`helm`.
 
 ## Adding a dependency
 

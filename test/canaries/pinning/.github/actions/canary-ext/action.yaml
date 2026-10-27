@@ -1,0 +1,7 @@
+# Planted for the pinning canary: an action.yaml with an unpinned step.
+name: canary-ext
+description: canary
+runs:
+  using: composite
+  steps:
+    - uses: actions/upload-artifact@v4

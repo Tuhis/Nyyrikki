@@ -1,0 +1,11 @@
+# Planted for the pinning canary: "contents: read" only in a comment.
+name: canary-nodefault
+on: push
+permissions:
+  # contents: read
+  actions: read
+jobs:
+  x:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
