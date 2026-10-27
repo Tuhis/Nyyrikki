@@ -112,8 +112,14 @@ func TestChartNoSecretEnv(t *testing.T) {
 		spec := d["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
 		for _, c := range spec["containers"].([]any) {
 			ctr := c.(map[string]any)
-			if _, ok := ctr["env"]; ok {
-				t.Fatal("container has env; credentials must be files (docs/01 D15)")
+			// Credentials are files (docs/01 D15): no env var may take its
+			// value from a Secret.
+			if env, ok := ctr["env"].([]any); ok {
+				for _, e := range env {
+					if vf, ok := e.(map[string]any)["valueFrom"].(map[string]any); ok && vf["secretKeyRef"] != nil {
+						t.Fatalf("env %v takes a Secret", e)
+					}
+				}
 			}
 			if _, ok := ctr["envFrom"]; ok {
 				t.Fatal("container has envFrom")
@@ -185,5 +191,33 @@ func TestChartRefusesNoTelegramID(t *testing.T) {
 		"--kube-version", "1.35.0", "--set", "human.telegramUserID=0").CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "telegramUserID") {
 		t.Fatalf("rendered with telegramUserID 0: %s", out)
+	}
+}
+
+func TestChartTrustedCA(t *testing.T) {
+	deps := kind(render(t, "--set", "trustedCA.configMap=corp-ca"), "Deployment")
+	if len(deps) != 1 {
+		t.Fatalf("%d Deployments", len(deps))
+	}
+	spec := deps[0]["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	ctr := spec["containers"].([]any)[0].(map[string]any)
+	env, _ := ctr["env"].([]any)
+	if len(env) != 1 || env[0].(map[string]any)["value"] != "/etc/ssl/certs:/etc/nyyrikki/trusted-ca" {
+		t.Fatalf("env = %v", ctr["env"])
+	}
+	found := false
+	for _, v := range spec["volumes"].([]any) {
+		if cm, ok := v.(map[string]any)["configMap"].(map[string]any); ok && cm["name"] == "corp-ca" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no trusted-ca volume")
+	}
+	// Without the value, nothing is added.
+	deps = kind(render(t), "Deployment")
+	ctr = deps[0]["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	if _, ok := ctr["env"]; ok {
+		t.Fatalf("env without trustedCA: %v", ctr["env"])
 	}
 }
