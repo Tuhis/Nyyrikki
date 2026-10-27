@@ -19,7 +19,7 @@ canaries=(
   "secret|secrets|nyyrikki-elevation-handle"
   "secret|secrets|nyyrikki-stream-ticket"
   "secret|secrets|github-pat"
-  "chart|chart|Deployment canary is invalid"
+  "chart|chart|\[ERROR\] templates/canary\.yaml"
   "pinning|pinning|not pinned to a SHA"
   "pinning|pinning|canary-write\.yml: top-level permissions grant write"
   "pinning|pinning|canary-nodefault\.yml: no top-level 'permissions: contents: read'"
