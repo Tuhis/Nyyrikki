@@ -588,6 +588,23 @@ func TestRunCutNotAfter(t *testing.T) {
 	h.assertRuntimeEmpty()
 }
 
+// TestRunCutAtExpiryWhenGrantEndsToo: at an elevation's expiry the
+// decision point's own timer also ends the grant's context, at the same
+// instant as the run's deadline. The run was still cut by the expiry, and
+// must say so (found by the e2e test).
+func TestRunCutAtExpiryWhenGrantEndsToo(t *testing.T) {
+	h := newHarness(t, modeExecutable(t, modeSleeper), nil)
+	c := parse(t, []string{"get", "pods"}, nil, false)
+	notAfter := time.Now().Add(500 * time.Millisecond)
+	g := grantFor(t.Context(), "lab", c, func(s *decisiontest.Spec) {
+		s.CoveredBy, s.ElevationID, s.ApprovalID = codes.CoveredElevation, "elv_test", ""
+		s.NotAfter = notAfter
+	})
+	time.AfterFunc(time.Until(notAfter), g.Release) // the elevation's expiry timer
+	_, err := h.runner.Run(g, c, 10*time.Minute)
+	wantCode(t, err, codes.Expired, DetailGrantExpired)
+}
+
 func TestRunCutRealKubectl(t *testing.T) {
 	h := newHarness(t, "", nil)
 	c := parse(t, []string{"get", "--raw", "/raw/slow"}, nil, false)
