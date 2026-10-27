@@ -87,6 +87,17 @@ func New(t testing.TB) *Server {
 	return s
 }
 
+// RotateKey replaces the signing key, keeping the kid.
+func (s *Server) RotateKey(t testing.TB) {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.Key = k
+	s.mu.Unlock()
+}
+
 // Issuer is the issuer URL.
 func (s *Server) Issuer() string { return s.URL }
 
@@ -132,7 +143,10 @@ func (s *Server) jwks(w http.ResponseWriter, r *http.Request) {
 	if s.isDown(w) {
 		return
 	}
-	writeJSON(w, jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &s.Key.PublicKey, KeyID: s.KID, Algorithm: "ES256", Use: "sig"}}})
+	s.mu.Lock()
+	k := s.Key
+	s.mu.Unlock()
+	writeJSON(w, jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &k.PublicKey, KeyID: s.KID, Algorithm: "ES256", Use: "sig"}}})
 }
 
 // Claims are the claims of a token to issue. Zero fields get defaults in
@@ -147,6 +161,8 @@ type Claims struct {
 	Expiry    time.Time
 	NotBefore time.Time
 	NoExpiry  bool
+	// CNF, if set, replaces the cnf claim (JKT is then ignored).
+	CNF map[string]string
 	// Typ is the token type claim; empty means "Bearer", or "DPoP" when
 	// JKT is set, as Keycloak issues access tokens. "-" leaves it out.
 	Typ string
@@ -156,7 +172,10 @@ type Claims struct {
 // fields (issuer, subject, audience, an expiry 5 minutes from now).
 func (s *Server) Token(t testing.TB, c Claims) string {
 	t.Helper()
-	tok, err := s.sign(c, s.Key, s.KID)
+	s.mu.Lock()
+	k := s.Key
+	s.mu.Unlock()
+	tok, err := s.sign(c, k, s.KID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +235,9 @@ func (s *Server) claimsMap(c Claims) map[string]any {
 	if c.JKT != "" {
 		m["cnf"] = map[string]string{"jkt": c.JKT}
 	}
+	if c.CNF != nil {
+		m["cnf"] = c.CNF
+	}
 	return m
 }
 
@@ -239,7 +261,10 @@ func (s *Server) introspect(w http.ResponseWriter, r *http.Request) {
 	tok, err := jwt.ParseSigned(r.FormValue("token"), []jose.SignatureAlgorithm{jose.ES256})
 	var m map[string]any
 	if err == nil {
-		err = tok.Claims(&s.Key.PublicKey, &m)
+		s.mu.Lock()
+		k := s.Key
+		s.mu.Unlock()
+		err = tok.Claims(&k.PublicKey, &m)
 	}
 	if err != nil {
 		writeJSON(w, map[string]any{"active": false})

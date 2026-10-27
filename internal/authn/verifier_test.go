@@ -37,6 +37,7 @@ type fixture struct {
 	v     *authn.Verifier
 	audit *recAudit
 	now   time.Time
+	start time.Time
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -63,6 +64,10 @@ func newFixture(t *testing.T) *fixture {
 		Now:                     func() time.Time { return f.now },
 		Audit:                   f.audit,
 	})
+	// Proofs dated in the first window after start are refused (no replay
+	// across a restart); tests run after it.
+	f.start = f.now
+	f.now = f.now.Add(31 * time.Second)
 	return f
 }
 
@@ -312,5 +317,43 @@ func TestIntrospectMismatch(t *testing.T) {
 	p = authn.NewPrincipalForTest(authn.Principal{ClientID: "claude-code", Subject: "owner-sub", JKT: jkt(t, k)}, tok)
 	if err := f.v.Introspect(context.Background(), p); codes.Of(err) != codes.IntrospectionFailed {
 		t.Fatalf("jkt lost: %v", err)
+	}
+}
+
+// TestProofInRestartWindowRejected: a proof dated up to proofFuture after
+// the process started may have been made before a restart, when the replay
+// cache was another process's; it is refused (found in review of #10, L4).
+func TestProofInRestartWindowRejected(t *testing.T) {
+	f := newFixture(t)
+	k := mustKey(t)
+	tok := f.as.Token(t, authntest.Claims{AZP: "nyyrikki-cli", SID: "s1", JKT: jkt(t, k)})
+	p := proof(t, k, "POST", mcpURL, tok, f.start.Add(20*time.Second))
+	if _, code := f.do(t, req{scheme: "DPoP", token: tok, proofs: []string{p}}); code != 401 {
+		t.Fatalf("proof from the restart window accepted: %d", code)
+	}
+}
+
+// TestOtherConfirmationMethodRejected: a token bound by a cnf method other
+// than jkt (an mTLS x5t#S256) is not treated as unbound (L5).
+func TestOtherConfirmationMethodRejected(t *testing.T) {
+	f := newFixture(t)
+	tok := f.as.Token(t, authntest.Claims{AZP: "claude-code", SID: "s1", CNF: map[string]string{"x5t#S256": "abc"}})
+	if _, code := f.do(t, req{scheme: "Bearer", token: tok}); code != 401 {
+		t.Fatalf("token bound by another method accepted as Bearer: %d", code)
+	}
+}
+
+// TestRemovedKeyStopsVerifying: the cached key set has a maximum age, so a
+// key removed from the authorization server stops verifying tokens (L6).
+func TestRemovedKeyStopsVerifying(t *testing.T) {
+	f := newFixture(t)
+	tok := f.as.Token(t, authntest.Claims{AZP: "claude-code", SID: "s1", Expiry: f.now.Add(3 * time.Hour)})
+	if _, code := f.do(t, req{scheme: "Bearer", token: tok}); code != 200 {
+		t.Fatalf("first use: %d", code)
+	}
+	f.as.RotateKey(t) // same kid, new key: the old one is gone
+	f.now = f.now.Add(2 * time.Hour)
+	if _, code := f.do(t, req{scheme: "Bearer", token: tok}); code != 401 {
+		t.Fatalf("token signed by a removed key still accepted: %d", code)
 	}
 }

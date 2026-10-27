@@ -62,6 +62,10 @@ type Config struct {
 	Now                     func() time.Time
 	Audit                   audit.Appender
 	Logger                  *slog.Logger
+	// RestartWindow is how long after start proofs are refused, so none
+	// made before a restart can be replayed; zero means proofFuture.
+	// Only tests shorten it.
+	RestartWindow time.Duration
 }
 
 // Verifier checks tokens and proofs and introspects sessions.
@@ -164,6 +168,11 @@ func (v *Verifier) Authenticate(r *http.Request, wantHTU string) (*Principal, er
 
 	jkt := ""
 	if c.CNF != nil {
+		// A token bound by any other method (an mTLS x5t#S256) can't be
+		// checked here, and must not pass as unbound.
+		if c.CNF.JKT == "" {
+			return nil, fail("cnf without jkt")
+		}
 		jkt = c.CNF.JKT
 	}
 	// Which DPoP rule applies is decided by the token's claims, never by
@@ -297,7 +306,15 @@ func (v *Verifier) verifyProof(r *http.Request, token, jkt, wantHTU string) erro
 	if iat.Before(now.Add(-proofPast)) || iat.After(now.Add(proofFuture)) {
 		return fail("proof: iat outside the window")
 	}
-	if iat.Before(v.start) {
+	// A proof dated before start, or up to proofFuture after it, may have
+	// been made before a restart, when the replay cache was another
+	// process's: refuse it. Calls in the first seconds after a start fail
+	// closed and are retried.
+	window := v.cfg.RestartWindow
+	if window <= 0 {
+		window = proofFuture
+	}
+	if iat.Before(v.start.Add(window)) {
 		return fail("proof: iat before the process started")
 	}
 	if subtle.ConstantTimeCompare([]byte(c.ATH), []byte(dpop.ATH(token))) != 1 {
@@ -314,7 +331,9 @@ func (v *Verifier) verifyProof(r *http.Request, token, jkt, wantHTU string) erro
 		return fail("proof: jti")
 	}
 	// Checked last, so only proofs that are otherwise valid take a slot.
-	if err := v.replays.add(c.JTI, now, now.Add(proofPast+proofFuture)); err != nil {
+	// Remembered until its iat leaves the window, measured on the same
+	// clock as the iat check.
+	if err := v.replays.add(c.JTI, now, iat.Add(proofPast+time.Second)); err != nil {
 		return fail("proof: %v", err)
 	}
 	return nil

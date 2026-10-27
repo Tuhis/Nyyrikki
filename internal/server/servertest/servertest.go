@@ -168,7 +168,9 @@ func Start(t *testing.T, opts ...Option) *Env {
 			Version: "test", AuditOut: e.Audit, Executable: exe,
 			Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 			AuthHTTPClient: e.AS.Client(),
-			Ready:          func(net.Addr, net.Addr) { close(ready) },
+			// The DPoP restart window is tested in internal/authn.
+			DPoPRestartWindow: time.Nanosecond,
+			Ready:             func(net.Addr, net.Addr) { close(ready) },
 		})
 	}()
 	select {
@@ -338,9 +340,18 @@ func (f *FakeAPIServer) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	pod := func(name string) map[string]any {
 		return map[string]any{"apiVersion": "v1", "kind": "Pod",
-			"metadata": map[string]any{"name": name, "namespace": "shop", "uid": "u-" + name, "creationTimestamp": "2026-10-26T00:00:00Z"}}
+			"metadata": map[string]any{"name": name, "namespace": "shop", "uid": "u-" + name, "creationTimestamp": "2026-10-26T00:00:00Z"},
+			"spec":     map[string]any{"containers": []any{map[string]any{"name": "app", "image": "x"}}}}
 	}
 	switch {
+	case strings.HasSuffix(r.URL.Path, "/log"):
+		// A log that follows forever: one line, then nothing.
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintln(w, "partial-log-line")
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+		<-r.Context().Done()
 	case r.URL.Path == "/version":
 		fmt.Fprintf(w, `{"major":"1","minor":%q,"gitVersion":"v1.%s.0"}`, minor, minor)
 	case r.URL.Path == "/api":

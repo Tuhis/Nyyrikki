@@ -46,6 +46,9 @@ type Options struct {
 	// KubeServiceAccountDir overrides the in-cluster credential directory
 	// (tests).
 	KubeServiceAccountDir string
+	// DPoPRestartWindow shortens the window after start in which DPoP
+	// proofs are refused (tests; zero keeps the default, docs/01 D9).
+	DPoPRestartWindow time.Duration
 }
 
 // Run starts nyyrikkid and blocks until ctx ends or a listener fails.
@@ -96,6 +99,7 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 		Now:                     o.Now,
 		Audit:                   aw,
 		Logger:                  log,
+		RestartWindow:           o.DPoPRestartWindow,
 	})
 
 	if err := telegram.Migrate(ctx, db); err != nil {

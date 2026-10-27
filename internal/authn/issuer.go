@@ -46,10 +46,11 @@ type issuer struct {
 	client *http.Client
 	now    func() time.Time
 
-	mu        sync.Mutex
-	meta      *discovery
-	keys      *jose.JSONWebKeySet
-	lastFetch time.Time
+	mu          sync.Mutex
+	meta        *discovery
+	keys        *jose.JSONWebKeySet
+	lastFetch   time.Time
+	lastAttempt time.Time
 }
 
 func newIssuer(issuerURL string, client *http.Client, now func() time.Time) *issuer {
@@ -107,18 +108,33 @@ func isLoopback(u *url.URL) bool {
 
 var errNoKey = errors.New("no matching key")
 
-// key returns the verification key with the given kid, refetching the key
-// set at most once a minute when the kid is unknown (docs/02 D2).
+// maxKeyAge bounds how long a fetched key set is trusted: a key removed
+// from the authorization server stops verifying within it.
+const maxKeyAge = time.Hour
+
+// key returns the verification key with the given kid. The key set is
+// refetched when it is older than maxKeyAge, or when the kid is unknown,
+// and attempts (failed ones included) are made at most once a minute
+// (docs/02 D2).
 func (i *issuer) key(ctx context.Context, kid string) (*jose.JSONWebKey, error) {
-	if k := i.cached(kid); k != nil {
-		return k, nil
+	i.mu.Lock()
+	fresh := !i.lastFetch.IsZero() && i.now().Sub(i.lastFetch) < maxKeyAge
+	recent := !i.lastAttempt.IsZero() && i.now().Sub(i.lastAttempt) < time.Minute
+	i.mu.Unlock()
+	if fresh {
+		if k := i.cached(kid); k != nil {
+			return k, nil
+		}
+	}
+	if recent {
+		if fresh {
+			return nil, errNoKey
+		}
+		return nil, errors.New("key set expired and refetch rate-limited")
 	}
 	i.mu.Lock()
-	recent := !i.lastFetch.IsZero() && i.now().Sub(i.lastFetch) < time.Minute
+	i.lastAttempt = i.now()
 	i.mu.Unlock()
-	if recent {
-		return nil, errNoKey
-	}
 	m, err := i.metadata(ctx)
 	if err != nil {
 		return nil, err
