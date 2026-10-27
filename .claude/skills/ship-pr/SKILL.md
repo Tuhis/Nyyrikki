@@ -89,6 +89,20 @@ Wait for events. Don't spin:
 - Otherwise, run `gh pr checks <N> --watch --interval 60` in the
   background and get notified when it exits. Then read the comments.
 
+Each time you wake, collect **everything new** before changing anything,
+then fix it all in one batch, so one push follows one round of findings:
+
+```sh
+gh pr checks <N>                                          # check states for the head SHA
+gh api --paginate repos/{owner}/{repo}/pulls/<N>/comments   # inline review comments
+gh api --paginate repos/{owner}/{repo}/issues/<N>/comments  # summary + @claude replies
+gh api graphql -f query='query{repository(owner:"Tuhis",name:"Nyyrikki"){pullRequest(number:<N>){
+  reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved comments(first:20){nodes{author{login} body path line}}}}}}}'
+```
+
+If `hasNextPage` is true, a thread may be missing from the list. Stop and
+report rather than merge on a partial list.
+
 ### Waited 30 minutes? Investigate, don't keep waiting
 
 A wake is not guaranteed: a watch fires on events, and a stuck check or a
@@ -125,20 +139,6 @@ then act on what you find:
 
 Tell the user what you found and what you did, then start a new 30-minute
 timer. A second stall of the same kind is a hand-back (§ *Stop and hand back*).
-
-Each time you wake, collect **everything new** before changing anything,
-then fix it all in one batch, so one push follows one round of findings:
-
-```sh
-gh pr checks <N>                                          # check states for the head SHA
-gh api --paginate repos/{owner}/{repo}/pulls/<N>/comments   # inline review comments
-gh api --paginate repos/{owner}/{repo}/issues/<N>/comments  # summary + @claude replies
-gh api graphql -f query='query{repository(owner:"Tuhis",name:"Nyyrikki"){pullRequest(number:<N>){
-  reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved comments(first:20){nodes{author{login} body path line}}}}}}}'
-```
-
-If `hasNextPage` is true, a thread may be missing from the list. Stop and
-report rather than merge on a partial list.
 
 ### CI failures
 
