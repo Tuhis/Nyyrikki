@@ -7,6 +7,8 @@ image:
   tag: ""
   digest: ""
   pullPolicy: IfNotPresent
+  # Secrets for a private registry, e.g. [{name: ghcr-pull}].
+  pullSecrets: []
 
 # Nyyrikki's canonical https URL, as agents reach it (docs/01 D9, D10).
 canonicalURL: ""

@@ -9,7 +9,9 @@
    to the bot, then read it back with the token:
 
    ```sh
-   curl -s "https://api.telegram.org/bot$(cat bot-token)/getUpdates" | grep -o '"from":{"id":[0-9]*'
+   # The URL goes on stdin, so the token isn't in curl's argv.
+   printf 'url = "https://api.telegram.org/bot%s/getUpdates"\n' "$(cat bot-token)" \
+     | curl -s -K - | grep -o '"from":{"id":[0-9]*'
    ```
 
    Put the number in the chart's `human.telegramUserID`. Do this before

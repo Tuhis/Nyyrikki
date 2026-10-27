@@ -142,13 +142,36 @@ func TestChartRequiresValues(t *testing.T) {
 // TestChartTwoInClusterTargets: the ServiceAccount token is mounted when
 // any target is in-cluster, however many are (found in review of #11).
 func TestChartTwoInClusterTargets(t *testing.T) {
-	objs := render(t, "--set", "targets[0].name=a", "--set", "targets[0].inCluster=true",
-		"--set", "targets[1].name=b", "--set", "targets[1].inCluster=true")
-	for _, d := range kind(objs, "Deployment") {
-		spec := d["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
-		if spec["automountServiceAccountToken"] != true {
-			t.Fatalf("automountServiceAccountToken = %v with two in-cluster targets", spec["automountServiceAccountToken"])
+	for name, c := range map[string]struct {
+		set  []string
+		want bool
+	}{
+		"two in-cluster": {[]string{"--set", "targets[0].name=a", "--set", "targets[0].inCluster=true",
+			"--set", "targets[1].name=b", "--set", "targets[1].inCluster=true"}, true},
+		// Least privilege: no in-cluster target, no token.
+		"remote only": {[]string{"--set", "targets[0].inCluster=false", "--set", "targets[0].server=https://lab0.example.com",
+			"--set", "targets[0].secretName=s"}, false},
+	} {
+		deps := kind(render(t, c.set...), "Deployment")
+		if len(deps) != 1 {
+			t.Fatalf("%s: %d Deployments", name, len(deps))
 		}
+		spec := deps[0]["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		if spec["automountServiceAccountToken"] != c.want {
+			t.Errorf("%s: automountServiceAccountToken = %v, want %v", name, spec["automountServiceAccountToken"], c.want)
+		}
+	}
+}
+
+func TestChartPullSecrets(t *testing.T) {
+	deps := kind(render(t, "--set", "image.pullSecrets[0].name=ghcr-pull"), "Deployment")
+	if len(deps) != 1 {
+		t.Fatalf("%d Deployments", len(deps))
+	}
+	spec := deps[0]["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	ps, _ := spec["imagePullSecrets"].([]any)
+	if len(ps) != 1 || ps[0].(map[string]any)["name"] != "ghcr-pull" {
+		t.Fatalf("imagePullSecrets = %v", spec["imagePullSecrets"])
 	}
 }
 

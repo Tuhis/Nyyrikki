@@ -18,6 +18,9 @@ spec:
         {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
     spec:
       serviceAccountName: {{ include "nyyrikki.name" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
       automountServiceAccountToken: {{ eq (include "nyyrikki.inCluster" .) "true" }}
       enableServiceLinks: false
       securityContext:

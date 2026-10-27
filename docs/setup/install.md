@@ -42,6 +42,18 @@ networkPolicy:
 helm install nyyrikki deploy/chart/nyyrikki -n nyyrikki -f values.yaml
 ```
 
+Pin the image by digest: each release lists it in its notes and in the
+`IMAGE` asset (`image.digest` in values). If the image is in a private
+registry, or the GHCR package hasn't been made public yet (a new GHCR
+package is private), create a pull Secret and list it in
+`image.pullSecrets`.
+
+If an Ingress or Gateway fronts Nyyrikki, add its controller's namespace
+(for example `ingress-nginx`) to `networkPolicy.ingressNamespaces`, or the
+NetworkPolicy drops its traffic. With `networkPolicy.egress.restrict`, the
+in-cluster API server usually has to be allowed by its endpoint IPs
+(`kubectl get endpoints kubernetes`), not the `kubernetes` Service IP.
+
 The chart grants Nyyrikki's ServiceAccount only `impersonate` on the
 human's user and groups (docs/06 D3). Requests then run with the human's
 own rights.
