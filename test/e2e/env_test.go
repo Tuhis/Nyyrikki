@@ -38,9 +38,9 @@ import (
 )
 
 const (
-	clusterName   = "nyyrikki-e2e"
-	keycloakName  = "nyyrikki-e2e-keycloak"
-	fakebotName   = "nyyrikki-e2e-fakebot"
+	clusterName  = "nyyrikki-e2e"
+	keycloakName = "nyyrikki-e2e-keycloak"
+	fakebotName  = "nyyrikki-e2e-fakebot"
 	// A docker network of our own, with a configured subnet: docker pins
 	// a container's address (--ip) only on such a network, and the network
 	// kind makes for itself may not have one (it doesn't on GitHub's
