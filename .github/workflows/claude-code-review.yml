@@ -10,6 +10,11 @@ concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Default for every job; jobs widen it only where they need to
+# (docs/01 D18).
+permissions:
+  contents: read
+
 jobs:
   claude-review:
     # Only review PRs from branches in this repo, opened by someone with write
