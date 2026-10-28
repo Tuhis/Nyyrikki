@@ -72,6 +72,9 @@ jobs:
               -o "dist/nyyrikki-$os-$arch" ./cmd/nyyrikki
           done; done
           helm package deploy/chart/nyyrikki --version "$VERSION" --app-version "$VERSION" -d dist
+          # Also as an OCI chart, for GitOps installs by version (docs/06 D6).
+          printf '%s' "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          helm push "dist/nyyrikki-$VERSION.tgz" oci://ghcr.io/tuhis/charts
           # The image digest, so the chart's image.digest can be pinned
           # (docs/06 D6). Line 1: the full reference; line 2: the value for
           # image.digest.

@@ -39,8 +39,11 @@ networkPolicy:
 ```
 
 ```sh
-helm install nyyrikki deploy/chart/nyyrikki -n nyyrikki -f values.yaml
+helm install nyyrikki oci://ghcr.io/tuhis/charts/nyyrikki --version <version> -n nyyrikki -f values.yaml
 ```
+
+The chart is also attached to each release as `nyyrikki-<version>.tgz`, and is in
+`deploy/chart/nyyrikki` in the repository at the release tag.
 
 Pin the image by digest: each release lists it in its notes and in the
 `IMAGE` asset. Set `image.digest` to the `sha256:…` part only (the
