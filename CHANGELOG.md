@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/Tuhis/Nyyrikki/compare/v0.1.0...v0.2.0) (2026-10-28)
+
+
+### Features
+
+* **deploy:** publish the chart to oci://ghcr.io/tuhis/charts ([#22](https://github.com/Tuhis/Nyyrikki/issues/22)) ([bf3c382](https://github.com/Tuhis/Nyyrikki/commit/bf3c3820a5acc0470ea5452e258f913da34ae3cc))
+
 ## 0.1.0 (2026-10-27)
 
 
