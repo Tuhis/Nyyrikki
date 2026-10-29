@@ -322,6 +322,10 @@ func TestEndToEnd(t *testing.T) {
 		e.checkLoginMCP(t)
 	})
 
+	step(t, "OD17: an offline MCP harness survives sign-out and ends on revoke", func(t *testing.T) {
+		e.checkOffline(t, next)
+	})
+
 	step(t, "a session ended in Keycloak is denied at once", func(t *testing.T) {
 		e.admin(t, "POST", "/admin/realms/"+realm+"/users/"+e.ownerID+"/logout", nil)
 		before := len(e.tg.Sent(t))
