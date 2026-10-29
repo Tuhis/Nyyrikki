@@ -116,6 +116,19 @@ the doc.
   (through its audience-resolve mapper), so a resource that requires a
   single audience refuses every token. Remove the scope from the clients.
   ([docs/01](01-foundations.md) M9)
+- **A client registered through DCR gets the realm's default scopes**,
+  not the ones a client set up by hand has. Take `roles` and
+  `offline_access` out of the realm's defaults, or every registered client
+  gets them. ([docs/01](01-foundations.md) M9)
+- **Keycloak requires PKCE in the device grant for a client with PKCE
+  set**, which the pkce-enforcer client policy does for every registered
+  client: without `code_challenge` the device authorization request fails
+  with `Missing parameter: code_challenge_method`. Send PKCE there too.
+  ([docs/01](01-foundations.md) M9)
+- **Any registered confidential client gets a client-credentials token
+  carrying your audience.** Its `sub` is a service account; only a check
+  of `sub` against the human registry refuses it. Never accept a token on
+  audience alone. ([docs/01](01-foundations.md) M9, D8)
 
 **MCP**
 
