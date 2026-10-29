@@ -151,6 +151,15 @@ the doc.
   zero-byte file, but `ssh-keygen -k -u` refuses it ("invalid magic
   number"), so revoking a key fails exactly when it is needed. Create
   it with `ssh-keygen -k -f <file>`. ([docs/07](07-ssh-target.md) M17)
+- **A sudo command outlives its SSH session unless logind kills the
+  session.** sudo's child stays in the session's scope, but by default
+  logind leaves the scope running after logout. `KillOnlyUsers=` does
+  nothing without `KillUserProcesses=yes`, and the kill waits for the
+  scope's `TimeoutStopSec` (90 s) before `KILL`.
+  ([docs/07](07-ssh-target.md) M18)
+- **A writable principals file fails as "Certificate does not contain an
+  authorized principal"**, with "bad ownership or modes" only in the
+  line before. Write it with `umask 022`. ([docs/07](07-ssh-target.md) M19)
 
 **Tooling and dependencies**
 
