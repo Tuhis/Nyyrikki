@@ -155,6 +155,17 @@ func (e *env) adminClient(t *testing.T, clientID string) map[string]any {
 	return cs[0]
 }
 
+// redact drops the credentials a registration answer carries, for logging.
+func redact(out map[string]any) map[string]any {
+	r := map[string]any{}
+	for k, v := range out {
+		if k != "client_secret" && k != "registration_access_token" {
+			r[k] = v
+		}
+	}
+	return r
+}
+
 func attr(c map[string]any, k string) string {
 	a, _ := c["attributes"].(map[string]any)
 	s, _ := a[k].(string)
@@ -357,26 +368,24 @@ func (e *env) checkRegistration(t *testing.T) {
 	code, out := e.register(t, map[string]any{
 		"client_name": "ropc", "grant_types": []string{"password"}, "token_endpoint_auth_method": "none",
 	})
-	t.Logf("M9 registration asking for the password grant: %d %v", code, out)
+	t.Logf("M9 registration asking for the password grant: %d %v", code, redact(out))
 	// The setup doc says such a registration succeeds and gets no token:
 	// pin both, so a change in Keycloak shows up here.
 	id, _ := out["client_id"].(string)
 	if code != http.StatusCreated || id == "" {
 		t.Fatalf("registration asking for the password grant: %d %v", code, out)
 	}
-	{
-		if st, tok := e.token(t, url.Values{"grant_type": {"password"}, "client_id": {id}, "username": {ownerUser},
-			"password": {ownerPassword}, "scope": {"nyyrikki"}}); tok != "" {
-			t.Fatalf("a registered client got a token by the password grant (%d)", st)
-		}
+	if st, tok := e.token(t, url.Values{"grant_type": {"password"}, "client_id": {id}, "username": {ownerUser},
+		"password": {ownerPassword}, "scope": {"nyyrikki"}}); tok != "" {
+		t.Fatalf("a registered client got a token by the password grant (%d)", st)
 	}
 
 	// Client credentials give a service account's token, whose sub is no
-	// human in the registry: Nyyrikki refuses it, if Keycloak issues it.
+	// human in the registry: Nyyrikki refuses it for that reason.
 	code, out = e.register(t, map[string]any{
 		"client_name": "service", "grant_types": []string{"client_credentials"}, "token_endpoint_auth_method": "client_secret_basic",
 	})
-	t.Logf("M9 registration asking for client credentials: %d %v", code, out)
+	t.Logf("M9 registration asking for client credentials: %d %v", code, redact(out))
 	// docs/gotchas.md: such a client gets a token carrying Nyyrikki's
 	// audience, and only the human registry refuses it. Pin both.
 	id, _ = out["client_id"].(string)
@@ -391,6 +400,11 @@ func (e *env) checkRegistration(t *testing.T) {
 	t.Logf("M9 client-credentials token: aud=%v sub=%v", claims(tok)["aud"], claims(tok)["sub"])
 	if st := e.mcpStatus(t, tok); st != http.StatusUnauthorized {
 		t.Fatalf("a service account's token reached /mcp: %d", st)
+	}
+	// ... refused by the registry, not by chance (docs/gotchas.md).
+	logs := e.kubectl(t, "-n", namespace, "logs", "deploy/nyyrikki-nyyrikki", "--since=2m")
+	if !strings.Contains(logs, `"subject not in the human registry"`) {
+		t.Fatal("no auth_failed record saying the service account isn't in the human registry")
 	}
 }
 

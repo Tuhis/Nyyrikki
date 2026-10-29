@@ -421,6 +421,8 @@ func TestDeviceGrantWrongVerifier(t *testing.T) {
 	}
 	json.NewDecoder(resp.Body).Decode(&da)
 	resp.Body.Close()
+	// Wrong, then right: the fake keeps a device code after a failed
+	// verifier (whether Keycloak does isn't measured).
 	for _, v := range []struct {
 		verifier string
 		ok       bool
@@ -430,9 +432,13 @@ func TestDeviceGrantWrongVerifier(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		var tr struct {
+			Error string `json:"error"`
+		}
+		json.NewDecoder(resp.Body).Decode(&tr)
 		resp.Body.Close()
-		if (resp.StatusCode == http.StatusOK) != v.ok {
-			t.Fatalf("verifier %q: %s", v.verifier, resp.Status)
+		if (resp.StatusCode == http.StatusOK) != v.ok || (!v.ok && tr.Error != "invalid_grant") {
+			t.Fatalf("verifier %q: %s %s", v.verifier, resp.Status, tr.Error)
 		}
 	}
 }
