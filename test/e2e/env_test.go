@@ -347,6 +347,7 @@ func (e *env) configureKeycloak(t *testing.T) {
 		t.Fatalf("owner user not found")
 	}
 	e.ownerID = users[0].ID
+	e.configureDCR(t)
 }
 
 func (e *env) adminLogin(t *testing.T) string {

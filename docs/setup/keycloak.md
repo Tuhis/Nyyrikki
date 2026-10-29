@@ -44,18 +44,54 @@ Clients → Create:
 
 ## Dynamic Client Registration, for MCP harnesses
 
-Clients → Client registration → Anonymous access policies:
+MCP harnesses register their own client (docs/01 D25, OD16), anonymously,
+so anyone who can reach Keycloak can register one. A registration alone
+grants nothing: a token still needs the owner's sign-in and consent, and
+Nyyrikki accepts only the human in its registry. The settings below are
+measured by the e2e test (`test/e2e`, docs/01 M9).
 
-- **Trusted Hosts**: off for host checks, but keep "Client URIs Must Match".
-- Allowed redirect URIs: loopback only (`http://127.0.0.1/*`,
-  `http://localhost/*`).
+**What a registered client gets.** It gets the realm's default scopes:
+Client scopes → set `roles` and `offline_access` to **None** (not Default
+or Optional) and `nyyrikki` to **Optional**.
+
+**Anonymous access policies** (Clients → Client registration):
+
+- **Trusted Hosts**: "Host Sending Client Registration Request Must
+  Match" **off**, "Client URIs Must Match" **on**, Trusted Hosts
+  `localhost` and `127.0.0.1`. Redirect URIs then have to be on loopback,
+  so a sign-in's code can only go back to the machine it started on.
 - **Allowed Client Scopes**: add `nyyrikki`.
-- Leave the default "Consent Required" policy on; the owner sees each new
-  client.
+- Leave **Consent Required** on (the owner sees each new client by name)
+  and **Max Clients** as it is.
 
-Each harness sign-in and each `nyyrikki login --mcp` registers its own
-client (docs/01 OD16). `login --mcp` asks for the device grant; allow it
-in the registration policies.
+**PKCE for every client** (docs/01 D7). Realm settings → Client
+policies:
+
+- Profiles → Create `nyyrikki-pkce`, executor **pkce-enforcer** with
+  Auto-configure on.
+- Policies → Create `nyyrikki-pkce`, condition **any-client**, profile
+  `nyyrikki-pkce`.
+
+Registered clients then get PKCE S256 set, and Keycloak refuses their
+authorization requests without it. It requires PKCE in their device grant
+too, which the CLI sends from the first release after 0.2.0. Older CLIs
+fail there with `Missing parameter: code_challenge_method`: in
+`nyyrikki login --mcp`, and, not measured, in `nyyrikki login` too if
+`nyyrikki-cli` is saved in the admin console after the policy exists
+(auto-configure runs when a client is created or updated).
+
+**Expose registration only where your agents are.** If Keycloak is on the
+internet but your agents aren't, allow
+`/realms/<realm>/clients-registrations/` only from your own networks at
+the proxy in front of Keycloak.
+
+What the e2e test found that the policies don't stop, and why it is safe:
+
+- A registered client may ask for the password grant; Keycloak issues it
+  no token.
+- A registered confidential client gets a client-credentials token with
+  Nyyrikki's audience. Its `sub` is a service account, not a human in the
+  registry, so Nyyrikki answers 401.
 
 ## The introspection client
 

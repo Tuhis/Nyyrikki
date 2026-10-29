@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -39,6 +40,10 @@ type Server struct {
 	// AutoApprove approves every device code as it is created (the human
 	// signs in at once).
 	AutoApprove bool
+	// RequirePKCE makes the device grant require PKCE with S256, as
+	// Keycloak does for a client whose PKCE method is set (it sets it on
+	// every registered client under a pkce-enforcer client policy).
+	RequirePKCE bool
 	// Now is the clock for issued tokens.
 	Now func() time.Time
 
@@ -52,8 +57,9 @@ type Server struct {
 }
 
 type device struct {
-	clientID string
-	approved bool
+	clientID  string
+	approved  bool
+	challenge string // S256 code challenge, if one was sent
 }
 
 type session struct {
@@ -289,9 +295,14 @@ func (s *Server) deviceAuth(w http.ResponseWriter, r *http.Request) {
 	if s.isDown(w) {
 		return
 	}
+	challenge, method := r.FormValue("code_challenge"), r.FormValue("code_challenge_method")
+	if (s.RequirePKCE || challenge != "") && (challenge == "" || method != "S256") {
+		oauthError(w, "invalid_request", "Missing parameter: code_challenge_method")
+		return
+	}
 	code := randString()
 	s.mu.Lock()
-	s.devices[code] = &device{clientID: r.FormValue("client_id"), approved: s.AutoApprove}
+	s.devices[code] = &device{clientID: r.FormValue("client_id"), approved: s.AutoApprove, challenge: challenge}
 	s.mu.Unlock()
 	writeJSON(w, map[string]any{
 		"device_code": code, "user_code": "ABCD-EFGH",
@@ -361,6 +372,13 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		if !d.approved {
 			oauthError(w, "authorization_pending", "")
 			return
+		}
+		if d.challenge != "" {
+			sum := sha256.Sum256([]byte(r.FormValue("code_verifier")))
+			if base64.RawURLEncoding.EncodeToString(sum[:]) != d.challenge {
+				oauthError(w, "invalid_grant", "PKCE verification failed")
+				return
+			}
 		}
 		s.mu.Lock()
 		delete(s.devices, r.FormValue("device_code"))
