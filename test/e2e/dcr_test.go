@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -373,7 +374,7 @@ func (e *env) checkRegistration(t *testing.T) {
 	// pin both, so a change in Keycloak shows up here.
 	id, _ := out["client_id"].(string)
 	if code != http.StatusCreated || id == "" {
-		t.Fatalf("registration asking for the password grant: %d %v", code, out)
+		t.Fatalf("registration asking for the password grant: %d %v", code, redact(out))
 	}
 	if st, tok := e.token(t, url.Values{"grant_type": {"password"}, "client_id": {id}, "username": {ownerUser},
 		"password": {ownerPassword}, "scope": {"nyyrikki"}}); tok != "" {
@@ -391,20 +392,28 @@ func (e *env) checkRegistration(t *testing.T) {
 	id, _ = out["client_id"].(string)
 	sec, _ := out["client_secret"].(string)
 	if code != http.StatusCreated || id == "" || sec == "" {
-		t.Fatalf("registration asking for client credentials: %d %v", code, out)
+		t.Fatalf("registration asking for client credentials: %d %v", code, redact(out))
 	}
 	_, tok := e.token(t, url.Values{"grant_type": {"client_credentials"}, "scope": {"nyyrikki"}}, id, sec)
 	if tok == "" || claims(tok)["aud"] != e.canonical+"/mcp" {
 		t.Fatalf("client-credentials token: issued=%v aud=%v", tok != "", claims(tok)["aud"])
 	}
 	t.Logf("M9 client-credentials token: aud=%v sub=%v", claims(tok)["aud"], claims(tok)["sub"])
+	// ... refused by the registry, not by chance (docs/gotchas.md): this
+	// request must add a record with that reason.
+	const reason = `"subject not in the human registry"`
+	count := func() int {
+		return strings.Count(e.kubectl(t, "-n", namespace, "logs", "deploy/nyyrikki-nyyrikki"), reason)
+	}
+	before := count()
 	if st := e.mcpStatus(t, tok); st != http.StatusUnauthorized {
 		t.Fatalf("a service account's token reached /mcp: %d", st)
 	}
-	// ... refused by the registry, not by chance (docs/gotchas.md).
-	logs := e.kubectl(t, "-n", namespace, "logs", "deploy/nyyrikki-nyyrikki", "--since=2m")
-	if !strings.Contains(logs, `"subject not in the human registry"`) {
-		t.Fatal("no auth_failed record saying the service account isn't in the human registry")
+	for try := 0; count() <= before; try++ {
+		if try == 10 {
+			t.Fatal("no auth_failed record saying the service account isn't in the human registry")
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
