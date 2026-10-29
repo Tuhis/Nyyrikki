@@ -164,6 +164,11 @@ the doc.
   default**, about 2 h on Linux, so a session (and whatever runs in it)
   outlives a network partition by that long. Set `ClientAliveInterval`
   and `ClientAliveCountMax`. ([docs/07](07-ssh-target.md) M21)
+- **A heredoc cut off by end of file still runs its command.** bash only
+  warns ("delimited by end-of-file"), dash says nothing, so a truncated
+  `curl | sh` with data after the command acts on part of the data. End
+  the data with a line the command checks, such as a count.
+  ([docs/07](07-ssh-target.md) M23)
 
 **Tooling and dependencies**
 
