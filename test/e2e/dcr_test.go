@@ -97,8 +97,8 @@ func (e *env) configureDCR(t *testing.T) {
 	}
 
 	// PKCE with S256 for every client, registered ones included (docs/01
-	// D7: OAuth 2.1 with PKCE). The device grant has no authorization
-	// request, so the CLI is unaffected.
+	// D7: OAuth 2.1 with PKCE). Keycloak then requires PKCE in the device
+	// grant too for a client with PKCE set; the CLI sends it.
 	e.admin(t, "PUT", r+"/client-policies/profiles", map[string]any{"profiles": []any{map[string]any{
 		"name": "nyyrikki-pkce", "description": "PKCE with S256",
 		"executors": []any{map[string]any{"executor": "pkce-enforcer", "configuration": map[string]any{"auto-configure": "true"}}},
@@ -319,8 +319,9 @@ func (e *env) checkRegistration(t *testing.T) {
 	c := e.adminClient(t, a)
 	t.Logf("M9 registered harness: publicClient=%v consentRequired=%v pkce=%q device=%q",
 		c["publicClient"], c["consentRequired"], attr(c, "pkce.code.challenge.method"), attr(c, "oauth2.device.authorization.grant.enabled"))
-	if c["publicClient"] != true || c["consentRequired"] != true {
-		t.Fatalf("registered harness: publicClient=%v consentRequired=%v", c["publicClient"], c["consentRequired"])
+	if c["publicClient"] != true || c["consentRequired"] != true || attr(c, "pkce.code.challenge.method") != "S256" {
+		t.Fatalf("registered harness: publicClient=%v consentRequired=%v pkce=%q",
+			c["publicClient"], c["consentRequired"], attr(c, "pkce.code.challenge.method"))
 	}
 
 	// A redirect off loopback is refused: a sign-in could hand the code to
@@ -357,7 +358,13 @@ func (e *env) checkRegistration(t *testing.T) {
 		"client_name": "ropc", "grant_types": []string{"password"}, "token_endpoint_auth_method": "none",
 	})
 	t.Logf("M9 registration asking for the password grant: %d %v", code, out)
-	if id, _ := out["client_id"].(string); code < 300 && id != "" {
+	// The setup doc says such a registration succeeds and gets no token:
+	// pin both, so a change in Keycloak shows up here.
+	id, _ := out["client_id"].(string)
+	if code != http.StatusCreated || id == "" {
+		t.Fatalf("registration asking for the password grant: %d %v", code, out)
+	}
+	{
 		if st, tok := e.token(t, url.Values{"grant_type": {"password"}, "client_id": {id}, "username": {ownerUser},
 			"password": {ownerPassword}, "scope": {"nyyrikki"}}); tok != "" {
 			t.Fatalf("a registered client got a token by the password grant (%d)", st)
@@ -370,14 +377,20 @@ func (e *env) checkRegistration(t *testing.T) {
 		"client_name": "service", "grant_types": []string{"client_credentials"}, "token_endpoint_auth_method": "client_secret_basic",
 	})
 	t.Logf("M9 registration asking for client credentials: %d %v", code, out)
-	if id, _ := out["client_id"].(string); code < 300 && id != "" {
-		sec, _ := out["client_secret"].(string)
-		if _, tok := e.token(t, url.Values{"grant_type": {"client_credentials"}, "scope": {"nyyrikki"}}, id, sec); tok != "" {
-			t.Logf("M9 client-credentials token: aud=%v sub=%v", claims(tok)["aud"], claims(tok)["sub"])
-			if st := e.mcpStatus(t, tok); st != http.StatusUnauthorized {
-				t.Fatalf("a service account's token reached /mcp: %d", st)
-			}
-		}
+	// docs/gotchas.md: such a client gets a token carrying Nyyrikki's
+	// audience, and only the human registry refuses it. Pin both.
+	id, _ = out["client_id"].(string)
+	sec, _ := out["client_secret"].(string)
+	if code != http.StatusCreated || id == "" || sec == "" {
+		t.Fatalf("registration asking for client credentials: %d %v", code, out)
+	}
+	_, tok := e.token(t, url.Values{"grant_type": {"client_credentials"}, "scope": {"nyyrikki"}}, id, sec)
+	if tok == "" || claims(tok)["aud"] != e.canonical+"/mcp" {
+		t.Fatalf("client-credentials token: issued=%v aud=%v", tok != "", claims(tok)["aud"])
+	}
+	t.Logf("M9 client-credentials token: aud=%v sub=%v", claims(tok)["aud"], claims(tok)["sub"])
+	if st := e.mcpStatus(t, tok); st != http.StatusUnauthorized {
+		t.Fatalf("a service account's token reached /mcp: %d", st)
 	}
 }
 

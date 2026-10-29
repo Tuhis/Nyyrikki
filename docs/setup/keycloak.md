@@ -74,8 +74,11 @@ policies:
 
 Registered clients then get PKCE S256 set, and Keycloak refuses their
 authorization requests without it. It requires PKCE in their device grant
-too, which `nyyrikki login --mcp` sends from 0.2.1 on; older CLIs fail
-there with `Missing parameter: code_challenge_method`.
+too, which the CLI sends from the first release after 0.2.0. Older CLIs
+fail there with `Missing parameter: code_challenge_method`: in
+`nyyrikki login --mcp`, and, not measured, in `nyyrikki login` too if
+`nyyrikki-cli` is saved in the admin console after the policy exists
+(auto-configure runs when a client is created or updated).
 
 **Expose registration only where your agents are.** If Keycloak is on the
 internet but your agents aren't, allow

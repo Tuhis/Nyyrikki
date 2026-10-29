@@ -2,8 +2,11 @@ package server_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -396,6 +399,40 @@ func TestDeviceGrantPKCE(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "login.json")
 		if _, err := client.SignIn(context.Background(), client.LoginOptions{Server: e.URL(), CAFile: e.CAFile, Path: path, MCP: mcp, ClientName: "test"}); err != nil {
 			t.Fatalf("login (mcp=%v) against an AS requiring PKCE: %v", mcp, err)
+		}
+	}
+}
+
+// TestDeviceGrantWrongVerifier: the test authorization server's PKCE
+// check isn't vacuous: a device code issued for one challenge gives no
+// token for another verifier.
+func TestDeviceGrantWrongVerifier(t *testing.T) {
+	e := servertest.Start(t)
+	e.AS.AutoApprove = true
+	hc := e.AS.Client()
+	sum := sha256.Sum256([]byte("right-verifier"))
+	resp, err := hc.PostForm(e.AS.URL+"/device", url.Values{"client_id": {"dcr-x"},
+		"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var da struct {
+		DeviceCode string `json:"device_code"`
+	}
+	json.NewDecoder(resp.Body).Decode(&da)
+	resp.Body.Close()
+	for _, v := range []struct {
+		verifier string
+		ok       bool
+	}{{"wrong-verifier", false}, {"right-verifier", true}} {
+		resp, err := hc.PostForm(e.AS.URL+"/token", url.Values{"grant_type": {"urn:ietf:params:oauth:grant-type:device_code"},
+			"device_code": {da.DeviceCode}, "client_id": {"dcr-x"}, "code_verifier": {v.verifier}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if (resp.StatusCode == http.StatusOK) != v.ok {
+			t.Fatalf("verifier %q: %s", v.verifier, resp.Status)
 		}
 	}
 }

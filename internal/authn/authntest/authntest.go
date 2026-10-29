@@ -369,16 +369,16 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 			oauthError(w, "invalid_grant", "unknown device code")
 			return
 		}
+		if !d.approved {
+			oauthError(w, "authorization_pending", "")
+			return
+		}
 		if d.challenge != "" {
 			sum := sha256.Sum256([]byte(r.FormValue("code_verifier")))
 			if base64.RawURLEncoding.EncodeToString(sum[:]) != d.challenge {
 				oauthError(w, "invalid_grant", "PKCE verification failed")
 				return
 			}
-		}
-		if !d.approved {
-			oauthError(w, "authorization_pending", "")
-			return
 		}
 		s.mu.Lock()
 		delete(s.devices, r.FormValue("device_code"))
