@@ -322,7 +322,7 @@ func TestEndToEnd(t *testing.T) {
 		e.checkLoginMCP(t)
 	})
 
-	step(t, "OD17: an offline MCP harness survives sign-out and ends on revoke", func(t *testing.T) {
+	step(t, "OD17: an offline MCP harness outlives its browser session and ends on revoke or sign-out", func(t *testing.T) {
 		e.checkOffline(t, next)
 	})
 

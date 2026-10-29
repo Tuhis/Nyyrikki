@@ -574,13 +574,13 @@ func runVia(t *testing.T, cs *mcp.ClientSession, reason string) (*mcp.CallToolRe
 	return r, string(raw)
 }
 
-// checkOffline is an MCP harness holding an offline session, as Claude
-// Code's own sign-in asks for (docs/01 OD17): it stays one agent across
-// refreshes, outlives the owner signing out, and ends when its client's
-// access is revoked (docs/setup/keycloak.md, Revoking an agent).
-func (e *env) checkOffline(t *testing.T, next func() int) {
+// offlineHarness registers a harness asking for offline_access, as Claude
+// Code does, and signs it in; it returns the client ID, an access token
+// and the offline refresh token.
+func (e *env) offlineHarness(t *testing.T, name string) (string, string, string) {
+	t.Helper()
 	code, out := e.register(t, map[string]any{
-		"client_name": "offline harness", "redirect_uris": []string{loopback},
+		"client_name": name, "redirect_uris": []string{loopback},
 		"grant_types": []string{"authorization_code", "refresh_token"}, "response_types": []string{"code"},
 		"token_endpoint_auth_method": "none", "scope": "nyyrikki offline_access",
 	})
@@ -592,13 +592,23 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 	if claims(rt)["typ"] != "Offline" {
 		t.Fatalf("refresh token type %v, want Offline", claims(rt)["typ"])
 	}
+	return id, at, rt
+}
+
+// checkOffline is an MCP harness holding an offline session (docs/01
+// OD17): it stays one agent across refreshes, outlives the browser session
+// it signed in through, and ends when its client's access is revoked or
+// the owner is signed out (docs/setup/keycloak.md, Revoking an agent).
+func (e *env) checkOffline(t *testing.T, next func() int) {
+	users := "/admin/realms/" + realm + "/users/" + e.ownerID
+	id, at, rt := e.offlineHarness(t, "offline harness")
 	sid := claims(at)["sid"]
 	at2, rt2 := e.refresh(t, id, rt)
 	if at2 == "" || claims(at2)["sid"] != sid || claims(at2)["aud"] != e.canonical+"/mcp" {
 		t.Fatalf("offline refresh: issued=%v sid %v -> %v aud=%v", at2 != "", sid, claims(at2)["sid"], claims(at2)["aud"])
 	}
 
-	// Nyyrikki takes it: a run reaches the approver.
+	// Nyyrikki takes it: a run reaches the approver and runs.
 	ch := make(chan string, 1)
 	go func() { _, raw := runVia(t, e.mcpSession(t, at2), "offline harness"); ch <- raw }()
 	e.tap(t, next(), "Approve")
@@ -606,21 +616,28 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 		t.Fatalf("run as the offline harness: %s", raw)
 	}
 
-	// Signing the owner out doesn't end an offline session ...
-	e.admin(t, "POST", "/admin/realms/"+realm+"/users/"+e.ownerID+"/logout", nil)
+	// Ending the browser session it signed in through leaves it working.
+	var sessions []struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(e.admin(t, "GET", users+"/sessions", nil), &sessions)
+	for _, ss := range sessions {
+		e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+ss.ID, nil)
+	}
+	t.Logf("OD17: ended %d browser sessions", len(sessions))
 	at3, rt3 := e.refresh(t, id, rt2)
 	if at3 == "" {
-		t.Fatal("the owner signing out ended the offline session; docs/setup/keycloak.md says it doesn't")
+		t.Fatal("ending the browser session ended the offline session too")
 	}
 	ch = make(chan string, 1)
-	go func() { _, raw := runVia(t, e.mcpSession(t, at3), "after sign-out"); ch <- raw }()
+	go func() { _, raw := runVia(t, e.mcpSession(t, at3), "after the browser session ended"); ch <- raw }()
 	e.tap(t, next(), "Deny")
 	if raw := <-ch; !strings.Contains(raw, "denied") {
-		t.Fatalf("offline harness after the owner signed out: %s", raw)
+		t.Fatalf("offline harness after its browser session ended: %s", raw)
 	}
 
-	// ... removing its client's access does, at once.
-	e.admin(t, "DELETE", "/admin/realms/"+realm+"/users/"+e.ownerID+"/consents/"+url.PathEscape(id), nil)
+	// Removing its client's access ends it at once ...
+	e.admin(t, "DELETE", users+"/consents/"+url.PathEscape(id), nil)
 	if a, _ := e.refresh(t, id, rt3); a != "" {
 		t.Fatal("an offline token still refreshes after its client's access was revoked")
 	}
@@ -628,6 +645,17 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 	r, raw := runVia(t, e.mcpSession(t, at3), "after revoke")
 	if !r.IsError || !strings.Contains(raw, "session_inactive") {
 		t.Fatalf("offline harness after revoke: %s", raw)
+	}
+
+	// ... and so does signing the owner out, for every harness.
+	id2, at4, rt4 := e.offlineHarness(t, "second offline harness")
+	e.admin(t, "POST", users+"/logout", nil)
+	if a, _ := e.refresh(t, id2, rt4); a != "" {
+		t.Fatal("an offline token still refreshes after the owner was signed out")
+	}
+	r, raw = runVia(t, e.mcpSession(t, at4), "after sign-out")
+	if !r.IsError || !strings.Contains(raw, "session_inactive") {
+		t.Fatalf("offline harness after the owner was signed out: %s", raw)
 	}
 	if len(e.tg.Sent(t)) != before {
 		t.Fatal("a revoked harness reached the approver")

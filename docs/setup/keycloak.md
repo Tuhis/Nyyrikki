@@ -119,14 +119,16 @@ by the chart's `secrets.introspection`.
 
 ## Revoking an agent
 
-- **An MCP harness** (it may hold an offline session, docs/01 OD17):
+- **One MCP harness** (it may hold an offline session, docs/01 OD17):
   Users → the owner → Consents → **Revoke** its client, or, as the owner,
-  the account console's Applications → **Remove access**. That ends its
-  offline session. Signing the browser session out does **not**.
+  the account console's Applications → **Remove access**. Signing out
+  only the browser session it signed in through (its row under Sessions)
+  does **not** end it.
 - **A CLI login** (no offline session): Users → the owner → Sessions →
-  sign the session out.
+  sign its session out.
+- **Every agent at once**: Users → the owner → **Sign out**. That ends the
+  owner's offline sessions too.
 
 Nyyrikki introspects on every run and elevate, so the agent is cut off at
-once (docs/01 OD13). To cut every agent off, revoke every consent and sign
-the sessions out, or set Realm settings → Sessions → Revocation → **Set to
-now**, which invalidates every token issued before it.
+once (docs/01 OD13). The e2e test measures each of these on Keycloak
+26.8.1.
