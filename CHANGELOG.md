@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/Tuhis/Nyyrikki/compare/v0.2.0...v0.2.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **cli:** send PKCE in the device grant, and measure DCR for MCP harnesses (docs/01 M9) ([#26](https://github.com/Tuhis/Nyyrikki/issues/26)) ([a442cdb](https://github.com/Tuhis/Nyyrikki/commit/a442cdb675a7433a233894f99b6a476dddca7033))
+
 ## [0.2.0](https://github.com/Tuhis/Nyyrikki/compare/v0.1.0...v0.2.0) (2026-10-28)
 
 
