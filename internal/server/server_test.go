@@ -384,6 +384,22 @@ func TestMCPHeadersLogin(t *testing.T) {
 	}
 }
 
+// TestDeviceGrantPKCE: Keycloak requires PKCE in the device grant for a
+// client whose PKCE method is set, which a pkce-enforcer client policy
+// does for every registered client. Both logins send S256 PKCE, so both
+// work there (found by the e2e test of docs/01 M9).
+func TestDeviceGrantPKCE(t *testing.T) {
+	e := servertest.Start(t)
+	e.AS.AutoApprove = true
+	e.AS.RequirePKCE = true
+	for _, mcp := range []bool{false, true} {
+		path := filepath.Join(t.TempDir(), "login.json")
+		if _, err := client.SignIn(context.Background(), client.LoginOptions{Server: e.URL(), CAFile: e.CAFile, Path: path, MCP: mcp, ClientName: "test"}); err != nil {
+			t.Fatalf("login (mcp=%v) against an AS requiring PKCE: %v", mcp, err)
+		}
+	}
+}
+
 // TestTelegramConflictKeepsServingAndDenies: a 409 from getUpdates means
 // another poller has the token. Nyyrikki stops polling for good but keeps
 // serving, so /readyz can report it, and denies every escalation until it

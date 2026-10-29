@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -287,7 +289,12 @@ func SignIn(ctx context.Context, o LoginOptions) (*Login, error) {
 		}
 	}
 
-	form := url.Values{"client_id": {l.ClientID}, "scope": {strings.Join(rm.ScopesSupported, " ")}}
+	// PKCE with S256 (docs/01 D7). Keycloak requires it in the device
+	// grant too for a client whose PKCE method is set, as its pkce-enforcer
+	// client policy does for every registered client.
+	verifier, challenge := pkcePair()
+	form := url.Values{"client_id": {l.ClientID}, "scope": {strings.Join(rm.ScopesSupported, " ")},
+		"code_challenge": {challenge}, "code_challenge_method": {"S256"}}
 	var da struct {
 		DeviceCode              string `json:"device_code"`
 		UserCode                string `json:"user_code"`
@@ -314,9 +321,10 @@ func SignIn(ctx context.Context, o LoginOptions) (*Login, error) {
 		case <-time.After(interval):
 		}
 		err := l.tokenRequest(ctx, hc, url.Values{
-			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
-			"device_code": {da.DeviceCode},
-			"client_id":   {l.ClientID},
+			"grant_type":    {"urn:ietf:params:oauth:grant-type:device_code"},
+			"device_code":   {da.DeviceCode},
+			"client_id":     {l.ClientID},
+			"code_verifier": {verifier},
 		}, o.Now)
 		var oe *oauthError
 		if errors.As(err, &oe) && oe.Code == "authorization_pending" {
@@ -335,6 +343,15 @@ func SignIn(ctx context.Context, o LoginOptions) (*Login, error) {
 		return nil, err
 	}
 	return l, nil
+}
+
+// pkcePair is a PKCE code verifier and its S256 challenge (RFC 7636).
+func pkcePair() (verifier, challenge string) {
+	b := make([]byte, 32)
+	rand.Read(b)
+	verifier = base64.RawURLEncoding.EncodeToString(b)
+	sum := sha256.Sum256([]byte(verifier))
+	return verifier, base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func register(ctx context.Context, hc *http.Client, endpoint, name string) (string, error) {
