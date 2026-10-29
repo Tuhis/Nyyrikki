@@ -141,6 +141,16 @@ the doc.
   sudo. Send a `signal` request first, and `TERM` rather than `KILL`:
   `KILL` kills `sudo` itself and leaves its child running.
   ([docs/07](07-ssh-target.md) M10, M11)
+- **`AuthorizedKeysFile none` doesn't turn off a global
+  `AuthorizedKeysCommand`**, such as EC2 Instance Connect's. To leave
+  an account only to certificates, a `Match User` block also needs
+  `AuthorizedKeysCommand none` and `AuthenticationMethods publickey`
+  (and hostbased, GSSAPI and keyboard-interactive off). Check the result
+  with `sshd -T -C user=…`. ([docs/07](07-ssh-target.md) M16)
+- **An "empty" `RevokedKeys` file must be a real KRL.** sshd accepts a
+  zero-byte file, but `ssh-keygen -k -u` refuses it ("invalid magic
+  number"), so revoking a key fails exactly when it is needed. Create
+  it with `ssh-keygen -k -f <file>`. ([docs/07](07-ssh-target.md) M17)
 
 **Tooling and dependencies**
 

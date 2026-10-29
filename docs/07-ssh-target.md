@@ -92,6 +92,8 @@ container. SH5 turns the same checks into `test/ssh-host`.
 | M13 | `ssh` joins its command arguments with single spaces and sends one string, which the remote user's shell interprets | ssh(1); OpenSSH `ssh.c` | Re-read; confirmed. D1 |
 | M14 | Debian 12+, Ubuntu 22.04+ and RHEL 9+ ship `Include /etc/ssh/sshd_config.d/*.conf` as the first line of `sshd_config`, so a drop-in's settings win over the main file's for keywords where the first value counts | distribution defaults | **Not yet measured** on each distribution. SH5 measures it before the script relies on it |
 | M15 | RHEL-family sudo with `Defaults requiretty` refuses a command without a TTY unless `!requiretty` applies to the user | sudoers(5) | **Not yet measured**. SH5 |
+| M16 | `AuthorizedKeysFile none` in the `Match User` block does **not** turn off a global `AuthorizedKeysCommand` (as EC2 Instance Connect images set): a plain key the command returns logs in to the Nyyrikki account. Adding `AuthenticationMethods publickey`, `AuthorizedKeysCommand none`, `KbdInteractiveAuthentication no`, `HostbasedAuthentication no` and `GSSAPIAuthentication no` to the block refuses it, certificates still work, and `sshd -T -C user=<account>,…` shows each value. On a build without GSSAPI (Alpine's), `GSSAPIAuthentication` logs "Unsupported option" and `sshd -t` still passes | global `AuthorizedKeysCommand` that prints the client's key; plain key and certificate with each block, 2026-10-29 (review of #25) | Confirmed. D3, §5.7 steps 4 and 6 |
+| M17 | `ssh-keygen -k -u -f <file>` refuses a zero-byte file ("KRL file has invalid magic number"), though sshd accepts one as `RevokedKeys`. `ssh-keygen -k -f <file>` with no keys writes a valid empty KRL (44 bytes) that sshd accepts and `-u` then extends; `ssh-keygen -Q` reports the added key as revoked | as stated, 2026-10-29 (review of #25) | Confirmed. §5.6, §5.7 step 2 |
 
 ## 3. Owner decisions
 
@@ -110,7 +112,7 @@ container. SH5 turns the same checks into `test/ssh-host`.
 |---|---|---|
 | D1 | **The request** is `args` and optional `stdin`, as for kubectl (docs/04 D1). `args` is joined with single spaces into one **command string**, as `ssh` does (M13); that string is the canonical request. It is sent to the host as one `exec` request and the remote account's shell interprets it. `args` may be empty only for an interactive run, which then asks for a login shell. The command string is at most 16 KiB; it may contain tab and newline, and any other C0 or C1 control character, or NUL, is `invalid_request`. | 1:1 with what agents already type after `ssh host`. The string is the request: there is no argv on the host side to put in canonical form, so the approver judges the string, and Nyyrikki guarantees that exactly that string runs (INV-02). Control characters could make the displayed string differ from what the shell reads. |
 | D2 | **What the approver sees, what the approval binds to and what runs are one value**: the command string, stdin, the interactive flag, the target and the remote account. The digest is docs/04 §5.3's with the prefix `nyyrikki-ssh-request-v1` and those fields, length-prefixed. The command is shown in `<pre>` with docs/04 §5.2's escapes for bidi and zero-width characters; stdin is never shown: only `‹stdin: N bytes, sha256:<first 12 hex>, not shown›` (OD6). Nothing is redacted from the command string; a secret typed into it reaches Telegram and the audit log, as docs/04 D14 already accepts for positional arguments. | INV-02; docs/05 D5. A shell command has no structure to find a secret in. |
-| D3 | **One dedicated account per human per host**, `ny-<human id>`, created by the setup (§5.7): password field `*` (M7), a home directory, `/bin/sh`, and an `sshd` `Match User` block with `AuthorizedKeysFile none` and `PasswordAuthentication no` (M8), so only a certificate reaches it, whatever is later written to its home. Nyyrikki never logs in to an existing account. The account has no groups and no sudo unless the setup gave them (D7). The name comes from the human registry, never from the request. Human IDs used with SSH targets are at most 29 characters, so the name fits Linux's 32. | OD1. INV-05: the target sees the human. Because the account is Nyyrikki's alone, what it can do is exactly what the setup gave it, and nothing reaches it outside Nyyrikki. |
+| D3 | **One dedicated account per human per host**, `ny-<human id>`, created by the setup (§5.7): password field `*` (M7), a home directory, `/bin/sh`, and an `sshd` `Match User` block that leaves only Nyyrikki's certificates: `AuthenticationMethods publickey`, `AuthorizedKeysFile none`, `AuthorizedKeysCommand none`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `HostbasedAuthentication no`, `GSSAPIAuthentication no` (M8, M16). So no keys file, keys command (a global one, as EC2 Instance Connect sets, included), `.shosts`, `.k5login` or PAM prompt reaches it, whatever is later written to its home or the main config. *Revised 2026-10-29 (review of #25)*: the block first held only `AuthorizedKeysFile none` and `PasswordAuthentication no`, which a global `AuthorizedKeysCommand` gets past (M16). Nyyrikki never logs in to an existing account. The account has no groups and no sudo unless the setup gave them (D7). The name comes from the human registry, never from the request. Human IDs used with SSH targets are at most 29 characters, so the name fits Linux's 32. | OD1. INV-05: the target sees the human. Because the account is Nyyrikki's alone, what it can do is exactly what the setup gave it, and nothing reaches it outside Nyyrikki. |
 | D4 | **Host side of the trust**: `TrustedUserCAKeys` holds Nyyrikki's user CA public key (several during rotation); `AuthorizedPrincipalsFile /etc/ssh/nyyrikki/principals/%u`; `RevokedKeys /etc/ssh/nyyrikki/revoked.krl`. The principals file of `ny-<human>` holds one line: `restrict,pty,from="<source addresses>" nyyrikki:<human id>@<target name>`. | M2, M3, M6. Principals are namespaced, so another CA the host trusts can't produce one by accident, and include the target, so a certificate for one host doesn't work on another. `restrict` and `from=` are enforced by the host even if Nyyrikki issues a wider certificate. |
 | D5 | **One certificate per run**, over an ed25519 key pair generated in memory for that run and never written down: type user; principal `nyyrikki:<human id>@<target name>`; key ID `nyyrikki:<run_id>`; a random 64-bit serial; valid from now − 60 s to now + 2 min; critical option `source-address` = `ssh.source_addresses`; extensions: only `permit-pty`, and only for an interactive run. Run ID and serial go into the audit record. | `CLAUDE.md`: issued credentials scoped as narrowly and living as briefly as works, inside Nyyrikki. sshd checks the certificate only at login, so 2 min covers the handshake, not the run. M4, M5, M12: the host's log ties the login to Nyyrikki's audit. |
 | D6 | **The user CA private key** is an ed25519 OpenSSH key in a Secret, mounted as the file `ssh.user_ca_key_file`, read on each use (docs/06 D4), never logged. Rotation: add the new public key to the hosts' `TrustedUserCAKeys`, replace the Secret, then remove the old key. Nyyrikki doesn't generate it (§5.6). | docs/01 D15. The CA key is the credential with the widest blast radius in this doc: every principal every host lists. |
@@ -267,8 +269,10 @@ container log, which the agents can read (docs/01 OD7).
 **After a leak**, revoke first, then rotate:
 
 1. On every host, add the leaked public key to the revocation list
-   (`ssh-keygen -k -u -f /etc/ssh/nyyrikki/revoked.krl old-user-ca.pub`).
-   Every certificate it signed is refused at once (M6), Nyyrikki's
+   (`ssh-keygen -k -u -f /etc/ssh/nyyrikki/revoked.krl old-user-ca.pub`;
+   the setup wrote a valid empty KRL for this, M17, and
+   `ssh-keygen -Q -f /etc/ssh/nyyrikki/revoked.krl old-user-ca.pub`
+   confirms it). Every certificate it signed is refused at once (M6), Nyyrikki's
    included: SSH runs fail closed until step 2.
 2. Create a new key pair, put it into the Secret and make it the only
    key in `user_ca_public_keys`, roll out, and re-run the setup command
@@ -289,20 +293,27 @@ steps:
    other than Nyyrikki's own. If any check fails, stop, and point at the
    manual steps: an existing CA setup has to be merged by a person.
 2. Write `/etc/ssh/nyyrikki/user_ca.pub` (every key of `user_ca_public_keys`),
-   `/etc/ssh/nyyrikki/revoked.krl` (empty, unless one exists), and
+   `/etc/ssh/nyyrikki/revoked.krl` (unless one exists: a valid empty KRL
+   from `ssh-keygen -k -f` with no keys, never a zero-byte file, which
+   §5.6's `-u` would refuse, M17), and
    `/etc/ssh/nyyrikki/principals/ny-<human>` (D4).
 3. Create `ny-<human>` (D3) if it doesn't exist. If it exists and its
    GECOS field isn't `nyyrikki`, stop: Nyyrikki never takes over an
    account it didn't create.
 4. Write `/etc/ssh/sshd_config.d/50-nyyrikki.conf`: the three keywords
-   of D4 and one `Match User` block per Nyyrikki account (D3).
+   of D4 and one `Match User` block per Nyyrikki account, with every
+   keyword of D3.
 5. If the target has `sudo: true`: write the sudoers file of D7 to a
    temporary path, `visudo -cf` it, install it with mode 0440. Otherwise
    remove it if a previous run wrote one. The host gets sudo exactly
    when the target says so, so the message's sudo marker (D12) matches
    what the setup did.
-6. `sshd -t`; if it fails, restore every file from step 2–5 and stop.
-   Otherwise reload sshd.
+6. `sshd -t`, then `sshd -T -C user=ny-<human>,host=<host>,addr=<a
+   source address>` for each account: the effective values must be D3's
+   (`authenticationmethods publickey`, `authorizedkeyscommand none`, and
+   so on) and D4's three. This catches a main config whose own values
+   win over the drop-in's. If either fails, restore every file from steps 2–5 and
+   stop. Otherwise reload sshd.
 7. Print the target's `host_keys` entry with the host's own public keys
    from `/etc/ssh/ssh_host_*_key.pub` and their fingerprints.
 
@@ -418,7 +429,7 @@ on the target are refused until then (§5.5).
 | G5 No `env` request is sent; `pty-req` only for interactive runs, with a validated `TERM` | `TestSSHRunRequests` (in-process server records the requests) |
 | G6 A cut sends `TERM`, then `KILL` after 2 s, then closes; the remote command, run with and without sudo, is gone afterwards | `TestSSHCut` (unit); e2e against an OpenSSH container |
 | G7 End to end: an approved command runs as `ny-<human>` with sudo, the host's log shows key ID `nyyrikki:<run_id>`, and the result returns; a denied one never connects | e2e: Nyyrikki in kind, an OpenSSH container set up by the script |
-| G8 The setup script: refuses each bad input and each failed check of §5.7 without changing a file; `sshd -t` failure rolls back; re-running is idempotent; `--uninstall` leaves no file; plain keys can't reach `ny-<human>` | `test/ssh-host`: the script run in Debian, Ubuntu and Rocky containers |
+| G8 The setup script: refuses each bad input and each failed check of §5.7 without changing a file; `sshd -t` failure rolls back; re-running is idempotent; `--uninstall` leaves no file; no plain key reaches `ny-<human>`, through its `authorized_keys` or through a global `AuthorizedKeysCommand`; the revocation list it writes takes §5.6's `ssh-keygen -k -u` | `test/ssh-host`: the script run in Debian, Ubuntu and Rocky containers |
 | G9 The manual steps and the script produce the same files | `test/ssh-host`: a check that the files the script writes match the manual page's listing |
 | G10 Messages show the account, the address, the sudo marker and the interactive marker; stdin appears only as size and hash with its warning, never as content (a marker secret on stdin is absent from every message) | `TestRenderSSH*` (docs/05 TG2's tests extended) |
 | G11 An elevation covers an SSH target as it does a Kubernetes one, and an interactive session under it is cut at expiry | `TestElevation*` with an SSH target; e2e |
