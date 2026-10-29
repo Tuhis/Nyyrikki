@@ -126,8 +126,11 @@ by the chart's `secrets.introspection`.
   does **not** end it.
 - **A CLI login** (no offline session): Users → the owner → Sessions →
   sign its session out.
-- **Every agent at once**: Users → the owner → **Sign out**. That ends the
-  owner's offline sessions too.
+- **Every agent at once**: Realm settings → Sessions → Revocation → **Set
+  to now**, which refuses every token issued before it, offline ones
+  included, so every agent signs in again. Users → the owner → **Sign
+  out** is not enough for MCP harnesses: it ended an offline session in
+  one run of the e2e test and not in another.
 
 Nyyrikki introspects on every run and elevate, so the agent is cut off at
 once (docs/01 OD13). The e2e test measures each of these on Keycloak
