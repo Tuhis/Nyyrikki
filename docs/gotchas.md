@@ -129,6 +129,19 @@ the doc.
   `.mcp.json`'s `headersHelper`.** Name the helper's variables
   accordingly. ([docs/01](01-foundations.md) M14)
 
+**OpenSSH and sudo**
+
+- **sshd without PAM refuses an account whose password field is `!`**,
+  even for a certificate or key login ("User not allowed because account
+  is locked"). Alpine's `adduser -D` writes `!`. Use `*` for an account
+  that must have no password but still log in.
+  ([docs/07](07-ssh-target.md) M7)
+- **Closing an SSH connection doesn't stop a command run without a
+  PTY**: it is reparented to init and keeps running, as root under
+  sudo. Send a `signal` request first, and `TERM` rather than `KILL`:
+  `KILL` kills `sudo` itself and leaves its child running.
+  ([docs/07](07-ssh-target.md) M10, M11)
+
 **Tooling and dependencies**
 
 - **`gopkg.in/yaml.v3` has been unmaintained since 2022.** Use
