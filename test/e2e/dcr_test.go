@@ -56,13 +56,20 @@ func (e *env) configureDCR(t *testing.T) {
 		}
 	}
 	json.Unmarshal(e.admin(t, "GET", r+"/default-optional-client-scopes", nil), &opts)
+	optional := map[string]bool{}
 	for _, s := range opts {
 		if s.Name == "roles" {
 			e.admin(t, "DELETE", r+"/default-optional-client-scopes/"+s.ID, nil)
 		}
+		optional[s.Name] = true
 	}
-	e.admin(t, "PUT", r+"/default-optional-client-scopes/"+id["nyyrikki"], nil)
-	e.admin(t, "PUT", r+"/default-optional-client-scopes/"+id["offline_access"], nil)
+	// A new realm already offers offline_access as optional; adding a
+	// scope that is there is a 409.
+	for _, n := range []string{"nyyrikki", "offline_access"} {
+		if !optional[n] {
+			e.admin(t, "PUT", r+"/default-optional-client-scopes/"+id[n], nil)
+		}
+	}
 	// Offline sessions capped (OD17; the owner's deployment uses a year).
 	e.admin(t, "PUT", r, map[string]any{"offlineSessionMaxLifespanEnabled": true, "offlineSessionMaxLifespan": 31536000})
 
