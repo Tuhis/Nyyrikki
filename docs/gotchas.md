@@ -160,6 +160,10 @@ the doc.
 - **A writable principals file fails as "Certificate does not contain an
   authorized principal"**, with "bad ownership or modes" only in the
   line before. Write it with `umask 022`. ([docs/07](07-ssh-target.md) M19)
+- **sshd notices a vanished client only through TCP keepalive by
+  default**, about 2 h on Linux, so a session (and whatever runs in it)
+  outlives a network partition by that long. Set `ClientAliveInterval`
+  and `ClientAliveCountMax`. ([docs/07](07-ssh-target.md) M21)
 
 **Tooling and dependencies**
 

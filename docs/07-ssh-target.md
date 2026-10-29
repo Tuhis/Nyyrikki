@@ -99,6 +99,8 @@ container. SH5 turns the same checks into `test/ssh-host`.
 | M18 | On a systemd host whose sshd uses PAM with `pam_systemd` (Debian 13: systemd 257, OpenSSH 10.0p2, sudo 1.9.16p2), a command run through sudo stays in the SSH session's scope (`session-N.scope`), root processes included: sudo's PAM stack doesn't move it. By default the scope outlives the connection ("logged out. Waiting for processes to exit"), and a sudo command that ignores `TERM` keeps running. With logind's `KillUserProcesses=yes` and `KillOnlyUsers=ny-owner`, closing the connection stops the scope: `TERM` to every process in it, then `KILL` after the scope's `TimeoutStopSec` (gone after 92 s by default; after 6 s with a `session-.scope.d` drop-in setting `TimeoutStopSec=5s`). A `setsid nohup` process started under sudo is gone too. `KillOnlyUsers` without `KillUserProcesses=yes` kills nothing | Debian 13 container running systemd; Go probe started `sudo -n sh -c 'trap "" TERM HUP INT; …'` and closed the connection; `ps` and the journal, 2026-10-29 (review of #25) | Confirmed. D11, §5.7 step 6 |
 | M19 | sshd's `StrictModes` refuses a group- or world-writable principals file or directory ("bad ownership or modes"), and the login then fails as "Certificate does not contain an authorized principal" | a principals file written with umask 0 | Confirmed. §5.7: the script sets `umask 022` and explicit modes |
 | M20 | `AuthorizedKeysCommand none` without `AuthorizedKeysCommandUser` logs `error: No user for AuthorizedKeysCommand specified, skipping` on every login; adding `AuthorizedKeysCommandUser nobody` silences it | Debian 13, as stated | Confirmed. D3 |
+| M21 | With `ClientAliveInterval 5` and `ClientAliveCountMax 3` in the `Match User` block, a network partition ends the session on the host ("Timeout, client not responding") about 15 s in, and with session kill (M18) a sudo command that ignores `TERM` was gone 23 s into the partition. Without them, sshd waits for TCP keepalive (about 2 h on Linux by default) | Debian 13 container with session kill; `docker network disconnect` while the probe held the session open, 2026-10-29 (review of #25) | Confirmed. D3, D11 |
+| M22 | A file that ends with `main "$@" <<'NYYRIKKI_VALUES_END'`, then data lines, then the terminator, run piped into `dash` or `bash`, gives `main` the data lines on stdin and never executes them; with `main` ending in `exit`, a line after the terminator never runs. The checksum of the file up to and including the `main` line equals that of the body alone | ran good, injected (`$(…)` in a value) and trailing-code variants in `debian:trixie`, 2026-10-29 (review of #25) | Confirmed. D16, §5.7 |
 
 ## 3. Owner decisions
 
@@ -117,7 +119,7 @@ container. SH5 turns the same checks into `test/ssh-host`.
 |---|---|---|
 | D1 | **The request** is `args` and optional `stdin`, as for kubectl (docs/04 D1). `args` is joined with single spaces into one **command string**, as `ssh` does (M13); that string is the canonical request. It is sent to the host as one `exec` request and the remote account's shell interprets it. `args` may be empty only for an interactive run, which then asks for a login shell. The command string is at most 16 KiB; it may contain tab and newline, and any other C0 or C1 control character, or NUL, is `invalid_request`. | 1:1 with what agents already type after `ssh host`. The string is the request: there is no argv on the host side to put in canonical form, so the approver judges the string, and Nyyrikki guarantees that exactly that string runs (INV-02). Control characters could make the displayed string differ from what the shell reads. |
 | D2 | **What the approver sees, what the approval binds to and what runs are one value**: the command string, stdin, the interactive flag, the target and the remote account. The digest is docs/04 §5.3's with the prefix `nyyrikki-ssh-request-v1` and those fields, length-prefixed. The command is shown in `<pre>` with docs/04 §5.2's escapes for bidi and zero-width characters; stdin is never shown: only `‹stdin: N bytes, sha256:<first 12 hex>, not shown›` (OD6). Nothing is redacted from the command string; a secret typed into it reaches Telegram and the audit log, as docs/04 D14 already accepts for positional arguments. | INV-02; docs/05 D5. A shell command has no structure to find a secret in. |
-| D3 | **One dedicated account per human per host**, `ny-<human id>`, created by the setup (§5.7): password field `*` (M7), a home directory, `/bin/sh`, and an `sshd` `Match User` block that leaves only Nyyrikki's certificates: `AuthenticationMethods publickey`, `AuthorizedKeysFile none`, `AuthorizedKeysCommand none` (with `AuthorizedKeysCommandUser nobody`, M20), `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `HostbasedAuthentication no`, `GSSAPIAuthentication no` (M8, M16). So no keys file, keys command (a global one, as EC2 Instance Connect sets, included), `.shosts`, `.k5login` or PAM prompt reaches it, whatever is later written to its home or the main config. *Revised 2026-10-29 (review of #25)*: the block first held only `AuthorizedKeysFile none` and `PasswordAuthentication no`, which a global `AuthorizedKeysCommand` gets past (M16). Nyyrikki never logs in to an existing account. The account has no groups and no sudo unless the setup gave them (D7). The name comes from the human registry, never from the request. Human IDs used with SSH targets are at most 29 characters, so the name fits Linux's 32. | OD1. INV-05: the target sees the human. Because the account is Nyyrikki's alone, what it can do is exactly what the setup gave it, and nothing reaches it outside Nyyrikki. |
+| D3 | **One dedicated account per human per host**, `ny-<human id>`, created by the setup (§5.7): password field `*` (M7), a home directory, `/bin/sh`, and an `sshd` `Match User` block that leaves only Nyyrikki's certificates: `AuthenticationMethods publickey`, `AuthorizedKeysFile none`, `AuthorizedKeysCommand none` (with `AuthorizedKeysCommandUser nobody`, M20), `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `HostbasedAuthentication no`, `GSSAPIAuthentication no` (M8, M16); and `ClientAliveInterval 5` with `ClientAliveCountMax 3`, so the host ends a session within about 15 s of losing Nyyrikki (M21). So no keys file, keys command (a global one, as EC2 Instance Connect sets, included), `.shosts`, `.k5login` or PAM prompt reaches it, whatever is later written to its home or the main config. *Revised 2026-10-29 (review of #25)*: the block first held only `AuthorizedKeysFile none` and `PasswordAuthentication no`, which a global `AuthorizedKeysCommand` gets past (M16); the client-alive settings were added the same day, for a cut during a network partition (M21). Nyyrikki never logs in to an existing account. The account has no groups and no sudo unless the setup gave them (D7). The name comes from the human registry, never from the request. Human IDs used with SSH targets are at most 29 characters, so the name fits Linux's 32. | OD1. INV-05: the target sees the human. Because the account is Nyyrikki's alone, what it can do is exactly what the setup gave it, and nothing reaches it outside Nyyrikki. |
 | D4 | **Host side of the trust**: `TrustedUserCAKeys` holds Nyyrikki's user CA public key (several during rotation); `AuthorizedPrincipalsFile /etc/ssh/nyyrikki/principals/%u`; `RevokedKeys /etc/ssh/nyyrikki/revoked.krl`. The principals file of `ny-<human>` holds one line: `restrict,pty,from="<source addresses>" nyyrikki:<human id>@<target name>`. | M2, M3, M6. Principals are namespaced, so another CA the host trusts can't produce one by accident, and include the target, so a certificate for one host doesn't work on another. `restrict` and `from=` are enforced by the host even if Nyyrikki issues a wider certificate. |
 | D5 | **One certificate per run**, over an ed25519 key pair generated in memory for that run and never written down: type user; principal `nyyrikki:<human id>@<target name>`; key ID `nyyrikki:<run_id>`; a random 64-bit serial; valid from now − 60 s to now + 2 min; critical option `source-address` = `ssh.source_addresses`; extensions: only `permit-pty`, and only for an interactive run. Run ID and serial go into the audit record. | `CLAUDE.md`: issued credentials scoped as narrowly and living as briefly as works, inside Nyyrikki. sshd checks the certificate only at login, so 2 min covers the handshake, not the run. M4, M5, M12: the host's log ties the login to Nyyrikki's audit. |
 | D6 | **The user CA private key** is an ed25519 OpenSSH key in a Secret, mounted as the file `ssh.user_ca_key_file`, read on each use (docs/06 D4), never logged. Rotation: add the new public key to the hosts' `TrustedUserCAKeys`, replace the Secret, then remove the old key. Nyyrikki doesn't generate it (§5.6). | docs/01 D15. The CA key is the credential with the widest blast radius in this doc: every principal every host lists. |
@@ -125,12 +127,12 @@ container. SH5 turns the same checks into `test/ssh-host`.
 | D8 | **Nyyrikki verifies the host** before it authenticates: the host key must equal one of the target's `host_keys` (compared as marshalled keys), or be a host certificate signed by one of its `host_cas`, valid now, with the target's host name among its principals. There is no trust on first use. A mismatch is `unavailable` with detail `host_key_mismatch`, audited, and the run never authenticates. | A wrong host would receive the command and the stdin. |
 | D9 | **Running**, in-process with `golang.org/x/crypto/ssh` (M1): dial `address` with `ssh.connect_timeout` (default `10s`) under the run's context; verify the host (D8); authenticate with the certificate (D5); open one session; send no `env` request; for an interactive run, `pty-req` with the client's `TERM` (matching `[a-z0-9.+-]{1,32}`, default `xterm-256color`) and size; then `exec` with the command string, or `shell` for an interactive run without one; write stdin and close it. stdout, stderr, limits and truncation are docs/04 D7's. The result's `exit_code` is the remote exit status; on `exit-signal` it is 128 plus the signal's number, with the signal's name in `detail`. One connection per run, closed when the run ends. | No external binary, no shell on Nyyrikki's side, nothing inherited from the pod's environment (docs/04 D6's reasons). `env` requests are a way to inject `LD_PRELOAD`-style variables. |
 | D10 | **What reaches the agent** is the remote exit status, stdout and stderr, as they came (docs/04 D13). The certificate and its key are never in a result, an error, a log or a message (INV-08). | `CLAUDE.md`: responses unredacted; Nyyrikki's own credentials never handed over. |
-| D11 | **Cut**: when the run's grant context ends (timeout, elevation expiry, "End now"; docs/04 D8), Nyyrikki sends `signal TERM`, waits up to 2 s for the session to end, sends `signal KILL`, and closes the connection; `run_cut` is audited. Closing alone would leave a command without a PTY running (M10), and `KILL` doesn't reach a command run through sudo (M11), so **the host finishes the cut**: on a systemd host the setup makes logind stop the Nyyrikki account's session scope when the connection closes, which sends `TERM`, then `KILL` after 5 s, to every process the session started, root ones under sudo and detached ones included (M18). The target's `session_kill` says whether its host does this (§5.5); where it doesn't (no systemd, or no `pam_systemd` in sshd's PAM stack), a sudo command that ignores `TERM` can outlive the cut, and the messages say so (D12). Work a command moves out of its session (a service, a timer, a cron job) is not cut; that is a non-goal, and the approver sees the command. *Revised 2026-10-29 (owner decision, review of #25)*: first `TERM`, `KILL` and close only, which a sudo command ignoring `TERM` survives. | `CODE-REVIEW.md`: long-lived requests are cut when what covers them ends. Only the host can kill root processes of a session, and logind does it by cgroup, which a process can't leave by detaching. |
+| D11 | **Cut**: when the run's grant context ends (timeout, elevation expiry, "End now"; docs/04 D8), Nyyrikki sends `signal TERM`, waits up to 2 s for the session to end, sends `signal KILL`, and closes the connection; `run_cut` is audited. Closing alone would leave a command without a PTY running (M10), and `KILL` doesn't reach a command run through sudo (M11), so **the host finishes the cut**: on a systemd host the setup makes logind stop the Nyyrikki account's session scope when the connection closes, which sends `TERM`, then `KILL` after 5 s, to every process the session started, root ones under sudo and detached ones included (M18). If the host can't be reached when the cut comes, so `TERM`, `KILL` and the close never arrive, the host ends the session itself within about 15 s of losing Nyyrikki (D3's client-alive settings), with the same effect (M21). The target's `session_kill` says whether its host does this (§5.5); where it doesn't (no systemd, or no `pam_systemd` in sshd's PAM stack), a sudo command that ignores `TERM` can outlive the cut, and the messages say so (D12). Work a command moves out of its session (a service, a timer, a cron job) is not cut; that is a non-goal, and the approver sees the command. *Revised 2026-10-29 (owner decision, review of #25)*: first `TERM`, `KILL` and close only, which a sudo command ignoring `TERM` survives. | `CODE-REVIEW.md`: long-lived requests are cut when what covers them ends. Only the host can kill root processes of a session, and logind does it by cgroup, which a process can't leave by detaching. |
 | D12 | **Messages** (extending docs/05 D5 and D7): "Runs as" shows `ny-<human> on <address>`, and for a `sudo: true` target the line "**root via sudo**"; an interactive run adds "Interactive: what is typed is not shown" (OD4); a run with stdin adds, next to its size and hash, "stdin is not shown. If the command runs it, you can't see what runs" (OD6). An elevation message names, per target, whether it has root via sudo, so the approver knows that a window on that host is a window of root. For a `sudo: true` target with `session_kill: false`, every message adds "a cut may not stop a sudo command that ignores TERM" (D11). | `CLAUDE.md`: the approver sees what will run, and as whom. `sudo: true` comes from config, not the host; §6 says what that means. |
 | D13 | **Registry and limits**: an SSH target has an `ssh` block (§5.5) instead of `kubernetes`; `list_targets` returns `type: "ssh"`. `run` takes the same arguments for both types; for SSH, `args` may be empty when `interactive` is set (revising docs/02 D13 for SSH only). The run limits of docs/04 D7 apply unchanged. | One operation set (docs/02 D1); the target type decides how `args` is read. |
 | D14 | **Hosts are set up out of band** by an administrator, by hand or with the setup script (§5.7). Nyyrikki has no way to change a host's SSH or sudo configuration other than an approved command, and never runs one on its own. | Nyyrikki configuring its own trust would need standing root on every host. |
 | D15 | **The setup script** (§5.7) is the documented manual steps, automated: it refuses rather than guesses, never edits `sshd_config` itself, validates with `sshd -t` and `visudo -cf` before activating anything, rolls back on failure, and prints each host key for the administrator to copy into the registry. | It runs as root on the owner's servers. Reading the host key on the host itself is what makes D8's pins trustworthy without `ssh-keyscan`. |
-| D16 | **The setup endpoint** (OD3): `GET /hosts/<target>/setup.sh` on `:8443`, without authentication, since a host has no token. It answers only `GET`; any query string is `400`; a target that isn't an SSH target in the registry is `404`, the same for every such name. The response is a generated block of `readonly` shell assignments, then the static body built into the binary (`//go:embed` of `deploy/ssh-host/nyyrikki-host-setup.sh`). The block holds only values from config, each of a format checked when the config is loaded, so none needs quoting beyond single quotes: the target name; the human IDs of the target and their account names (slugs); `ssh.user_ca_public_keys` (ed25519, base64 characters only); `ssh.source_addresses` (CIDRs); `sudo` (`true` or `false`). Each fetch is audited (`host_setup_served`, with the target and the client address). The endpoint never reads the CA private key. | OD3. Values from config, not from the request, so the URL can't be crafted to change what the script does. A fixed body lets anyone compare it with the repo and the published checksum (§5.7). |
+| D16 | **The setup endpoint** (OD3): `GET /hosts/<target>/setup.sh` on `:8443`, without authentication, since a host has no token. It answers only `GET`; any query string is `400`; a target that isn't an SSH target in the registry is `404`, the same for every such name. The response is the static body built into the binary (`//go:embed` of `deploy/ssh-host/nyyrikki-host-setup.sh`), which ends with the line `main "$@" <<'NYYRIKKI_VALUES_END'`, then generated **data lines** `NAME=value`, then the terminator. The values are a quoted heredoc that `main` reads and checks; they are never executed, and `main` ends in `exit`, so nothing after the terminator runs (M22). They come only from config, each of a format checked when the config is loaded and again by the body: the target name; the human IDs of the target and their account names (slugs); `ssh.user_ca_public_keys` (ed25519, base64 characters only); `ssh.source_addresses` (CIDRs); `sudo` (`true` or `false`). Each fetch is audited (`host_setup_served`, with the target and the client address). The endpoint never reads the CA private key. | OD3. Values from config, not from the request, so the URL can't be crafted to change what the script does. Everything that executes is the fixed body, which anyone can compare with the repo and the published checksum (§5.7); the per-host part is data. *Revised 2026-10-29 (review of #25)*: the values were first a block of `readonly` assignments in front of the body, which ran as code before the body's checks and outside the checksum. |
 | D17 | **"End now" on interactive runs** (OD4), for SSH and kubectl targets alike. When an interactive run's stream attaches (docs/02 D10), its approval message is edited to "Session live since 12:03:04" with an **"End now"** button; for a run covered by an elevation, the elevation's own "End now" already ends it. The button's callback is checked as docs/05 D4 checks any callback, and it acts only while the run is live. Tapping it cancels the run's grant context, so the run is cut as for any other end (D11 for SSH, docs/04 D8 for kubectl), audited `run_cut` with detail `ended_by_approver`. When the run ends for any reason, the message is edited to "Session ended at …" without buttons. A stream ticket that is never used leaves the message as approved, with no button. | OD4. An approver who approved a session can take it back. Revises docs/04 D12 and extends docs/05 D7, by dated notes when this doc is approved. |
 
 ### Rejected alternatives
@@ -212,7 +214,7 @@ ssh:
   user_ca_key_file: /etc/nyyrikki/ssh/user-ca     # mounted Secret (D6)
   user_ca_public_keys:                            # what hosts trust; served by D16
     - ssh-ed25519 AAAAC3Nza… nyyrikki-user-ca
-  source_addresses: [203.0.113.10/32]             # Nyyrikki's egress; required (D4, D5)
+  source_addresses: [203.0.113.10/32]             # Nyyrikki's egress, ideally its own (§6); required (D4, D5)
   connect_timeout: 10s
 targets:
   - name: db-1
@@ -298,10 +300,13 @@ steps:
 1. Check: run as root; OpenSSH ≥ 9.0; `sshd_config`'s first effective
    line includes `/etc/ssh/sshd_config.d/*.conf` (M14); `sshd -T` shows
    no `TrustedUserCAKeys`, `AuthorizedPrincipalsFile` or `RevokedKeys`
-   other than Nyyrikki's own; on a systemd host, logind's
-   `KillUserProcesses` is `no` and `KillOnlyUsers` holds nothing but
-   Nyyrikki's accounts (Nyyrikki's drop-in would otherwise change how
-   logind treats every other user). If any check fails, stop, and point
+   other than Nyyrikki's own; on a systemd host, no logind
+   configuration file other than Nyyrikki's own drop-in sets
+   `KillUserProcesses`, `KillOnlyUsers` or `KillExcludeUsers` (read with
+   `systemd-analyze cat-config systemd/logind.conf`, skipping
+   `50-nyyrikki.conf`), since Nyyrikki's drop-in would otherwise change
+   how logind treats every other user. Excluding its own files is what
+   lets the script run again on a host it set up. If any check fails, stop, and point
    at the manual steps: an existing setup has to be merged by a person.
 2. Write `/etc/ssh/nyyrikki/user_ca.pub` (every key of `user_ca_public_keys`),
    `/etc/ssh/nyyrikki/revoked.krl` (unless one exists: a valid empty KRL
@@ -328,8 +333,8 @@ steps:
    Otherwise skip this, and step 9 reports `session_kill: false`.
 7. `sshd -t`, then `sshd -T -C user=ny-<human>,host=<host>,addr=<a
    source address>` for each account: the effective values must be D3's
-   (`authenticationmethods publickey`, `authorizedkeyscommand none`, and
-   so on) and D4's three. This catches a main config whose own values
+   (`authenticationmethods publickey`, `authorizedkeyscommand none`,
+   `clientaliveinterval 5`, and so on) and D4's three. This catches a main config whose own values
    win over the drop-in's. If either fails, restore every file from steps 2–6 and
    stop. Otherwise reload sshd.
 8. Every file the script writes gets explicit modes (0755 directories,
@@ -345,12 +350,14 @@ script's own files. `--dry-run` prints every check and every file it
 would write, and changes nothing.
 
 **The script** is `deploy/ssh-host/nyyrikki-host-setup.sh`, POSIX `sh`,
-wrapped in functions with one `main "$@"` on the last line so a cut-off
-download does nothing. Nyyrikki serves it with the values of D16 in
-front (OD3). It accepts only `--dry-run` and `--uninstall`; everything
-else comes from the values block, which it checks again (each CA key
-must parse with `ssh-keygen -l` and be ed25519, each address must be a
-CIDR, names must be slugs) before it changes a file. Before anything
+wrapped in functions, ending with the `main` line that reads D16's
+data lines, so a cut-off download does nothing. Nyyrikki serves it with
+the values after it (OD3). It accepts only `--dry-run` and `--uninstall`;
+everything else comes from the data lines, which it reads as text and
+checks in full before it acts: every line must match `^[A-Z_]+=` and
+its name's format (each CA key must parse with `ssh-keygen -l` and be
+ed25519, each address must be a CIDR, names must be slugs), and one bad
+line stops it before it changes a file. Before anything
 else it prints the target, the accounts, whether it will grant sudo,
 and the fingerprint of each CA key, to compare with
 `ssh-keygen -lf nyyrikki-user-ca.pub` on the administrator's own copy.
@@ -364,9 +371,15 @@ and the longer form for whoever wants to read or check it first:
 
 ```sh
 curl -fsSL -o setup.sh https://nyyrikki.example.com/hosts/db-1/setup.sh
-sed '1,/^# --- end of values ---$/d' setup.sh | sha256sum   # equals the release's published checksum
-less setup.sh && sudo sh setup.sh --dry-run && sudo sh setup.sh
+sed '/^main "\$@" <<.NYYRIKKI_VALUES_END.$/q' setup.sh | sha256sum   # equals the release's published checksum
+sed '1,/^main "\$@" <<.NYYRIKKI_VALUES_END.$/d' setup.sh            # the data lines: read them
+sudo sh setup.sh --dry-run && sudo sh setup.sh
 ```
+
+What executes is exactly the checksummed part; the rest is data the
+body checks, which the administrator can also read. (A file whose
+checksummed part differs, or that has anything but data lines and the
+terminator after it, is not Nyyrikki's script.)
 
 The host must trust Nyyrikki's TLS certificate. If it is issued by a
 private CA, the setup page says to pass `--cacert` with that CA, never
@@ -385,7 +398,8 @@ on the target are refused until then (§5.5).
   responses: returned as they came (D10). The host key: checked against
   config (D8). The setup endpoint's path: one target name, checked
   against the registry; no query (D16). The setup script's values come
-  from config and are checked again on the host (§5.7).
+  from config, reach the host as data lines, never as code, and are
+  checked again there before anything changes (D16, §5.7).
 - **Dependency failures.** CA key unreadable, host unreachable, host key
   mismatch, authentication refused, session refused: each is
   `unavailable` before the command is sent, audited, with a test each.
@@ -411,8 +425,16 @@ on the target are refused until then (§5.5).
   is nothing to revoke afterwards; a leaked CA is revoked by KRL (§5.6).
 - **Blast radius.**
   - *The CA key* reaches every `ny-*` account on every host that trusts
-    it, from Nyyrikki's source addresses only (`from=`, D4): root on
-    every host set up with `sudo: true`. It sits next to the target tokens
+    it, from `ssh.source_addresses` only (`from=` and `source-address`,
+    D4, D5): root on every host set up with `sudo: true`. That
+    restriction singles out Nyyrikki only if no agent shares the
+    address. Under docs/01 OD7 the agents may run in Nyyrikki's
+    cluster, where pod traffic usually leaves through the node's address
+    or a shared NAT gateway; then the restriction stops use from outside
+    that egress, not from an agent pod. The setup page recommends a
+    dedicated egress address for Nyyrikki (an egress gateway or a fixed
+    egress IP), and egress NetworkPolicies that keep agent pods off the
+    hosts' SSH port. It sits next to the target tokens
     and the Telegram token in the pod (docs/01 D3); a Nyyrikki
     compromise already has those.
   - *An elevation on a `sudo: true` target* is up to 30 minutes of root
@@ -426,9 +448,10 @@ on the target are refused until then (§5.5).
   - *Whoever controls the pod controls the setup script* (OD3). An
     attacker there could serve a different script and get root on every
     host onboarded afterwards. The same attacker already holds the CA
-    key, which is root on every host already set up with sudo. The
-    fixed body and its published checksum let a careful administrator
-    notice (§5.7).
+    key, which is root on every host already set up with sudo. What
+    executes is the fixed body, so its published checksum lets a careful
+    administrator notice a changed script; the data lines after it are
+    short and readable (§5.7).
 - **Accepted risks, as for kubectl** (docs/04 OD3): an approved command,
   or one under an elevation, can do anything its account can. With
   sudo, that includes rewriting the host's SSH and sudo setup, adding a
@@ -437,8 +460,8 @@ on the target are refused until then (§5.5).
   command. SECURITY.md (Accepted risks) gets this case when the doc is
   approved.
 - **The setup script runs as root.** Its body is the same for every
-  host, reviewed in the repo and checksummed per release; only the
-  values block differs, and it is built from config (D16).
+  host, reviewed in the repo and checksummed per release; only the data
+  lines differ, built from config and never executed (D16, M22).
 
 ## 7. Acceptance criteria
 
@@ -449,14 +472,14 @@ on the target are refused until then (§5.5).
 | G3 The certificate has exactly D5's principal, key ID, validity, `source-address` and extensions; its key is never written to disk, logged or returned | `TestMintCert`, `TestSSHNeverLeaksKey` (marker scan of logs, audit, results) |
 | G4 A host key that matches no pin and no host CA, an expired host certificate, or one for another host name is refused before authentication, audited | `TestHostKey*` against an in-process SSH server |
 | G5 No `env` request is sent; `pty-req` only for interactive runs, with a validated `TERM` | `TestSSHRunRequests` (in-process server records the requests) |
-| G6 A cut sends `TERM`, then `KILL` after 2 s, then closes. On a host set up with session kill, a command that ignores `TERM`, run with and without sudo, and a process it detached with `setsid`, are gone within 10 s of the cut; on a host without it, a plain command is gone and the message for a sudo target carries D12's warning | `TestSSHCut` (unit); e2e against an OpenSSH container |
+| G6 A cut sends `TERM`, then `KILL` after 2 s, then closes. On a host set up with session kill, a command that ignores `TERM`, run with and without sudo, and a process it detached with `setsid`, are gone within 10 s of the cut; the same when the host can't be reached at the cut (packets dropped), within 30 s; on a host without session kill, a plain command is gone and the message for a sudo target carries D12's warning | `TestSSHCut` (unit); e2e against an OpenSSH container |
 | G7 End to end: an approved command runs as `ny-<human>` with sudo, the host's log shows key ID `nyyrikki:<run_id>`, and the result returns; a denied one never connects | e2e: Nyyrikki in kind, an OpenSSH container set up by the script |
-| G8 The setup script: refuses each bad input and each failed check of §5.7 without changing a file; `sshd -t` failure rolls back; re-running is idempotent; `--uninstall` leaves no file; no plain key reaches `ny-<human>`, through its `authorized_keys` or through a global `AuthorizedKeysCommand`; the revocation list it writes takes §5.6's `ssh-keygen -k -u` | `test/ssh-host`: the script run in Debian, Ubuntu and Rocky containers |
+| G8 The setup script: refuses each bad input and each failed check of §5.7 without changing a file; `sshd -t` failure rolls back; re-running is idempotent, including on a host it set up with session kill; `--uninstall` leaves no file; no plain key reaches `ny-<human>`, through its `authorized_keys` or through a global `AuthorizedKeysCommand`; the revocation list it writes takes §5.6's `ssh-keygen -k -u` | `test/ssh-host`: the script run in Debian, Ubuntu and Rocky containers |
 | G9 The manual steps and the script produce the same files | `test/ssh-host`: a check that the files the script writes match the manual page's listing |
 | G10 Messages show the account, the address, the sudo marker and the interactive marker; stdin appears only as size and hash with its warning, never as content (a marker secret on stdin is absent from every message) | `TestRenderSSH*` (docs/05 TG2's tests extended) |
 | G11 An elevation covers an SSH target as it does a Kubernetes one, and an interactive session under it is cut at expiry | `TestElevation*` with an SSH target; e2e |
 | G12 A real command on a real host, approved on a real phone, set up with the script | manual, by the owner |
-| G13 The setup endpoint needs no token; refuses a query string and every method but `GET`; answers `404` alike for an unknown, a Kubernetes and a malformed target; its body equals the repo's file; its values block holds only config values; each fetch is audited | `TestHostSetupEndpoint*`; the release workflow publishes the body's checksum |
+| G13 The setup endpoint needs no token; refuses a query string and every method but `GET`; answers `404` alike for an unknown, a Kubernetes and a malformed target; its body equals the repo's file; the data lines hold only config values; a data line carrying shell syntax is refused by the body and never executed; each fetch is audited | `TestHostSetupEndpoint*`; the release workflow publishes the body's checksum |
 | G14 "End now" appears on an interactive run's message once its stream attaches, for SSH and kubectl; a tap cuts the run and edits the message; a tap after the run ended, from another user, or replayed does nothing and is audited | `TestEndNowInteractive*` against the fake Bot API; e2e for one SSH and one kubectl session |
 
 ## 8. Chunks
