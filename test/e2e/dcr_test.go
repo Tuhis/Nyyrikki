@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -473,7 +475,13 @@ func (e *env) checkLoginMCP(t *testing.T) {
 	// A second login --mcp is another client, so another agent (OD16).
 	c2 := e.newCLI(t)
 	c2.login(t, "--mcp")
-	if l1, l2 := loginFile(c)["client_id"], loginFile(c2)["client_id"]; l1 == nil || l1 == l2 {
+	mcpLogin := func(c *cli) any {
+		b, _ := os.ReadFile(filepath.Join(c.home, ".config", "nyyrikki", "mcp-login.json"))
+		var m map[string]any
+		json.Unmarshal(b, &m)
+		return m["client_id"]
+	}
+	if l1, l2 := mcpLogin(c), mcpLogin(c2); l1 == nil || l1 == l2 {
 		t.Fatalf("two login --mcp share a client: %v %v", l1, l2)
 	}
 }
