@@ -142,6 +142,47 @@ the doc.
   `.mcp.json`'s `headersHelper`.** Name the helper's variables
   accordingly. ([docs/01](01-foundations.md) M14)
 
+**OpenSSH and sudo**
+
+- **sshd without PAM refuses an account whose password field is `!`**,
+  even for a certificate or key login ("User not allowed because account
+  is locked"). Alpine's `adduser -D` writes `!`. Use `*` for an account
+  that must have no password but still log in.
+  ([docs/07](07-ssh-target.md) M7)
+- **Closing an SSH connection doesn't stop a command run without a
+  PTY**: it is reparented to init and keeps running, as root under
+  sudo. Send a `signal` request first, and `TERM` rather than `KILL`:
+  `KILL` kills `sudo` itself and leaves its child running.
+  ([docs/07](07-ssh-target.md) M10, M11)
+- **`AuthorizedKeysFile none` doesn't turn off a global
+  `AuthorizedKeysCommand`**, such as EC2 Instance Connect's. To leave
+  an account only to certificates, a `Match User` block also needs
+  `AuthorizedKeysCommand none` and `AuthenticationMethods publickey`
+  (and hostbased, GSSAPI and keyboard-interactive off). Check the result
+  with `sshd -T -C user=…`. ([docs/07](07-ssh-target.md) M16)
+- **An "empty" `RevokedKeys` file must be a real KRL.** sshd accepts a
+  zero-byte file, but `ssh-keygen -k -u` refuses it ("invalid magic
+  number"), so revoking a key fails exactly when it is needed. Create
+  it with `ssh-keygen -k -f <file>`. ([docs/07](07-ssh-target.md) M17)
+- **A sudo command outlives its SSH session unless logind kills the
+  session.** sudo's child stays in the session's scope, but by default
+  logind leaves the scope running after logout. `KillOnlyUsers=` does
+  nothing without `KillUserProcesses=yes`, and the kill waits for the
+  scope's `TimeoutStopSec` (90 s) before `KILL`.
+  ([docs/07](07-ssh-target.md) M18)
+- **A writable principals file fails as "Certificate does not contain an
+  authorized principal"**, with "bad ownership or modes" only in the
+  line before. Write it with `umask 022`. ([docs/07](07-ssh-target.md) M19)
+- **sshd notices a vanished client only through TCP keepalive by
+  default**, about 2 h on Linux, so a session (and whatever runs in it)
+  outlives a network partition by that long. Set `ClientAliveInterval`
+  and `ClientAliveCountMax`. ([docs/07](07-ssh-target.md) M21)
+- **A heredoc cut off by end of file still runs its command.** bash only
+  warns ("delimited by end-of-file"), dash says nothing, so a truncated
+  `curl | sh` with data after the command acts on part of the data. End
+  the data with a line the command checks, such as a count.
+  ([docs/07](07-ssh-target.md) M23)
+
 **Tooling and dependencies**
 
 - **`gopkg.in/yaml.v3` has been unmaintained since 2022.** Use

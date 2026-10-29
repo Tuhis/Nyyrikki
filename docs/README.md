@@ -24,6 +24,7 @@ Not a design doc, but in this directory:
 | [04](04-kubectl-passthrough.md) | R4 — Pass-through, identity propagation and credential custody: kubectl, 1:1 |
 | [05](05-telegram-escalation.md) | R5 — Telegram escalation: one-off approvals and time-boxed elevation |
 | [06](06-packaging-and-deployment.md) | R6 — Packaging and deployment, the minimal part for M4 |
+| [07](07-ssh-target.md) | R10 — SSH target: commands on Linux hosts, as the human |
 
 The replaced Warden plan (2026-10-25) also had docs numbered 01–09.
 Nothing was built from them, so they were removed and numbering starts

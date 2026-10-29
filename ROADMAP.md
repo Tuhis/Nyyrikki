@@ -41,6 +41,8 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 | R7 | [Operator surface](#r7--operator-surface) | 💡 proposed 2026-10-25 |
 | R8 | [AI risk assessment](#r8--ai-risk-assessment) | ⏸️ deferred 2026-10-26 (owner decision: not in the first version) |
 | R9 | [Optional response redaction](#r9--optional-response-redaction) | ⏸️ deferred 2026-10-26 (owner decision: future, and optional) |
+| R10 | [SSH target](#r10--ssh-target) | 📝 designing 2026-10-29: [docs/07](docs/07-ssh-target.md) drafted, OD1–OD6 taken 2026-10-29 (root through passwordless sudo on a separate account per human; sudo `ALL`; the host setup script served by Nyyrikki; interactive sessions under a one-off approval, with "End now" for kubectl's too; no port forwarding; stdin never shown on Telegram); awaiting approval of the doc. Not in the first version |
+| R11 | [SSH CA hardening](#r11--ssh-ca-hardening) | 💡 proposed 2026-10-29, after R10 |
 
 ## Milestones to the first version
 
@@ -75,9 +77,9 @@ item, the doc's chunks say which part.
 | M4 | [Running against a real target](#m4--running-against-a-real-target) | R6 (minimal) | 🔧 deployed 2026-10-29 on the owner's cluster (Flux, chart 0.2.0, its own Keycloak realm, behind an internal gateway that re-encrypts), released (0.1.0, 0.2.0), M2's and M3's manual checks run there; open: real tasks by an agent on its own machine holding nothing but its Nyyrikki token. The checks ran from a machine that also holds an admin kubeconfig |
 
 **Not in the first version**, so no milestone covers it: a second target
-type; temporary credentials issued on targets, unless the first target
-can't impersonate; the operator surface (R7); AI risk assessment (R8);
-response redaction (R9).
+type, such as SSH (R10); temporary credentials issued on targets, unless
+the first target can't impersonate; the operator surface (R7); AI risk
+assessment (R8); response redaction (R9).
 
 ### M0 — Decisions locked
 
@@ -350,3 +352,42 @@ context and, through it, at the model provider.
 redaction is configured and switched on; how the agent and the approver
 can tell a redacted response from an original; and a test asserting the
 redacted form for each target type.
+
+## R10 — SSH target
+
+**Proposed 2026-10-29 (owner request)**, after the first version.
+
+**Why**: not everything an agent has to fix is in Kubernetes. Restarting
+a service on a VM, reading its journal or changing a file under `/etc`
+needs a command on a host, and today that means handing the agent an SSH
+key that works forever, with nothing approved and nothing recorded.
+
+**Scope**: commands on Linux hosts with OpenSSH, through the same `run`
+and `elevate` operations, one-off approvals and elevations as for
+Kubernetes; interactive sessions over `/stream`. SSH can't impersonate,
+so this is the first target with credentials issued on it: a short-lived
+SSH certificate per run, from a user CA that only Nyyrikki holds, for an
+account on the host that belongs to the human and that only those
+certificates reach. Root, where a host allows it, through passwordless
+sudo on that account. Host keys are pinned or come from a host CA, never
+trusted on first use. Setting a host up is one command (a setup script)
+or the documented manual steps; Nyyrikki never configures its own trust.
+Not in scope: running unmodified `ssh`, scp or ansible from the agent's
+machine (the set-aside Warden model), and port forwarding (docs/07 OD5).
+
+## R11 — SSH CA hardening
+
+**Proposed 2026-10-29**, after R10 ([docs/07](docs/07-ssh-target.md) §9).
+
+**Why**: with R10, rotating or revoking the SSH user CA means re-running
+the setup on every host, which is slow exactly when speed matters, after
+a leak. And the CA key sits in Nyyrikki's pod, so a compromise of the
+pod can copy it out and use it for as long as hosts trust it.
+
+**Scope**, one or both: hosts that pull their trusted CA keys and
+revocation list from Nyyrikki on a timer, accepting a new list only if a
+key they already trust signed it, so rotation and revocation reach every
+host without a visit; and an external signer (Vault's SSH engine,
+step-ca, a cloud KMS) that holds the CA key and enforces principals,
+lifetime and source address itself, so there is no key in the pod to
+copy.
