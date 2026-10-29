@@ -304,6 +304,18 @@ func TestEndToEnd(t *testing.T) {
 		}
 	})
 
+	step(t, "M9: anonymous registration gets nothing Nyyrikki accepts without the owner", func(t *testing.T) {
+		e.checkRegistration(t)
+	})
+
+	step(t, "M9: two harnesses sign in with PKCE from one browser and are two agents", func(t *testing.T) {
+		e.checkHarnesses(t, next)
+	})
+
+	step(t, "D25: nyyrikki login --mcp and mcp-headers", func(t *testing.T) {
+		e.checkLoginMCP(t)
+	})
+
 	step(t, "a session ended in Keycloak is denied at once", func(t *testing.T) {
 		e.admin(t, "POST", "/admin/realms/"+realm+"/users/"+e.ownerID+"/logout", nil)
 		before := len(e.tg.Sent(t))
