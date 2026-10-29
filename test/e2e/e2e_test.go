@@ -322,10 +322,6 @@ func TestEndToEnd(t *testing.T) {
 		e.checkLoginMCP(t)
 	})
 
-	step(t, "OD17: an offline MCP harness outlives its browser session and ends on revoke", func(t *testing.T) {
-		e.checkOffline(t, next)
-	})
-
 	step(t, "a session ended in Keycloak is denied at once", func(t *testing.T) {
 		e.admin(t, "POST", "/admin/realms/"+realm+"/users/"+e.ownerID+"/logout", nil)
 		before := len(e.tg.Sent(t))
@@ -336,6 +332,11 @@ func TestEndToEnd(t *testing.T) {
 		if len(e.tg.Sent(t)) != before {
 			t.Fatal("a revoked session reached the approver")
 		}
+	})
+
+	// Last: it ends the owner's sessions, which would empty the step above.
+	step(t, "OD17: an offline MCP harness outlives its browser session and ends on revoke or sign-out", func(t *testing.T) {
+		e.checkOffline(t, next)
 	})
 }
 
