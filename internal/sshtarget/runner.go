@@ -254,7 +254,9 @@ type conn struct {
 }
 
 // guard is the cut before the command has started: TERM, in case the
-// exec request is already on its way, then close.
+// exec request is already on its way, then close. A cut while the exec
+// or shell reply is awaited may follow a command that started, so the
+// caller records it as a cut run (cutEarly), not as nothing ran.
 func (c *conn) guard() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -431,6 +433,9 @@ func (r *Runner) Run(g *decision.Grant, req *Request, timeout time.Duration) (*t
 	c.session.Stdin = bytes.NewReader(req.Stdin())
 	c.session.Stdout, c.session.Stderr = stdout, stderr
 	if err := c.session.Start(req.Command()); err != nil {
+		if c.cutEarly() {
+			return &target.Result{ExitCode: -1}, r.finish(g, req, c, l, true, err, -1, "", 0, 0)
+		}
 		return nil, r.finishFail(l, g, req, c, DetailSessionRefused, "the host refused the command", err)
 	}
 	if r.afterStart != nil {
@@ -497,6 +502,9 @@ func (r *Runner) RunInteractive(g *decision.Grant, req *Request, term target.Ter
 		err = c.session.Start(req.Command())
 	}
 	if err != nil {
+		if c.cutEarly() {
+			return -1, r.finish(g, req, c, l, true, err, -1, "", 0, 0)
+		}
 		return -1, r.finishFail(l, g, req, c, DetailSessionRefused, "the host refused the session", err)
 	}
 	c.started()

@@ -247,6 +247,7 @@ func exitSignal(ch ssh.Channel, sig string) {
 //	ignore-term   waits for a signal; only KILL ends it
 //	die           ends with exit-signal SEGV
 //	noexit        closes without an exit status
+//	stall-reply   is never answered: the exec reply doesn't come
 //	(shell)       echoes lines back, "exit N" ends with N
 func (h *fakeHost) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 	defer ch.Close()
@@ -263,6 +264,9 @@ func (h *fakeHost) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			case "pty-req", "window-change":
 				req.Reply(true, nil)
 			case "exec":
+				if sshString(req.Payload) == "stall-reply" {
+					continue
+				}
 				req.Reply(true, nil)
 				started <- sshString(req.Payload)
 				go h.run(ch, sshString(req.Payload), signals)

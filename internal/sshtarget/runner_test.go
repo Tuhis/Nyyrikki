@@ -16,6 +16,7 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/decision"
 	"github.com/Tuhis/Nyyrikki/internal/decision/decisiontest"
+	"github.com/Tuhis/Nyyrikki/internal/target"
 )
 
 func newSigner(t *testing.T) ssh.Signer {
@@ -399,6 +400,27 @@ func TestSSHCut(t *testing.T) {
 		_, err := h.runner.Run(g, req, 0)
 		wantCode(t, err, codes.Expired, decision.DetailEndedByApprover)
 		if rec, ok := h.audit.last(codes.KindRunCut); !ok || rec.Detail != decision.DetailEndedByApprover || rec.CertSerial == "" {
+			t.Fatalf("run_cut %+v", rec)
+		}
+	})
+	// Review round 2, finding 4: a cut while the exec reply is awaited may
+	// follow a command that started, so it is a cut run, not "nothing ran".
+	t.Run("cut while the exec reply is awaited", func(t *testing.T) {
+		h := newHarness(t, nil)
+		req := build(t, []string{"stall-reply"}, nil, false)
+		g := grantFor(t.Context(), req, nil)
+		done := make(chan struct{})
+		var res *target.Result
+		var err error
+		go func() { res, err = h.runner.Run(g, req, 0); close(done) }()
+		waitEvent(t, h.host, "exec")
+		decisiontest.End(g, decision.ErrEndedByApprover)
+		<-done
+		wantCode(t, err, codes.Expired, decision.DetailEndedByApprover)
+		if res == nil || res.ExitCode != -1 {
+			t.Fatalf("result %+v", res)
+		}
+		if rec, ok := h.audit.last(codes.KindRunCut); !ok || rec.ExitCode == nil || *rec.ExitCode != -1 {
 			t.Fatalf("run_cut %+v", rec)
 		}
 	})
