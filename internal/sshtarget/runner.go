@@ -96,6 +96,9 @@ type Runner struct {
 	now            func() time.Time
 	dial           func(ctx context.Context, network, addr string) (net.Conn, error)
 	cutGrace       time.Duration
+	// afterStart, when set, runs between the command's start and the
+	// handoff to wait. Tests use it to cut in that window.
+	afterStart func(*conn)
 }
 
 // NewRunner validates cfg and returns a Runner.
@@ -246,6 +249,7 @@ type conn struct {
 	// its limit); from then on, wait does the full cut of D11.
 	mu      sync.Mutex
 	running bool
+	guarded bool // the guard cut before the handoff; set under mu
 	stop    func() bool
 }
 
@@ -257,18 +261,27 @@ func (c *conn) guard() {
 	if c.running {
 		return
 	}
+	c.guarded = true
 	if c.session != nil {
 		_ = c.session.Signal(ssh.SIGTERM)
 	}
 	_ = c.client.Close()
 }
 
-// started hands the cut to wait.
+// started hands the cut to wait. After it, the guard can't act, so
+// cutEarly is settled: whether the guard already cut a command that may
+// have started.
 func (c *conn) started() {
 	c.mu.Lock()
 	c.running = true
 	c.mu.Unlock()
 	c.stop()
+}
+
+func (c *conn) cutEarly() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.guarded
 }
 
 func (c *conn) close() {
@@ -284,7 +297,10 @@ func (c *conn) close() {
 // and the command never reaches the host.
 func (r *Runner) connect(l *runLimits, g *decision.Grant, req *Request) (*conn, error) {
 	if l.ctx.Err() != nil {
-		return nil, r.refuse(g, req, codes.KindDecision, "", codes.WithDetail(codes.Expired, DetailGrantEnded, "what covered this run has ended"))
+		// Nothing has started, so this is a refusal, not a cut; it still
+		// says why, e.g. End now (D17).
+		d := l.cutDetail()
+		return nil, r.refuse(g, req, codes.KindDecision, "", codes.WithDetail(codes.Expired, d, "the run was not started: %s", cutMessage(d)))
 	}
 	t, ok := r.targets[g.Target()]
 	if !ok {
@@ -417,6 +433,9 @@ func (r *Runner) Run(g *decision.Grant, req *Request, timeout time.Duration) (*t
 	if err := c.session.Start(req.Command()); err != nil {
 		return nil, r.finishFail(l, g, req, c, DetailSessionRefused, "the host refused the command", err)
 	}
+	if r.afterStart != nil {
+		r.afterStart(c)
+	}
 	c.started()
 	cut, werr := r.wait(l, c)
 	res := &target.Result{
@@ -514,6 +533,16 @@ func (r *Runner) RunInteractive(g *decision.Grant, req *Request, term target.Ter
 func (r *Runner) wait(l *runLimits, c *conn) (cut bool, err error) {
 	done := make(chan error, 1)
 	go func() { done <- c.session.Wait() }()
+	if c.cutEarly() {
+		// The guard sent TERM and closed the connection between the
+		// command's start and the handoff: a cut, though nothing more
+		// can reach the host (D11's no-session-kill case).
+		select {
+		case err = <-done:
+		case <-time.After(5 * time.Second):
+		}
+		return true, err
+	}
 	select {
 	case err = <-done:
 		return false, err

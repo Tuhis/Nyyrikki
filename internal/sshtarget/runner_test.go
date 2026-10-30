@@ -384,6 +384,40 @@ func TestSSHCut(t *testing.T) {
 			t.Fatal("dialled after the grant ended")
 		}
 	})
+	// Review round 1, finding 5: a cut that lands after the command has
+	// started but before wait takes over is still a cut, named by its
+	// cause, not a lost connection.
+	t.Run("cut between start and handoff", func(t *testing.T) {
+		h := newHarness(t, nil)
+		req := build(t, []string{"sleep"}, nil, false)
+		g := grantFor(t.Context(), req, nil)
+		h.runner.afterStart = func(c *conn) {
+			waitEvent(t, h.host, "exec")
+			decisiontest.End(g, decision.ErrEndedByApprover)
+			waitEvent(t, h.host, "got-TERM")
+		}
+		_, err := h.runner.Run(g, req, 0)
+		wantCode(t, err, codes.Expired, decision.DetailEndedByApprover)
+		if rec, ok := h.audit.last(codes.KindRunCut); !ok || rec.Detail != decision.DetailEndedByApprover || rec.CertSerial == "" {
+			t.Fatalf("run_cut %+v", rec)
+		}
+	})
+	// Review round 1, finding 5: End now before the command is sent is
+	// named as such, not as a grant that ended (D17).
+	t.Run("ended by the approver before dialling", func(t *testing.T) {
+		h := newHarness(t, nil)
+		req := build(t, []string{"echo", "x"}, nil, false)
+		g := grantFor(t.Context(), req, nil)
+		decisiontest.End(g, decision.ErrEndedByApprover)
+		_, err := h.runner.Run(g, req, 0)
+		wantCode(t, err, codes.Expired, decision.DetailEndedByApprover)
+		if rec, ok := h.audit.last(codes.KindDecision); !ok || rec.Detail != decision.DetailEndedByApprover {
+			t.Fatalf("refusal record %+v", rec)
+		}
+		if h.host.loginCount() != 0 {
+			t.Fatal("dialled after the approver ended it")
+		}
+	})
 }
 
 func waitEvent(t *testing.T, h *fakeHost, typ string) {
