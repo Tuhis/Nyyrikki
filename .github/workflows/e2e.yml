@@ -28,7 +28,9 @@ env:
 
 jobs:
   e2e:
-    runs-on: ubuntu-latest
+    # As ci.yml's RUNNER POOL, with RUNNER_LABEL_DISK: kind needs dind on a
+    # real filesystem, so the e2e has a pool of its own.
+    runs-on: ${{ (github.event.pull_request.head.repo.fork && 'ubuntu-latest') || vars.RUNNER_LABEL_DISK || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,4 +46,9 @@ jobs:
           go install sigs.k8s.io/kind@$KIND_VERSION
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: End-to-end test
+        env:
+          # The test's temp files include Keycloak's certificate, which it
+          # bind-mounts into a container. On a self-hosted runner dockerd
+          # is a sidecar that sees only the work volume, so they go there.
+          TMPDIR: ${{ runner.temp }}
         run: go test -tags e2e -count=1 -timeout 40m -v ./test/e2e/

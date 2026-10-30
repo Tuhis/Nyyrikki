@@ -7,9 +7,11 @@ on:
 permissions:
   contents: read
 
+# RUNNER POOL: as ci.yml's (docs/01 D18). Only pushes to main run this, so
+# no fork guard is needed.
 jobs:
   release-please:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     permissions:
       contents: write
       pull-requests: write
@@ -28,7 +30,7 @@ jobs:
   publish:
     needs: release-please
     if: needs.release-please.outputs.released == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     permissions:
       contents: write   # upload release assets
       packages: write   # push to ghcr.io
