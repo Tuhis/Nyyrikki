@@ -621,6 +621,12 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 		ID string `json:"id"`
 	}
 	json.Unmarshal(e.admin(t, "GET", users+"/sessions", nil), &sessions)
+	// Diagnostics (review of #28): what Keycloak holds for the owner right
+	// after an offline sign-in.
+	t.Logf("OD17 diag: online sessions %s", e.admin(t, "GET", users+"/sessions", nil))
+	cuuid := fmt.Sprint(e.adminClient(t, id)["id"])
+	t.Logf("OD17 diag: offline sessions for the harness %s", e.admin(t, "GET", users+"/offline-sessions/"+cuuid, nil))
+	t.Logf("OD17 diag: harness sid %v", sid)
 	ownEnded := false
 	for _, ss := range sessions {
 		e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+ss.ID, nil)
@@ -629,7 +635,7 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 		ownEnded = ownEnded || ss.ID == sid
 	}
 	if !ownEnded {
-		t.Fatalf("the harness's browser session %v wasn't among the %d ended", sid, len(sessions))
+		t.Errorf("the harness's browser session %v wasn't among the %d ended", sid, len(sessions))
 	}
 	at3, rt3 := e.refresh(t, id, rt2)
 	if at3 == "" {
