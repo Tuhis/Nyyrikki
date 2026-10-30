@@ -259,8 +259,7 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 	out := api.RunOut{RunID: runID, CoveredBy: g.CoveredBy()}
 	if c.Interactive() {
 		tk, exp, err := s.d.Point.IssueTicket(g, c)
-		if err != nil {
-			g.Release()
+		if err != nil { // IssueTicket has released g
 			r, b := errOut(err)
 			return r, api.RunOut{Error: b}, nil
 		}

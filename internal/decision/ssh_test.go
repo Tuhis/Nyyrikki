@@ -208,3 +208,22 @@ func TestTicketUnused(t *testing.T) {
 func requestParse(args []string, interactive bool) (*request.Canonical, error) {
 	return request.Parse(args, nil, interactive)
 }
+
+// TestTicketRefusedClosesPrompt: a session approved but given no ticket
+// leaves no message stuck at "Approved" with its grant live (review round
+// 1, finding 6): it is closed as unused.
+func TestTicketRefusedClosesPrompt(t *testing.T) {
+	e := withSSH(newEnv(t))
+	r := sshReq(t, "db-1", true)
+	ch := e.runAsync(context.Background(), r)
+	id := e.prompt()
+	e.p.Resolve(context.Background(), id, approval.ActionApprove, approverID)
+	res := get(t, ch)
+	if _, _, err := e.p.IssueTicket(res.g, canonical(t, "get", "pods")); err == nil {
+		t.Fatal("a ticket for a request that isn't the grant's")
+	}
+	waitOutcome(t, e, id, approval.SessionUnused)
+	if res.g.Context().Err() == nil {
+		t.Fatal("the grant is still live")
+	}
+}

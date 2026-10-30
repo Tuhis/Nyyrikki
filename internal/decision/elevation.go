@@ -302,13 +302,16 @@ func (p *Point) endElevation(elevID, to, detail string) bool {
 
 // IssueTicket makes the one-time stream ticket for an allowed interactive
 // run (docs/02 D10). The ticket goes only to the call that asked. If it
-// isn't redeemed within 30 s, the grant is released.
+// isn't redeemed within 30 s, the grant is released. On an error, g is
+// released and its message closed as unused (docs/07 D17).
 func (p *Point) IssueTicket(g *Grant, c target.Request) (string, time.Time, error) {
 	if !g.Interactive() || !c.Interactive() {
+		p.unused(g)
 		return "", time.Time{}, codes.New(codes.Internal, "not an interactive run")
 	}
 	tk, err := randomSecret(ticketPrefix)
 	if err != nil {
+		p.unused(g)
 		return "", time.Time{}, codes.Wrap(codes.Internal, err, "ticket")
 	}
 	hash := HashSecret(tk)
