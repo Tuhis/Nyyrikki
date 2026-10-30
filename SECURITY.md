@@ -238,4 +238,9 @@ These kinds of issue are always in scope:
   Each `nyyrikki login --mcp` is its own agent (docs/01 OD16).
   CLI sign-ins are separate as long as each login file is private to
   its agent (docs/01 OD14).
+- **Releases are built on self-hosted runners.** In the owner's
+  deployment the release job, which pushes the image Nyyrikki runs as,
+  runs on cluster nodes that also run other repositories' privileged
+  Docker-in-Docker CI jobs. A job that escapes to a node could tamper
+  with a build. Pull requests from forks never run there (docs/01 D18).
 - **One replica.** When Nyyrikki is down, nothing privileged runs.
