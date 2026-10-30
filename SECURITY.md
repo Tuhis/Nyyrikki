@@ -243,9 +243,12 @@ These kinds of issue are always in scope:
   runs on cluster nodes that also run other repositories' privileged
   Docker-in-Docker CI jobs. The runners are ephemeral (one pod per job),
   but a job that escapes to a node could tamper with a build running
-  there, or use that job's token while it runs: the release token can
-  push an image under the release's tag, overwrite release assets
-  (`IMAGE`, `SHA256SUMS`) and push to unprotected refs. The Claude review
+  there, or use that job's token while it runs. The release token can
+  push any tag of the repository's ghcr.io packages (the image and the
+  Helm chart), create, edit or delete releases with their assets and
+  notes (including the image digest users are told to pin), and push to
+  unprotected refs; release-please's can also open and edit pull
+  requests. The Claude review
   workflows' secrets are on the same nodes. Base images are pinned by
   digest and actions by commit SHA, so a tampered registry cache can't
   swap them (docs/01 D18).
