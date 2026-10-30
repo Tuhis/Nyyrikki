@@ -229,9 +229,10 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 		return r, api.RunOut{Error: b}, nil
 	}
 	// The target's type says how args are read (docs/07 D13). An unknown
-	// target is read as kubectl, and the decision point refuses it.
+	// target, or one this agent may not see, is read as kubectl and the
+	// decision point refuses it: both answer the same (docs/02 D5).
 	t, _ := s.d.Config.TargetByName(in.Target)
-	isSSH := t != nil && t.Type() == codes.TypeSSH
+	isSSH := t != nil && t.Visible(p.Human, p.ClientID) && t.Type() == codes.TypeSSH
 	timeout, err := validateRun(in, isSSH)
 	if err != nil {
 		r, b := errOut(s.invalid(ctx, p, []string{in.Target}, err))

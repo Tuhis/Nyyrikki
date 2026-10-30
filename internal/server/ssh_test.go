@@ -254,3 +254,33 @@ func TestHostSetupServed(t *testing.T) {
 		t.Errorf("without SSH targets: %d", resp.StatusCode)
 	}
 }
+
+// TestSSHHiddenTargetLooksUnknown covers docs/02 D5 for SSH (review round
+// 1, finding 4): an SSH target the agent may not see answers exactly as a
+// name that doesn't exist, so the shape of args can't probe for one.
+func TestSSHHiddenTargetLooksUnknown(t *testing.T) {
+	caPEM, caPub := newCA(t)
+	host := startSSHHost(t, caPub)
+	e := servertest.Start(t, withSSH(t, host, caPEM, caPub), func(c *config.Config) {
+		c.Targets[len(c.Targets)-1].Clients = []string{"claude-code"}
+	})
+	cx := mcpAgent(t, e, "codex", "s2")
+	for name, args := range map[string][]string{
+		"login shell":  nil,
+		"shell syntax": {"echo a && id"},
+		"kubectl args": {"get", "pods"},
+	} {
+		in := api.RunIn{Args: args, Interactive: args == nil, Reason: "x"}
+		var out api.RunOut
+		in.Target = "db-1"
+		hidden := call(t, cx, api.ToolRun, in, &out)
+		in.Target = "no-such-target"
+		unknown := call(t, cx, api.ToolRun, in, &out)
+		if hidden == nil || unknown == nil || hidden.Code != unknown.Code || hidden.Message != unknown.Message {
+			t.Errorf("%s: hidden %+v, unknown %+v", name, hidden, unknown)
+		}
+	}
+	if n := len(e.Telegram.Sent()); n != 0 {
+		t.Fatalf("%d prompts for a hidden target", n)
+	}
+}
