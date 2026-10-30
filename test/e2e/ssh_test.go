@@ -216,7 +216,13 @@ func (e *env) sshSteps(t *testing.T, s *sshEnv, agent *cli, next func() int) {
 		if code != 75 || !strings.Contains(out(), "the approver ended it") {
 			t.Fatalf("End now: code %d, output %q", code, out())
 		}
-		msg := e.tg.Message(t, e.tg.Sent(t)[n-1])
+		// The prompt is settled in its own goroutine after the cut, so the
+		// edit can land after the CLI has exited.
+		sent := e.tg.Sent(t)[n-1]
+		msg := e.tg.Message(t, sent)
+		for deadline := time.Now().Add(10 * time.Second); !strings.Contains(msg.Text, "Session ended at") && time.Now().Before(deadline); msg = e.tg.Message(t, sent) {
+			time.Sleep(200 * time.Millisecond)
+		}
 		if _, ok := msg.Button("End now"); ok || !strings.Contains(msg.Text, "Session ended at") {
 			t.Fatalf("message after End now:\n%s", msg.Text)
 		}
