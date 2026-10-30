@@ -23,17 +23,18 @@ env:
 
 # RUNNER POOL (docs/01 D18). `runs-on` reads the repository variable
 # RUNNER_LABEL: the owner's self-hosted pool (ioio-k8s-nyyrikki). A pull
-# request from a fork always runs on GitHub-hosted runners, so nobody
-# outside the repository runs code on the owner's cluster. Unset, or in a
-# fork's own runs (which inherit no variables), it falls back to
-# ubuntu-latest.
+# request whose head isn't this repository runs on GitHub-hosted runners,
+# so nobody outside the repository runs code on the owner's cluster. The
+# check is positive: a head repository that is missing or unknown counts
+# as outside. Unset, or in a fork's own runs (which inherit no variables),
+# it falls back to ubuntu-latest.
 jobs:
   build:
     # docs/01 G3: static binaries on both supported Go majors.
     strategy:
       matrix:
         go: ["1.26.x", "1.27.x"]
-    runs-on: ${{ (github.event.pull_request.head.repo.fork && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -55,7 +56,7 @@ jobs:
         run: go test -race -count=1 ./...
 
   gates:
-    runs-on: ${{ (github.event.pull_request.head.repo.fork && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -80,7 +81,7 @@ jobs:
         run: scripts/gates-selftest.sh
 
   image:
-    runs-on: ${{ (github.event.pull_request.head.repo.fork && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the image
