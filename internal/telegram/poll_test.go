@@ -140,12 +140,14 @@ func TestPollingContract(t *testing.T) {
 			t.Error("deleteWebhook dropped pending updates")
 		}
 	}
-	if got := strings.Join(e.fake.AllowedUpdates(), ","); got != "message,callback_query" {
-		t.Errorf("allowed_updates %q", got)
-	}
 	e.fake.PushMessage(telegramtest.TextMessage{FromID: 1, ChatID: 1, Text: "a"})
 	e.fake.PushMessage(telegramtest.TextMessage{FromID: 1, ChatID: 1, Text: "b"})
 	e.fake.Wait(t, "offset past both updates", func() bool { return e.fake.LastOffset() == 1003 })
+	// Read only once it has polled: Healthy turns true just before the
+	// first getUpdates.
+	if got := strings.Join(e.fake.AllowedUpdates(), ","); got != "message,callback_query" {
+		t.Errorf("allowed_updates %q", got)
+	}
 	if err := e.stop(); !errors.Is(err, context.Canceled) {
 		t.Errorf("Run after cancel: %v", err)
 	}
