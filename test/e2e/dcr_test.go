@@ -596,13 +596,39 @@ func (e *env) offlineHarness(t *testing.T, name string) (string, string, string)
 }
 
 // checkOffline is an MCP harness holding an offline session (docs/01
-// OD17): it stays one agent across refreshes, outlives the browser session
-// it signed in through, and ends when its client's access is revoked or
-// the owner is signed out (docs/setup/keycloak.md, Revoking an agent).
+// OD17): Keycloak keeps no browser session for its sign-in, it stays one
+// agent across refreshes, and it ends when its client's access is revoked
+// or the owner is signed out (docs/setup/keycloak.md, Revoking an agent).
 func (e *env) checkOffline(t *testing.T, next func() int) {
 	users := "/admin/realms/" + realm + "/users/" + e.ownerID
 	id, at, rt := e.offlineHarness(t, "offline harness")
 	sid := claims(at)["sid"]
+
+	// Right after the sign-in, its sid is the ID of its offline session and
+	// of no online one: Keycloak keeps no browser session for an offline
+	// sign-in, so no browser session's sign-out can reach it (measured on
+	// Keycloak 26.8.1, 2026-10-30; the docs had assumed one).
+	var online, offline []struct {
+		ID string `json:"id"`
+	}
+	onlineRaw := e.admin(t, "GET", users+"/sessions", nil)
+	offlineRaw := e.admin(t, "GET", users+"/offline-sessions/"+fmt.Sprint(e.adminClient(t, id)["id"]), nil)
+	json.Unmarshal(onlineRaw, &online)
+	json.Unmarshal(offlineRaw, &offline)
+	has := func(ss []struct {
+		ID string `json:"id"`
+	}) bool {
+		for _, s := range ss {
+			if s.ID == sid {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(offline) || has(online) {
+		t.Errorf("after an offline sign-in with sid %v: online sessions %s, offline sessions %s; want it offline only", sid, onlineRaw, offlineRaw)
+	}
+
 	at2, rt2 := e.refresh(t, id, rt)
 	if at2 == "" || claims(at2)["sid"] != sid || claims(at2)["aud"] != e.canonical+"/mcp" {
 		t.Fatalf("offline refresh: issued=%v sid %v -> %v aud=%v", at2 != "", sid, claims(at2)["sid"], claims(at2)["aud"])
@@ -616,45 +642,13 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 		t.Fatalf("run as the offline harness: %s", raw)
 	}
 
-	// Ending the browser session it signed in through leaves it working.
-	var sessions []struct {
-		ID string `json:"id"`
-	}
-	json.Unmarshal(e.admin(t, "GET", users+"/sessions", nil), &sessions)
-	// Diagnostics (review of #28): what Keycloak holds for the owner right
-	// after an offline sign-in.
-	t.Logf("OD17 diag: online sessions %s", e.admin(t, "GET", users+"/sessions", nil))
-	cuuid := fmt.Sprint(e.adminClient(t, id)["id"])
-	t.Logf("OD17 diag: offline sessions for the harness %s", e.admin(t, "GET", users+"/offline-sessions/"+cuuid, nil))
-	t.Logf("OD17 diag: harness sid %v", sid)
-	ownEnded := false
-	for _, ss := range sessions {
-		e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+ss.ID, nil)
-		// An offline session has the ID of the browser session it came
-		// from, which is the token's sid.
-		ownEnded = ownEnded || ss.ID == sid
-	}
-	if !ownEnded {
-		t.Errorf("the harness's browser session %v wasn't among the %d ended", sid, len(sessions))
-	}
-	at3, rt3 := e.refresh(t, id, rt2)
-	if at3 == "" {
-		t.Fatal("ending the browser session ended the offline session too")
-	}
-	ch = make(chan string, 1)
-	go func() { _, raw := runVia(t, e.mcpSession(t, at3), "after the browser session ended"); ch <- raw }()
-	e.tap(t, next(), "Deny")
-	if raw := <-ch; !strings.Contains(raw, "denied") {
-		t.Fatalf("offline harness after its browser session ended: %s", raw)
-	}
-
 	// Removing its client's access ends it at once ...
 	e.admin(t, "DELETE", users+"/consents/"+url.PathEscape(id), nil)
-	if a, _ := e.refresh(t, id, rt3); a != "" {
+	if a, _ := e.refresh(t, id, rt2); a != "" {
 		t.Fatal("an offline token still refreshes after its client's access was revoked")
 	}
 	before := len(e.tg.Sent(t))
-	r, raw := runVia(t, e.mcpSession(t, at3), "after revoke")
+	r, raw := runVia(t, e.mcpSession(t, at2), "after revoke")
 	if !r.IsError || !strings.Contains(raw, "session_inactive") {
 		t.Fatalf("offline harness after revoke: %s", raw)
 	}
