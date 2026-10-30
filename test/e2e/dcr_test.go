@@ -621,10 +621,16 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 		ID string `json:"id"`
 	}
 	json.Unmarshal(e.admin(t, "GET", users+"/sessions", nil), &sessions)
+	ownEnded := false
 	for _, ss := range sessions {
 		e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+ss.ID, nil)
+		// An offline session has the ID of the browser session it came
+		// from, which is the token's sid.
+		ownEnded = ownEnded || ss.ID == sid
 	}
-	t.Logf("OD17: ended %d browser sessions", len(sessions))
+	if !ownEnded {
+		t.Fatalf("the harness's browser session %v wasn't among the %d ended", sid, len(sessions))
+	}
 	at3, rt3 := e.refresh(t, id, rt2)
 	if at3 == "" {
 		t.Fatal("ending the browser session ended the offline session too")

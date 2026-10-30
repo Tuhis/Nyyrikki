@@ -128,9 +128,14 @@ by the chart's `secrets.introspection`.
   sign its session out.
 - **Every agent at once**: Users → the owner → **Sign out**. It sets a
   not-before time for the user, so every token issued before it is
-  refused, offline ones included. Realm settings → Sessions → Revocation
-  → **Set to now** does the same for every user of the realm.
+  refused, offline ones included. A sign-in completed in the same second
+  survives it: check Users → the owner → Consents afterwards. Realm
+  settings → Sessions → Revocation → **Set to now** sets the same for every
+  user of the realm, by Keycloak's documentation.
 
 Nyyrikki introspects on every run and elevate, so the agent is cut off at
-once (docs/01 OD13). The e2e test measures each of these on Keycloak
-26.8.1.
+once (docs/01 OD13). The e2e test measures, on Keycloak 26.8.1: revoking
+a harness's consent (through the admin API), ending only the browser
+session it signed in through, and signing the owner out. The account
+console's Remove access, a single CLI session's sign-out and Set to now
+follow Keycloak's documentation and aren't measured.
