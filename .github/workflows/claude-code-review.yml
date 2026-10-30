@@ -33,7 +33,9 @@ jobs:
         github.event.pull_request.user.login == 'tuhokuutio[bot]'
       )
 
-    runs-on: ubuntu-latest
+    # The self-hosted pool, as ci.yml's RUNNER POOL (docs/01 D18). The if:
+    # above already admits only this repository's writers.
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: read
