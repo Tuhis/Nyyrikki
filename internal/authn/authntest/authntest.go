@@ -40,6 +40,9 @@ type Server struct {
 	// AutoApprove approves every device code as it is created (the human
 	// signs in at once).
 	AutoApprove bool
+	// OfflineAccess makes the server advertise the offline_access scope
+	// in its metadata, as Keycloak does when the realm offers it.
+	OfflineAccess bool
 	// RequirePKCE makes the device grant require PKCE with S256, as
 	// Keycloak does for a client whose PKCE method is set (it sets it on
 	// every registered client under a pkce-enforcer client policy).
@@ -53,6 +56,7 @@ type Server struct {
 	devices  map[string]*device
 	refresh  map[string]*session
 	clients  map[string]string // DCR client_id → name
+	scopes   map[string]string // client_id → scope of its last device request
 	nextSID  int
 }
 
@@ -79,7 +83,7 @@ func New(t testing.TB) *Server {
 		IntrospectionClient: "nyyrikki-introspect", IntrospectionSecret: "s3cret",
 		Now:      time.Now,
 		inactive: map[string]bool{}, devices: map[string]*device{},
-		refresh: map[string]*session{}, clients: map[string]string{},
+		refresh: map[string]*session{}, clients: map[string]string{}, scopes: map[string]string{},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", s.discovery)
@@ -135,7 +139,12 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 	if s.isDown(w) {
 		return
 	}
+	scopes := []string{"openid", "nyyrikki"}
+	if s.OfflineAccess {
+		scopes = append(scopes, "offline_access")
+	}
 	writeJSON(w, map[string]any{
+		"scopes_supported":              scopes,
 		"issuer":                        s.URL,
 		"jwks_uri":                      s.URL + "/jwks",
 		"introspection_endpoint":        s.URL + "/introspect",
@@ -303,6 +312,7 @@ func (s *Server) deviceAuth(w http.ResponseWriter, r *http.Request) {
 	code := randString()
 	s.mu.Lock()
 	s.devices[code] = &device{clientID: r.FormValue("client_id"), approved: s.AutoApprove, challenge: challenge}
+	s.scopes[r.FormValue("client_id")] = r.FormValue("scope")
 	s.mu.Unlock()
 	writeJSON(w, map[string]any{
 		"device_code": code, "user_code": "ABCD-EFGH",
@@ -329,6 +339,14 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, map[string]any{"client_id": id, "client_name": req.ClientName, "grant_types": req.GrantTypes, "token_endpoint_auth_method": "none"})
+}
+
+// DeviceScope is the scope a client asked for in its last device
+// authorization request.
+func (s *Server) DeviceScope(clientID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.scopes[clientID]
 }
 
 // Registered returns the DCR client IDs registered so far.
