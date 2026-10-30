@@ -2,7 +2,9 @@ package decision_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/decision"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl/request"
 	"github.com/Tuhis/Nyyrikki/internal/sshtarget"
+	"github.com/Tuhis/Nyyrikki/internal/store"
 )
 
 func withSSH(e *env) *env {
@@ -226,4 +229,41 @@ func TestTicketRefusedClosesPrompt(t *testing.T) {
 	if res.g.Context().Err() == nil {
 		t.Fatal("the grant is still live")
 	}
+}
+
+// TestSSHHiddenTargetAuditLooksUnknown covers docs/02 D5 in the audit log,
+// which agents can read (review round 2, finding 3): the run_requested
+// record of an SSH target the agent may not see names the same account as
+// one for a name that doesn't exist.
+func TestSSHHiddenTargetAuditLooksUnknown(t *testing.T) {
+	e := withSSH(newEnv(t))
+	e.cfg.Targets[len(e.cfg.Targets)-2].Clients = []string{"claude-code"} // db-1
+	runAs := map[string]string{}
+	for _, name := range []string{"db-1", "no-such-target"} {
+		r := decision.RunRequest{Principal: principal("agent-a"), RunID: decision.NewRunID(), Target: name, Request: canonical(t, "get", "pods"), Reason: "x"}
+		if _, err := e.p.DecideRun(context.Background(), r); codes.Of(err) != codes.TargetNotAllowed {
+			t.Fatalf("%s: %v", name, err)
+		}
+		db, err := store.Open(context.Background(), filepath.Join(e.dir, "db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rec string
+		err = db.QueryRow("SELECT record FROM audit WHERE record LIKE ? AND record LIKE '%run_requested%'", "%"+r.RunID+"%").Scan(&rec)
+		db.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m struct {
+			RunAs json.RawMessage `json:"run_as"`
+		}
+		if err := json.Unmarshal([]byte(rec), &m); err != nil {
+			t.Fatal(err)
+		}
+		runAs[name] = string(m.RunAs)
+	}
+	if runAs["db-1"] != runAs["no-such-target"] {
+		t.Fatalf("run_as for a hidden SSH target %s, for an unknown name %s", runAs["db-1"], runAs["no-such-target"])
+	}
+	e.noPrompt()
 }

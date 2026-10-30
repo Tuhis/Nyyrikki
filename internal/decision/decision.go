@@ -266,7 +266,13 @@ func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 		return nil, err
 	}
 	t, known := p.cfg.TargetByName(r.Target)
-	runAs := RunAs(h, t)
+	visible := known && t.Visible(pr.Human, pr.ClientID)
+	// A target the agent may not see is recorded as an unknown name is
+	// (docs/02 D5): the audit log is agent-readable (docs/01 D16).
+	runAs := RunAs(h, nil)
+	if visible {
+		runAs = RunAs(h, t)
+	}
 	rec := p.base_(pr, codes.KindRunRequested)
 	rec.RunID = r.RunID
 	rec.Targets = []string{r.Target}
@@ -286,7 +292,7 @@ func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 		return nil, p.deny(ctx, rec, err)
 	}
 	// 2. Visibility (docs/02 D5).
-	if !known || !t.Visible(pr.Human, pr.ClientID) {
+	if !visible {
 		return nil, p.deny(ctx, rec, codes.New(codes.TargetNotAllowed, "no such target, or not available to this agent"))
 	}
 	// A request is read by its target's type (docs/07 D13); one built for
