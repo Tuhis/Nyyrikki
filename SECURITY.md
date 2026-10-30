@@ -248,8 +248,10 @@ These kinds of issue are always in scope:
   Helm chart), create, edit or delete releases with their assets and
   notes (including the image digest users are told to pin), and push to
   unprotected refs; release-please's can also open and edit pull
-  requests. The Claude review
-  workflows' secrets are on the same nodes. Base images are pinned by
-  digest and actions by commit SHA, so a tampered registry cache can't
-  swap them (docs/01 D18).
+  requests. The Claude workflows' secrets (the Claude OAuth token, the
+  telemetry client) are on the same nodes, and while one runs, the
+  Claude GitHub App token it mints can push to unprotected refs and
+  write pull request and issue comments. The Dockerfile's base images
+  and the release's BuildKit are pinned by digest and actions by commit
+  SHA, so a tampered registry cache can't swap them (docs/01 D18).
 - **One replica.** When Nyyrikki is down, nothing privileged runs.

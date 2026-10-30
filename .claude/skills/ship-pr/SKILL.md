@@ -157,9 +157,10 @@ Then act on what you find:
 - **`queued` with no `runner_name`**: no runner picked it up. Look for
   other queued runs. Every workflow runs on the owner's self-hosted
   pools when the repository variables are set (`vars.RUNNER_LABEL`; the
-  e2e on `vars.RUNNER_LABEL_DISK`; docs/01 D18), except `ci.yml` and
-  `e2e.yml` runs for pull requests from outside the repository, which
-  run on `ubuntu-latest`. A queued self-hosted job
+  e2e on `vars.RUNNER_LABEL_DISK`; docs/01 D18), except runs for pull
+  requests from outside the repository in `ci.yml` and `e2e.yml`, and
+  `claude.yml` runs from a review or review comment on one, which run on
+  `ubuntu-latest`. A queued self-hosted job
   points at the pool (its listener in `actions-runner-system`, or runner
   pods stuck Pending in `actions-runners` on the owner's cluster); a
   queued hosted one at GitHub-hosted capacity, billing or an Actions
