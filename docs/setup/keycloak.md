@@ -23,7 +23,9 @@ Write `NYYRIKKI` for Nyyrikki's canonical URL, e.g.
   client`). To keep every agent bound to the browser session instead,
   don't offer `offline_access` to registered clients (below); harnesses
   that ask for it at registration, as Claude Code does, then can't sign
-  in.
+  in, and neither can `nyyrikki login --mcp`, which asks for it whenever
+  discovery lists it (not measured: expect `invalid_scope`, or the error
+  above when the human lacks the role).
 
 ## The audience scope
 

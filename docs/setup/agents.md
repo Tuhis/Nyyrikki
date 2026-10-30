@@ -62,8 +62,9 @@ nyyrikki login --mcp --server https://nyyrikki.example.com
 
 The helper refuses to give a token to any URL other than the one it signed
 in for, and prints nothing when it can't produce a fresh token (docs/01
-D25). Where the realm offers `offline_access`, `login --mcp` asks for it,
-so the sign-in outlives the browser session it was made in (docs/01
+D25). Where the authorization server lists `offline_access` in its
+`scopes_supported` (Keycloak always does), `login --mcp` asks for it, so
+the sign-in outlives the browser session it was made in (docs/01
 OD17); revoke it as `docs/setup/keycloak.md` says. Because `login --mcp`
 uses the device grant, any shell the harness can run, a T3 Code thread
 included, can start it: the owner only opens the printed URL and
