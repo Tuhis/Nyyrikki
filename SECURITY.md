@@ -241,6 +241,12 @@ These kinds of issue are always in scope:
 - **Releases are built on self-hosted runners.** In the owner's
   deployment the release job, which pushes the image Nyyrikki runs as,
   runs on cluster nodes that also run other repositories' privileged
-  Docker-in-Docker CI jobs. A job that escapes to a node could tamper
-  with a build. Pull requests from forks never run there (docs/01 D18).
+  Docker-in-Docker CI jobs. The runners are ephemeral (one pod per job),
+  but a job that escapes to a node could tamper with a build running
+  there, or use that job's token while it runs: the release token can
+  push an image under the release's tag, overwrite release assets
+  (`IMAGE`, `SHA256SUMS`) and push to unprotected refs. The Claude review
+  workflows' secrets are on the same nodes. Base images are pinned by
+  digest and actions by commit SHA, so a tampered registry cache can't
+  swap them (docs/01 D18).
 - **One replica.** When Nyyrikki is down, nothing privileged runs.
