@@ -46,16 +46,19 @@ func TestSSHInvalid(t *testing.T) {
 		"source not a CIDR":    {"[203.0.113.10/32]", "[203.0.113.10]"},
 		"source not canonical": {"[203.0.113.10/32]", "[203.0.113.10/24]"},
 		"source with shell":    {"[203.0.113.10/32]", "[\"203.0.113.10/32 $(id)\"]"},
-		"RSA CA key":           {caKey, "    - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC7\n"},
-		"CA key with options":  {caKey, "    - from=\"x\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y\n"},
-		"two CA keys in one":   {caKey, "    - \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y x\\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y\"\n"},
-		"no port":              {"address: db-1.example.com:22", "address: db-1.example.com"},
-		"bad port":             {"address: db-1.example.com:22", "address: db-1.example.com:0"},
-		"bad host":             {"address: db-1.example.com:22", "address: \"db 1:22\""},
-		"bad host key":         {"        - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl", "        - not-a-key"},
-		"connect timeout":      {"  source_addresses: [203.0.113.10/32]\n", "  source_addresses: [203.0.113.10/32]\n  connect_timeout: 5m\n"},
-		"both types":           {"    ssh:\n      address", "    kubernetes:\n      in_cluster: true\n    ssh:\n      address"},
-		"unknown ssh field":    {"      sudo: true", "      sudo: true\n      port_forward: true"},
+		// Review round 1, finding 7: the setup script refuses these, and
+		// nothing it refuses is served (D16).
+		"source IPv4-mapped":  {"[203.0.113.10/32]", "[\"::ffff:10.0.0.0/104\"]"},
+		"RSA CA key":          {caKey, "    - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC7\n"},
+		"CA key with options": {caKey, "    - from=\"x\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y\n"},
+		"two CA keys in one":  {caKey, "    - \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y x\\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y\"\n"},
+		"no port":             {"address: db-1.example.com:22", "address: db-1.example.com"},
+		"bad port":            {"address: db-1.example.com:22", "address: db-1.example.com:0"},
+		"bad host":            {"address: db-1.example.com:22", "address: \"db 1:22\""},
+		"bad host key":        {"        - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl", "        - not-a-key"},
+		"connect timeout":     {"  source_addresses: [203.0.113.10/32]\n", "  source_addresses: [203.0.113.10/32]\n  connect_timeout: 5m\n"},
+		"both types":          {"    ssh:\n      address", "    kubernetes:\n      in_cluster: true\n    ssh:\n      address"},
+		"unknown ssh field":   {"      sudo: true", "      sudo: true\n      port_forward: true"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

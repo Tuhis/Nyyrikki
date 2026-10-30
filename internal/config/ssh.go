@@ -129,5 +129,10 @@ func ParseSourceAddress(s string) (netip.Prefix, error) {
 	if err != nil || p.String() != s || p.Masked() != p {
 		return netip.Prefix{}, errors.New("must be a CIDR in canonical form, such as 203.0.113.10/32")
 	}
+	// The setup script refuses IPv4-mapped IPv6, and nothing it refuses
+	// is served (docs/07 D16): write the IPv4 range itself.
+	if p.Addr().Is4In6() {
+		return netip.Prefix{}, errors.New("must not be IPv4-mapped IPv6; write the IPv4 range, such as 10.0.0.0/8")
+	}
 	return p, nil
 }
