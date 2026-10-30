@@ -252,6 +252,7 @@ These kinds of issue are always in scope:
   telemetry client) are on the same nodes, and while one runs, the
   Claude GitHub App token it mints can push to unprotected refs and
   write pull request and issue comments. The Dockerfile's base images
-  and the release's BuildKit are pinned by digest and actions by commit
-  SHA, so a tampered registry cache can't swap them (docs/01 D18).
+  and the release's BuildKit are pinned by digest, so a tampered
+  registry cache can't swap them; actions are pinned by commit SHA
+  (docs/01 D18).
 - **One replica.** When Nyyrikki is down, nothing privileged runs.
