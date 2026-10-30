@@ -45,8 +45,12 @@ jobs:
           || github.event.issue.user.login) == 'tuhokuutio[bot]'
       )
     # The self-hosted pool, as ci.yml's RUNNER POOL (docs/01 D18). The if:
-    # above already admits only this repository's writers.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    # above admits only this repository's writers, but on a review or a
+    # review comment the checkout below is the PR's merge commit, so a
+    # fork's ./.github/actions/claude-otel would run. Such a run goes to
+    # GitHub-hosted runners: a positive check, so an unknown head repository
+    # counts as outside. Issue comments check out the default branch.
+    runs-on: ${{ (github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: read
