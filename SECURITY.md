@@ -171,11 +171,11 @@ These kinds of issue are always in scope:
 
 - **An MCP harness may stay signed in for as long as the offline session
   cap** (docs/01 OD17, owner decision 2026-10-30). Its tokens outlive the
-  browser session it signed in through, which signing out doesn't end,
-  and a stolen copy of its token
-  store keeps working until its client's consent is revoked, the owner is
-  signed out, or the cap passes. What it buys an attacker alone is
-  being an agent: listing targets and asking the approver; every
+  browser session it signed in through: signing out the owner's browser
+  sessions doesn't end it. A stolen copy of its token store keeps
+  working until its client's consent is revoked, the owner is signed out
+  (Users → the owner → Sign out), or the cap passes. What it buys an
+  attacker alone is being an agent: listing targets and asking the approver; every
   privileged request still needs a tap (INV-01). Revoke a harness by
   removing its client's access (docs/setup/keycloak.md, Revoking an
   agent). The CLI's tokens stay bound to the browser session.

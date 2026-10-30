@@ -122,8 +122,8 @@ by the chart's `secrets.introspection`.
 - **One MCP harness** (it may hold an offline session, docs/01 OD17):
   Users → the owner → Consents → **Revoke** its client, or, as the owner,
   the account console's Applications → **Remove access**. Signing out
-  the owner's sessions under Sessions does **not** end it: its session
-  is an offline one.
+  the owner's browser sessions (type *Regular SSO* under Sessions) does
+  **not** end it: its session is an offline one.
 - **A CLI login** (no offline session): Users → the owner → Sessions →
   sign its session out.
 - **Every agent at once**: Users → the owner → **Sign out**. It sets a

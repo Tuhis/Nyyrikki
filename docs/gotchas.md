@@ -130,9 +130,9 @@ the doc.
   may give the user no roles; consent then succeeds and the token
   request fails with `Offline tokens not allowed for the user or
   client`. ([docs/01](01-foundations.md) OD17)
-- **Signing out a user's sessions doesn't end an offline harness.** Its
-  token's `sid` is its offline session, which the Sessions list's sign-out
-  leaves alone. Revoke its consent, or sign the user out (that sets a
+- **Signing out a user's browser sessions doesn't end an offline
+  harness.** Its token's `sid` is also its offline session, which signing
+  out the browser (online) sessions leaves alone. Revoke its consent, or sign the user out (that sets a
   not-before time offline tokens are checked against).
   ([docs/01](01-foundations.md) M9)
 - **Keycloak requires PKCE in the device grant for a client with PKCE

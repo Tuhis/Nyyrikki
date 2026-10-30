@@ -618,8 +618,14 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 	json.Unmarshal(onlineRaw, &online)
 	json.Unmarshal(offlineRaw, &offline)
 	t.Logf("M9 OD17: after an offline sign-in through a signed-in browser, sid %v; online sessions %s; the harness's offline sessions %s", sid, onlineRaw, offlineRaw)
-	if !slices.ContainsFunc(offline, func(s session) bool { return s.ID == sid }) {
+	isSid := func(s session) bool { return s.ID == sid }
+	if !slices.ContainsFunc(offline, isSid) {
 		t.Errorf("the harness's sid %v isn't one of its offline sessions: %s", sid, offlineRaw)
+	}
+	// The browser's session has the same ID, so the sign-out below ends the
+	// very session the harness signed in through.
+	if !slices.ContainsFunc(online, isSid) {
+		t.Errorf("the harness's sid %v isn't the browser's session: %s", sid, onlineRaw)
 	}
 	at2, rt2 := e.refresh(t, id, rt)
 	if at2 == "" || claims(at2)["sid"] != sid || claims(at2)["aud"] != e.canonical+"/mcp" {
