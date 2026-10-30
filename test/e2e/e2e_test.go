@@ -333,6 +333,11 @@ func TestEndToEnd(t *testing.T) {
 			t.Fatal("a revoked session reached the approver")
 		}
 	})
+
+	// Last: it ends the owner's sessions, which would empty the step above.
+	step(t, "OD17: an offline MCP harness outlives the browser sessions and ends on revoke or sign-out", func(t *testing.T) {
+		e.checkOffline(t, next)
+	})
 }
 
 // step runs one subtest and stops the walk at the first failure: later

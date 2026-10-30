@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +48,7 @@ func (e *env) configureDCR(t *testing.T) {
 		id[s.Name] = s.ID
 	}
 	// What a registered client gets: never `roles` (it adds `account` to
-	// aud) or `offline_access`; `nyyrikki` as optional.
+	// aud); `nyyrikki` and `offline_access` as optional (OD17).
 	var defs, opts []scope
 	json.Unmarshal(e.admin(t, "GET", r+"/default-default-client-scopes", nil), &defs)
 	for _, s := range defs {
@@ -56,12 +57,22 @@ func (e *env) configureDCR(t *testing.T) {
 		}
 	}
 	json.Unmarshal(e.admin(t, "GET", r+"/default-optional-client-scopes", nil), &opts)
+	optional := map[string]bool{}
 	for _, s := range opts {
-		if s.Name == "roles" || s.Name == "offline_access" {
+		if s.Name == "roles" {
 			e.admin(t, "DELETE", r+"/default-optional-client-scopes/"+s.ID, nil)
 		}
+		optional[s.Name] = true
 	}
-	e.admin(t, "PUT", r+"/default-optional-client-scopes/"+id["nyyrikki"], nil)
+	// A new realm already offers offline_access as optional; adding a
+	// scope that is there is a 409.
+	for _, n := range []string{"nyyrikki", "offline_access"} {
+		if !optional[n] {
+			e.admin(t, "PUT", r+"/default-optional-client-scopes/"+id[n], nil)
+		}
+	}
+	// Offline sessions capped (OD17; the owner's deployment uses a year).
+	e.admin(t, "PUT", r, map[string]any{"offlineSessionMaxLifespanEnabled": true, "offlineSessionMaxLifespan": 31536000})
 
 	// Anonymous registration: redirect URIs on loopback only, and the
 	// nyyrikki scope allowed. Consent Required and Max Clients stay.
@@ -82,7 +93,7 @@ func (e *env) configureDCR(t *testing.T) {
 			cfg["client-uris-must-match"] = []string{"true"}
 			cfg["trusted-hosts"] = []string{"localhost", "127.0.0.1"}
 		case "allowed-client-templates":
-			cfg["allowed-client-scopes"] = []string{"nyyrikki"}
+			cfg["allowed-client-scopes"] = []string{"nyyrikki", "offline_access"}
 		default:
 			seen[fmt.Sprint(c["providerId"])] = true
 			continue
@@ -246,9 +257,17 @@ func pkce() (verifier, challenge string) {
 // the token request. It returns the access token.
 func (b *browser) signIn(t *testing.T, clientID string) string {
 	t.Helper()
+	tok, _ := b.signInScope(t, clientID, "nyyrikki")
+	return tok
+}
+
+// signInScope is signIn asking for scope; it also returns the refresh
+// token.
+func (b *browser) signInScope(t *testing.T, clientID, scope string) (string, string) {
+	t.Helper()
 	verifier, challenge := pkce()
 	back := b.authorize(t, url.Values{
-		"client_id": {clientID}, "redirect_uri": {loopback}, "response_type": {"code"}, "scope": {"nyyrikki"},
+		"client_id": {clientID}, "redirect_uri": {loopback}, "response_type": {"code"}, "scope": {scope},
 		"state": {"s"}, "code_challenge": {challenge}, "code_challenge_method": {"S256"},
 	})
 	code := back.Query().Get("code")
@@ -264,14 +283,15 @@ func (b *browser) signIn(t *testing.T, clientID string) string {
 	}
 	defer resp.Body.Close()
 	var tr struct {
-		AccessToken string `json:"access_token"`
-		Error       string `json:"error"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		Error        string `json:"error"`
 	}
 	json.NewDecoder(resp.Body).Decode(&tr)
 	if tr.AccessToken == "" {
 		t.Fatalf("token for %s: %s", clientID, tr.Error)
 	}
-	return tr.AccessToken
+	return tr.AccessToken, tr.RefreshToken
 }
 
 // mcpSession connects to /mcp with a Bearer token, as a harness does.
@@ -519,5 +539,155 @@ func (e *env) checkLoginMCP(t *testing.T) {
 	}
 	if l1, l2 := mcpLogin(c), mcpLogin(c2); l1 == nil || l1 == l2 {
 		t.Fatalf("two login --mcp share a client: %v %v", l1, l2)
+	}
+}
+
+// refresh trades a public client's refresh token for a new access token
+// and refresh token; both are empty if Keycloak refuses.
+func (e *env) refresh(t *testing.T, clientID, rt string) (string, string) {
+	t.Helper()
+	resp, err := e.httpClient().PostForm(e.issuer+"/protocol/openid-connect/token", url.Values{
+		"grant_type": {"refresh_token"}, "refresh_token": {rt}, "client_id": {clientID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var tr struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	json.NewDecoder(resp.Body).Decode(&tr)
+	return tr.AccessToken, tr.RefreshToken
+}
+
+// runVia calls run through a harness's session and returns the result's
+// structured content as JSON.
+func runVia(t *testing.T, cs *mcp.ClientSession, reason string) (*mcp.CallToolResult, string) {
+	t.Helper()
+	r, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "run", Arguments: map[string]any{
+		"target": "this-cluster", "args": []string{"auth", "whoami", "-o", "jsonpath={.status.userInfo.username}"}, "reason": reason,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(r.StructuredContent)
+	return r, string(raw)
+}
+
+// offlineHarness registers a harness asking for offline_access, as Claude
+// Code does, and signs it in through b; it returns the client ID, an
+// access token and the offline refresh token.
+func (e *env) offlineHarness(t *testing.T, b *browser, name string) (string, string, string) {
+	t.Helper()
+	code, out := e.register(t, map[string]any{
+		"client_name": name, "redirect_uris": []string{loopback},
+		"grant_types": []string{"authorization_code", "refresh_token"}, "response_types": []string{"code"},
+		"token_endpoint_auth_method": "none", "scope": "nyyrikki offline_access",
+	})
+	id, _ := out["client_id"].(string)
+	if code != http.StatusCreated || id == "" {
+		t.Fatalf("registering a harness that asks for offline_access: %d %v", code, redact(out))
+	}
+	at, rt := b.signInScope(t, id, "nyyrikki offline_access")
+	if claims(rt)["typ"] != "Offline" {
+		t.Fatalf("refresh token type %v, want Offline", claims(rt)["typ"])
+	}
+	return id, at, rt
+}
+
+// checkOffline is an MCP harness holding an offline session (docs/01
+// OD17): it stays one agent across refreshes, signing out the owner's
+// browser sessions leaves it working, and it ends when its client's access
+// is revoked or the owner is signed out (docs/setup/keycloak.md, Revoking
+// an agent).
+func (e *env) checkOffline(t *testing.T, next func() int) {
+	users := "/admin/realms/" + realm + "/users/" + e.ownerID
+	// The owner's browser is usually signed in to Keycloak already, so the
+	// harness signs in through a browser that has a session of its own.
+	b := e.newBrowser()
+	b.signIn(t, e.harness(t, "the browser's first harness"))
+	id, at, rt := e.offlineHarness(t, b, "offline harness")
+	sid := claims(at)["sid"]
+	type session struct {
+		ID string `json:"id"`
+	}
+	var online, offline []session
+	onlineRaw := e.admin(t, "GET", users+"/sessions", nil)
+	offlineRaw := e.admin(t, "GET", users+"/offline-sessions/"+fmt.Sprint(e.adminClient(t, id)["id"]), nil)
+	json.Unmarshal(onlineRaw, &online)
+	json.Unmarshal(offlineRaw, &offline)
+	t.Logf("M9 OD17: after an offline sign-in through a signed-in browser, sid %v; online sessions %s; the harness's offline sessions %s", sid, onlineRaw, offlineRaw)
+	isSid := func(s session) bool { return s.ID == sid }
+	if !slices.ContainsFunc(offline, isSid) {
+		t.Errorf("the harness's sid %v isn't one of its offline sessions: %s", sid, offlineRaw)
+	}
+	// The browser's session has the same ID, so the sign-out below ends the
+	// very session the harness signed in through.
+	if !slices.ContainsFunc(online, isSid) {
+		t.Errorf("the harness's sid %v isn't the browser's session: %s", sid, onlineRaw)
+	}
+	at2, rt2 := e.refresh(t, id, rt)
+	if at2 == "" || claims(at2)["sid"] != sid || claims(at2)["aud"] != e.canonical+"/mcp" {
+		t.Fatalf("offline refresh: issued=%v sid %v -> %v aud=%v", at2 != "", sid, claims(at2)["sid"], claims(at2)["aud"])
+	}
+
+	// Nyyrikki takes it: a run reaches the approver and runs.
+	ch := make(chan string, 1)
+	go func() { _, raw := runVia(t, e.mcpSession(t, at2), "offline harness"); ch <- raw }()
+	e.tap(t, next(), "Approve")
+	if raw := <-ch; !strings.Contains(raw, ownerK8sUser) {
+		t.Fatalf("run as the offline harness: %s", raw)
+	}
+
+	// Signing out every browser session of the owner leaves it working:
+	// it refreshes, and its next run reaches the approver.
+	if len(online) == 0 {
+		t.Fatal("the browser had no session to sign out, so this measures nothing")
+	}
+	for _, ss := range online {
+		e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+ss.ID, nil)
+	}
+	if rest := e.admin(t, "GET", users+"/sessions", nil); string(rest) != "[]" {
+		t.Fatalf("online sessions left after signing them out: %s", rest)
+	}
+	at3, rt3 := e.refresh(t, id, rt2)
+	if at3 == "" {
+		t.Fatal("signing out the browser sessions ended the offline harness too")
+	}
+	ch = make(chan string, 1)
+	go func() { _, raw := runVia(t, e.mcpSession(t, at3), "after the browser sessions ended"); ch <- raw }()
+	e.tap(t, next(), "Deny")
+	if raw := <-ch; !strings.Contains(raw, "denied") {
+		t.Fatalf("offline harness after the browser sessions ended: %s", raw)
+	}
+
+	// Removing its client's access ends it at once ...
+	e.admin(t, "DELETE", users+"/consents/"+url.PathEscape(id), nil)
+	if a, _ := e.refresh(t, id, rt3); a != "" {
+		t.Fatal("an offline token still refreshes after its client's access was revoked")
+	}
+	before := len(e.tg.Sent(t))
+	r, raw := runVia(t, e.mcpSession(t, at3), "after revoke")
+	if !r.IsError || !strings.Contains(raw, "session_inactive") {
+		t.Fatalf("offline harness after revoke: %s", raw)
+	}
+
+	// ... and so does signing the owner out, for every harness. Sign-out
+	// sets a not-before time for the user, which refuses every token issued
+	// before it, offline ones included; a token issued in the same second
+	// survives, so the test steps past it.
+	id2, at4, rt4 := e.offlineHarness(t, e.newBrowser(), "second offline harness")
+	time.Sleep(1100 * time.Millisecond)
+	e.admin(t, "POST", users+"/logout", nil)
+	if a, _ := e.refresh(t, id2, rt4); a != "" {
+		t.Fatal("an offline token still refreshes after the owner was signed out")
+	}
+	r, raw = runVia(t, e.mcpSession(t, at4), "after sign-out")
+	if !r.IsError || !strings.Contains(raw, "session_inactive") {
+		t.Fatalf("offline harness after the owner was signed out: %s", raw)
+	}
+	if len(e.tg.Sent(t)) != before {
+		t.Fatal("a revoked harness reached the approver")
 	}
 }

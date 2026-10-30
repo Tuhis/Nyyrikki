@@ -117,9 +117,24 @@ the doc.
   single audience refuses every token. Remove the scope from the clients.
   ([docs/01](01-foundations.md) M9)
 - **A client registered through DCR gets the realm's default scopes**,
-  not the ones a client set up by hand has. Take `roles` and
-  `offline_access` out of the realm's defaults, or every registered client
-  gets them. ([docs/01](01-foundations.md) M9)
+  not the ones a client set up by hand has. Take `roles` out of the
+  realm's defaults, or every registered client gets it; offer
+  `offline_access` only if you mean to (OD17). ([docs/01](01-foundations.md) M9)
+- **Claude Code asks for `offline_access` when it registers through
+  DCR**, and Keycloak's Allowed Client Scopes policy refuses the whole
+  registration if that scope isn't allowed (`Not permitted to use
+  specified clientScope`). Allow it, or the harness can't sign in.
+  ([docs/01](01-foundations.md) OD17)
+- **An offline token also needs the user to hold the `offline_access`
+  realm role.** A realm imported with its own users and client scopes
+  may give the user no roles; consent then succeeds and the token
+  request fails with `Offline tokens not allowed for the user or
+  client`. ([docs/01](01-foundations.md) OD17)
+- **Signing out a user's browser sessions doesn't end an offline
+  harness.** Its token's `sid` is also its offline session, which signing
+  out the browser (online) sessions leaves alone. Revoke its consent, or sign the user out (that sets a
+  not-before time offline tokens are checked against).
+  ([docs/01](01-foundations.md) M9)
 - **Keycloak requires PKCE in the device grant for a client with PKCE
   set**, which the pkce-enforcer client policy does for every registered
   client: without `code_challenge` the device authorization request fails

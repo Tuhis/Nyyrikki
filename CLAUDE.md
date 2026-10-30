@@ -78,7 +78,8 @@ Decisions and their reasons only. The detail, the owner decisions
   external authorization server, Keycloak as the reference, using its
   supported features only: DCR for MCP clients, the device grant for
   the CLI with DPoP required, an audience scope, introspection, no
-  `offline_access` (D6, D7).
+  `offline_access` for the CLI; MCP harnesses may hold offline sessions,
+  capped (D6, D7, OD17, owner decision 2026-10-30).
 - **Human = token `sub` from the configured issuer, looked up in the
   human registry. Agent = one sign-in: (issuer, `azp`, `cnf.jkt`) for
   the CLI, whose tokens are DPoP-bound to a key made per

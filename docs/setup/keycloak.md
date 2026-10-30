@@ -13,8 +13,17 @@ Write `NYYRIKKI` for Nyyrikki's canonical URL, e.g.
   `https://<keycloak>/realms/nyyrikki`.
 - **Sessions** (Realm settings → Sessions): SSO Session Max a working day
   or less (e.g. 10 h). Agents sign in again after it.
-- **No offline access**: remove `offline_access` from the realm's default
-  scopes, so no client gets an offline token.
+- **Offline sessions** (Realm settings → Sessions), for MCP harnesses
+  that stay signed in (docs/01 OD17): turn **Offline Session Max Limited**
+  on and pick a cap (the owner's deployment uses a year, with Offline
+  Session Idle at 30 days). Without the cap an offline session that is
+  used lives forever. The human needs the realm role `offline_access`;
+  a realm set up from an import may have given the user no roles at all
+  (Keycloak then answers `Offline tokens not allowed for the user or
+  client`). To keep every agent bound to the browser session instead,
+  don't offer `offline_access` to registered clients (below); harnesses
+  that ask for it at registration, as Claude Code does, then can't sign
+  in.
 
 ## The audience scope
 
@@ -51,8 +60,9 @@ Nyyrikki accepts only the human in its registry. The settings below are
 measured by the e2e test (`test/e2e`, docs/01 M9).
 
 **What a registered client gets.** It gets the realm's default scopes:
-Client scopes → set `roles` and `offline_access` to **None** (not Default
-or Optional) and `nyyrikki` to **Optional**.
+Client scopes → set `roles` to **None** (not Default or Optional), and
+`nyyrikki` and `offline_access` to **Optional**. Claude Code asks for
+`offline_access` when it registers (docs/01 OD17).
 
 **Anonymous access policies** (Clients → Client registration):
 
@@ -60,7 +70,7 @@ or Optional) and `nyyrikki` to **Optional**.
   Match" **off**, "Client URIs Must Match" **on**, Trusted Hosts
   `localhost` and `127.0.0.1`. Redirect URIs then have to be on loopback,
   so a sign-in's code can only go back to the machine it started on.
-- **Allowed Client Scopes**: add `nyyrikki`.
+- **Allowed Client Scopes**: add `nyyrikki` and `offline_access`.
 - Leave **Consent Required** on (the owner sees each new client by name)
   and **Max Clients** as it is.
 
@@ -109,5 +119,24 @@ by the chart's `secrets.introspection`.
 
 ## Revoking an agent
 
-Users → the owner → Sessions → sign the session out. Nyyrikki introspects
-on every run and elevate, so the agent is cut off at once (docs/01 OD13).
+- **One MCP harness** (it may hold an offline session, docs/01 OD17):
+  Users → the owner → Consents → **Revoke** its client, or, as the owner,
+  the account console's Applications → **Remove access**. Signing out
+  the owner's browser sessions (type *Regular SSO* under Sessions) does
+  **not** end it: its session is an offline one.
+- **A CLI login** (no offline session): Users → the owner → Sessions →
+  sign its session out.
+- **Every agent at once**: Users → the owner → **Sign out**. It sets a
+  not-before time for the user, so every token issued before it is
+  refused, offline ones included. A sign-in completed in the same second
+  survives it: check Users → the owner → Consents afterwards. Realm
+  settings → Sessions → Revocation → **Set to now** sets the same for every
+  user of the realm, by Keycloak's documentation.
+
+Nyyrikki introspects on every run and elevate, so the agent is cut off at
+once (docs/01 OD13). The e2e test measures, on Keycloak 26.8.1: revoking
+a harness's consent (through the admin API), signing out every one of
+the owner's sessions (through the admin API) without ending an offline
+harness, and signing the owner out. The account
+console's Remove access, a single CLI session's sign-out and Set to now
+follow Keycloak's documentation and aren't measured.
