@@ -34,6 +34,10 @@ func TestEndToEnd(t *testing.T) {
 		if cnf, _ := c["cnf"].(map[string]any); cnf == nil || cnf["jkt"] == nil || cnf["jkt"] == "" {
 			t.Fatalf("the CLI's token isn't DPoP-bound: cnf=%v", c["cnf"])
 		}
+		// The CLI's sign-in stays bound to the browser session (docs/01 OD17).
+		if rt, _ := lf["refresh_token"].(string); claims(rt)["typ"] == "Offline" {
+			t.Fatal("the CLI's login holds an offline session")
+		}
 		r := agent.run(t, "", "targets")
 		if r.code != 0 || !strings.Contains(r.stdout, "this-cluster") {
 			t.Fatalf("targets: %+v", r)

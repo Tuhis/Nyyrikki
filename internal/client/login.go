@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -206,10 +207,11 @@ type resourceMetadata struct {
 }
 
 type asMetadata struct {
-	Issuer                      string `json:"issuer"`
-	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint"`
-	TokenEndpoint               string `json:"token_endpoint"`
-	RegistrationEndpoint        string `json:"registration_endpoint"`
+	Issuer                      string   `json:"issuer"`
+	DeviceAuthorizationEndpoint string   `json:"device_authorization_endpoint"`
+	TokenEndpoint               string   `json:"token_endpoint"`
+	RegistrationEndpoint        string   `json:"registration_endpoint"`
+	ScopesSupported             []string `json:"scopes_supported"`
 }
 
 func getJSON(ctx context.Context, hc *http.Client, u string, v any) error {
@@ -293,7 +295,13 @@ func SignIn(ctx context.Context, o LoginOptions) (*Login, error) {
 	// grant too for a client whose PKCE method is set, as its pkce-enforcer
 	// client policy does for every registered client.
 	verifier, challenge := pkcePair()
-	form := url.Values{"client_id": {l.ClientID}, "scope": {strings.Join(rm.ScopesSupported, " ")},
+	scope := slices.Clone(rm.ScopesSupported)
+	// An MCP harness may hold an offline session, so its sign-in outlives
+	// the browser session (docs/01 OD17); the CLI's never does.
+	if o.MCP && slices.Contains(am.ScopesSupported, "offline_access") {
+		scope = append(scope, "offline_access")
+	}
+	form := url.Values{"client_id": {l.ClientID}, "scope": {strings.Join(scope, " ")},
 		"code_challenge": {challenge}, "code_challenge_method": {"S256"}}
 	var da struct {
 		DeviceCode              string `json:"device_code"`

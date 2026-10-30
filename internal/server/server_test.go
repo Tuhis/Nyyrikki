@@ -403,6 +403,30 @@ func TestDeviceGrantPKCE(t *testing.T) {
 	}
 }
 
+// TestMCPLoginAsksOffline: `login --mcp` asks for offline_access when the
+// authorization server offers it, so a harness's sign-in outlives the
+// browser session (docs/01 OD17). The CLI login never does, and neither
+// does `--mcp` where it isn't offered.
+func TestMCPLoginAsksOffline(t *testing.T) {
+	for _, offered := range []bool{true, false} {
+		e := servertest.Start(t)
+		e.AS.AutoApprove = true
+		e.AS.OfflineAccess = offered
+		for _, mcp := range []bool{true, false} {
+			path := filepath.Join(t.TempDir(), "login.json")
+			l, err := client.SignIn(context.Background(), client.LoginOptions{Server: e.URL(), CAFile: e.CAFile, Path: path, MCP: mcp, ClientName: "test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			scope := strings.Fields(e.AS.DeviceScope(l.ClientID))
+			want := offered && mcp
+			if slices.Contains(scope, "offline_access") != want || !slices.Contains(scope, "nyyrikki") {
+				t.Errorf("offered=%v mcp=%v: asked for %q", offered, mcp, scope)
+			}
+		}
+	}
+}
+
 // TestDeviceGrantWrongVerifier: the test authorization server's PKCE
 // check isn't vacuous: a device code issued for one challenge gives no
 // token for another verifier.

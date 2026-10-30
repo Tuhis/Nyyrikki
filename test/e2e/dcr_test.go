@@ -531,13 +531,19 @@ func (e *env) checkLoginMCP(t *testing.T) {
 	// A second login --mcp is another client, so another agent (OD16).
 	c2 := e.newCLI(t)
 	c2.login(t, "--mcp")
-	mcpLogin := func(c *cli) any {
+	mcpLogin := func(c *cli) map[string]any {
 		b, _ := os.ReadFile(filepath.Join(c.home, ".config", "nyyrikki", "mcp-login.json"))
 		var m map[string]any
 		json.Unmarshal(b, &m)
-		return m["client_id"]
+		return m
 	}
-	if l1, l2 := mcpLogin(c), mcpLogin(c2); l1 == nil || l1 == l2 {
+	// It holds an offline session (docs/01 OD17), so it outlives the
+	// browser session; the CLI's own login doesn't (M1 above).
+	rt, _ := mcpLogin(c)["refresh_token"].(string)
+	if typ := claims(rt)["typ"]; typ != "Offline" {
+		t.Fatalf("login --mcp refresh token type %v, want Offline", typ)
+	}
+	if l1, l2 := mcpLogin(c)["client_id"], mcpLogin(c2)["client_id"]; l1 == nil || l1 == l2 {
 		t.Fatalf("two login --mcp share a client: %v %v", l1, l2)
 	}
 }
