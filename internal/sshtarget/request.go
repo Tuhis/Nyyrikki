@@ -127,11 +127,9 @@ func (r *Request) Audit() audit.Request {
 // DisplayCommand is the command string with every character that could
 // hide or reorder text shown as \u{…} (docs/04 §5.2); tab and newline
 // stay, so a multi-line command reads as it runs (docs/07 D2). A login
-// shell shows as "(login shell)". Nothing is redacted.
+// shell is "": the prompt marks it outside the command block, where no
+// command can produce the same text. Nothing is redacted.
 func (r *Request) DisplayCommand() string {
-	if r.command == "" {
-		return "(login shell)"
-	}
 	var b strings.Builder
 	run := 0
 	for _, c := range r.command {

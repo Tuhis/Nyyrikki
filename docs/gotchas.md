@@ -200,6 +200,12 @@ the doc.
   lose the signal.** A test host saw `KILL` only some of the time when
   the connection closed right after it. Give the session a moment to
   end before closing. ([docs/07](07-ssh-target.md) §10)
+- **A shell splits words only on ASCII blanks, but Telegram shows any
+  Unicode space as a space.** `cat notes<U+00A0># ; curl … | sh` reads
+  as a command and a comment, yet `#` starts no comment on the host.
+  Show every space but U+0020 escaped. Lookalike punctuation, such as
+  U+FF03 for `#`, is not escaped: read a command with non-ASCII
+  characters with care. ([docs/07](07-ssh-target.md) D2)
 
 **Tooling and dependencies**
 

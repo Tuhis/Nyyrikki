@@ -94,6 +94,10 @@ func hidden(r rune) bool {
 		return true
 	case r == 0x2800: // Braille pattern blank: a visible-width blank
 		return true
+	// Every space but U+0020 (docs/07 D2): a shell splits words only on
+	// ASCII blanks, so "notes<NBSP>#" is one word, not a comment.
+	case unicode.Is(unicode.Zs, r) && r != ' ':
+		return true
 	}
 	return false
 }
@@ -173,6 +177,7 @@ func renderReason(sb *strings.Builder, reason string) {
 const (
 	rootViaSudo    = "root via sudo"
 	interactiveSSH = "what is typed is not shown"
+	loginShell     = "none, a login shell"
 	stdinNotShown  = "stdin is not shown. If the command runs it, you can't see what runs"
 	noSessionKill  = "This host doesn't finish cuts: what this starts may keep running after the approval ends, and anything does if the host is unreachable"
 )
@@ -230,9 +235,15 @@ func renderSSHRun(p approval.RunPrompt) string {
 	sb.WriteString("\n")
 	renderSSHRunAs(&sb, *p.SSH)
 	renderAgent(&sb, p.Agent)
-	sb.WriteString("\n<b>Command:</b>\n<pre>")
-	sb.WriteString(show(p.Argv, true))
-	sb.WriteString("</pre>\n")
+	if p.Argv == "" {
+		// A login shell (sshtarget.Build allows no command only for an
+		// interactive run). Outside <pre>, so no command reads like it.
+		sb.WriteString("\n<b>Command:</b> <i>" + loginShell + "</i>\n")
+	} else {
+		sb.WriteString("\n<b>Command:</b>\n<pre>")
+		sb.WriteString(show(p.Argv, true))
+		sb.WriteString("</pre>\n")
+	}
 	if p.Stdin != "" {
 		sb.WriteString("<b>stdin:</b> ")
 		sb.WriteString(code(p.Stdin))

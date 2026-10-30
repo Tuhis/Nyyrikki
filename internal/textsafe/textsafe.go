@@ -9,9 +9,12 @@ import "unicode"
 // approver reads: control characters, format characters (bidi controls,
 // zero-width characters, BOM), line/paragraph separators, every Unicode
 // default-ignorable code point (variation selectors, fillers, tags and
-// the like) and the blank braille pattern U+2800.
+// the like), the blank braille pattern U+2800, and every space other than
+// U+0020: a shell splits words only on ASCII blanks, so a no-break space
+// would read as a word break that isn't one (docs/07 D2).
 func Invisible(r rune) bool {
 	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) ||
+		(unicode.Is(unicode.Zs, r) && r != ' ') ||
 		unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) ||
 		unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r) ||
 		unicode.Is(unicode.Variation_Selector, r) ||

