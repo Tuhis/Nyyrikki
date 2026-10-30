@@ -23,13 +23,29 @@ type Agent struct {
 	SignedInAt time.Time
 }
 
+// SSHHost is what the approver is shown about an SSH target (docs/07
+// D12): the account a run uses there, the host's address, and what its
+// config states about root and about cuts.
+type SSHHost struct {
+	Target      string
+	Account     string
+	Address     string
+	Sudo        bool
+	SessionKill bool
+}
+
 // RunPrompt asks for a one-off approval of one request (docs/05 D5).
-// Argv and Stdin are the display forms from docs/04 §5.2, already redacted
-// (docs/04 D14) but not HTML-escaped. Stdin is empty when there is none.
+// Argv and Stdin are the display forms from docs/04 §5.2 and docs/07 D2,
+// already redacted where the type redacts (docs/04 D14) but not
+// HTML-escaped. Stdin is empty when there is none. For an SSH target
+// (Type codes.TypeSSH), Argv is the command string, possibly multi-line,
+// Stdin is only its size and hash, and SSH is set.
 type RunPrompt struct {
 	ID          string
 	ApproverID  int64
 	Target      string
+	Type        string
+	SSH         *SSHHost
 	RunAs       Identity
 	Agent       Agent
 	Argv        string
@@ -40,12 +56,15 @@ type RunPrompt struct {
 }
 
 // ElevationPrompt asks for an elevation (docs/05 D7).
+// RunAs is the Kubernetes identity, for the targets SSH doesn't list;
+// SSH lists the SSH targets among Targets (docs/07 D12).
 type ElevationPrompt struct {
 	ID         string
 	ApproverID int64
 	Targets    []string
 	Duration   time.Duration
 	RunAs      Identity
+	SSH        []SSHHost
 	Agent      Agent
 	Reason     string
 	ExpiresAt  time.Time
@@ -63,6 +82,15 @@ const (
 	ElevationLive
 	ElevationEnded
 	ElevationExpired
+	// SessionApproved is Approved for an interactive run: no buttons,
+	// but the message stays editable for SessionLive (docs/07 D17).
+	SessionApproved
+	// SessionLive shows "Session live since At" with End now.
+	SessionLive
+	// SessionEnded shows "Session ended at At", without buttons.
+	SessionEnded
+	// SessionUnused closes an approved session that never attached.
+	SessionUnused
 )
 
 // Outcome is the final or current state of a prompt. Until is set for
@@ -79,7 +107,7 @@ type Action int
 const (
 	ActionApprove Action = iota + 1
 	ActionDeny
-	ActionEnd // "End now" on a live elevation
+	ActionEnd // "End now" on a live elevation or interactive run
 )
 
 // Asker sends prompts to the approver.

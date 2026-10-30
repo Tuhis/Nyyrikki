@@ -230,6 +230,31 @@ These kinds of issue are always in scope:
   obtain such a credential there, which in practice means while the
   human isn't its administrator. INV-03 bounds elevations, not what one
   request returns. The defence is the approver's tap.
+- **An approved command on an SSH host, or any command under an
+  elevation on it, can do anything its account can** (docs/07 §6, as
+  docs/04 OD3 for kubectl; owner decisions docs/07 OD1, OD2, 2026-10-29).
+  On a host set up with `sudo: true` that is root, so it can rewrite the
+  host's SSH and sudo setup, add a key or CA of its own, or install a
+  backdoor: INV-01 and INV-10 then no longer hold for that host, and an
+  elevation there is up to 30 minutes of root with no message per
+  command. Work a command moves out of its session (a service, a timer,
+  a cron job) outlives any cut, and on a host without session kill so
+  may anything it started (docs/07 D11). The defence is the approver
+  reading the command; the message says when it runs as root and when
+  the host doesn't finish cuts (docs/07 D12). Turning `sudo` off later
+  doesn't undo root kept that way: the setup's check for it is best
+  effort, so such a host's accounts are remade (`--uninstall`, then the
+  setup) to be sure (docs/setup/ssh-hosts.md).
+- **Whoever controls Nyyrikki's pod controls the SSH setup script and
+  holds the SSH user CA key** (docs/07 OD3, D6): root on every host
+  onboarded afterwards, and on every host already set up with sudo. The
+  script's body is checksummed per release; the CA is revoked by KRL
+  (docs/07 §5.6).
+- **The SSH setup script is served without authentication, and each
+  fetch writes an audit record** (docs/07 D16). Nothing limits the rate:
+  anyone who can reach `:8443` can fill the audit volume, after which
+  every request is refused (fail closed). Availability only; limit who
+  can reach the listener if that matters.
 - **The human approves their own agents' requests.** In the first
   version there is one human, who is also the approver (docs/01 OD1).
   The defence is a message that shows exactly what will run (R5).

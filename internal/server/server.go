@@ -18,12 +18,18 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
+	sshhost "github.com/Tuhis/Nyyrikki/deploy/ssh-host"
 	"github.com/Tuhis/Nyyrikki/internal/audit"
 	"github.com/Tuhis/Nyyrikki/internal/authn"
 	"github.com/Tuhis/Nyyrikki/internal/config"
 	"github.com/Tuhis/Nyyrikki/internal/decision"
+	"github.com/Tuhis/Nyyrikki/internal/hostsetup"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl"
 	"github.com/Tuhis/Nyyrikki/internal/mcpserver"
+	"github.com/Tuhis/Nyyrikki/internal/runner"
+	"github.com/Tuhis/Nyyrikki/internal/sshtarget"
 	"github.com/Tuhis/Nyyrikki/internal/store"
 	"github.com/Tuhis/Nyyrikki/internal/stream"
 	"github.com/Tuhis/Nyyrikki/internal/telegram"
@@ -46,6 +52,65 @@ type Options struct {
 	// KubeServiceAccountDir overrides the in-cluster credential directory
 	// (tests).
 	KubeServiceAccountDir string
+	// SSHDial replaces the SSH runner's TCP dialler (tests).
+	SSHDial func(ctx context.Context, network, addr string) (net.Conn, error)
+}
+
+// newSSHRunner builds the SSH runner from the ssh block and the SSH
+// targets (docs/07 §5.5); nil when there are none.
+func newSSHRunner(cfg *config.Config, aw audit.Appender, log *slog.Logger, o Options) (*sshtarget.Runner, error) {
+	targets := map[string]sshtarget.Target{}
+	for _, t := range cfg.Targets {
+		if t.SSH == nil {
+			continue
+		}
+		host, _, err := config.SplitAddress(t.SSH.Address)
+		if err != nil {
+			return nil, fmt.Errorf("target %s: %w", t.Name, err)
+		}
+		st := sshtarget.Target{Name: t.Name, Address: t.SSH.Address, Host: host}
+		for _, k := range t.SSH.HostKeys {
+			pk, err := config.ParsePublicKey(k)
+			if err != nil {
+				return nil, fmt.Errorf("target %s: %w", t.Name, err)
+			}
+			st.HostKeys = append(st.HostKeys, pk)
+		}
+		for _, k := range t.SSH.HostCAs {
+			pk, err := config.ParsePublicKey(k)
+			if err != nil {
+				return nil, fmt.Errorf("target %s: %w", t.Name, err)
+			}
+			st.HostCAs = append(st.HostCAs, pk)
+		}
+		targets[t.Name] = st
+	}
+	if len(targets) == 0 {
+		return nil, nil
+	}
+	var pubs []ssh.PublicKey
+	for _, k := range cfg.SSH.UserCAPublicKeys {
+		pk, err := config.ParseUserCAKey(k)
+		if err != nil {
+			return nil, err
+		}
+		pubs = append(pubs, pk)
+	}
+	return sshtarget.NewRunner(sshtarget.RunnerConfig{
+		Targets:        targets,
+		CA:             sshtarget.NewCA(cfg.SSH.UserCAKeyFile, pubs, cfg.SSH.SourceAddresses, o.Now),
+		ConnectTimeout: cfg.SSH.ConnectTimeout.D(),
+		Limits: sshtarget.Limits{
+			DefaultTimeout: cfg.Run.DefaultTimeout.D(),
+			MaxTimeout:     cfg.Run.MaxTimeout.D(),
+			MaxInteractive: cfg.Run.MaxInteractive.D(),
+			MaxOutput:      int64(cfg.Run.MaxOutput),
+		},
+		Audit:  aw,
+		Logger: log,
+		Now:    o.Now,
+		Dial:   o.SSHDial,
+	})
 }
 
 // Run starts nyyrikkid and blocks until ctx ends or a listener fails.
@@ -123,12 +188,15 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 
 	targets := map[string]kubectl.Target{}
 	for _, t := range cfg.Targets {
+		if t.SSH != nil {
+			continue
+		}
 		targets[t.Name] = kubectl.Target{
 			Name: t.Name, InCluster: t.Kubernetes.InCluster,
 			Server: t.Kubernetes.Server, CAFile: t.Kubernetes.CAFile, TokenFile: t.Kubernetes.TokenFile,
 		}
 	}
-	runner, err := kubectl.NewRunner(kubectl.RunnerConfig{
+	kubeRunner, err := kubectl.NewRunner(kubectl.RunnerConfig{
 		RuntimeDir: cfg.Server.RuntimeDir,
 		Executable: o.Executable,
 		Targets:    targets,
@@ -147,11 +215,25 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 		return err
 	}
 
-	mcpSrv := mcpserver.New(mcpserver.Deps{Config: cfg, Point: point, Runner: runner, Audit: aw, Logger: log, Version: o.Version})
+	sshRunner, err := newSSHRunner(cfg, aw, log, o)
+	if err != nil {
+		return err
+	}
+	runners := runner.Runners{Kubernetes: kubeRunner, SSH: sshRunner}
+
+	mcpSrv := mcpserver.New(mcpserver.Deps{Config: cfg, Point: point, Runner: runners, Audit: aw, Logger: log, Version: o.Version})
 
 	mux := http.NewServeMux()
 	mux.Handle("POST /mcp", verifier.Middleware(cfg.MCPURL(), mcpSrv.Handler()))
-	mux.Handle("GET /stream", verifier.Middleware(cfg.StreamURL(), stream.NewHandler(point, runner, verifier, aw, log)))
+	mux.Handle("GET /stream", verifier.Middleware(cfg.StreamURL(), stream.NewHandler(point, runners, verifier, aw, log)))
+	if sshRunner != nil {
+		// docs/07 D16: no authentication; a host has no token.
+		setup, err := hostsetup.New(cfg, sshhost.Script, aw, log)
+		if err != nil {
+			return err
+		}
+		mux.Handle(hostsetup.Prefix, setup)
+	}
 	prm := protectedResourceMetadata(cfg)
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", prm)
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", prm)

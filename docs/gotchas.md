@@ -197,6 +197,30 @@ the doc.
   `curl | sh` with data after the command acts on part of the data. End
   the data with a line the command checks, such as a count.
   ([docs/07](07-ssh-target.md) M23)
+- **`ssh.CertChecker` takes a certificate with no principals as valid
+  for every host or user.** `x/crypto/ssh` follows OpenSSH's old rule;
+  refuse an empty `ValidPrincipals` yourself when a name must match.
+  ([docs/07](07-ssh-target.md) D8, `internal/sshtarget/hostkey.go`)
+- **Restarting logind repeatedly trips systemd's start rate limit**;
+  run `systemctl reset-failed systemd-logind` before each restart. A
+  logind restart during an account's stop delay can also leave its
+  `user@<uid>.service` running with no session, which `loginctl
+  terminate-user` can't end: `systemctl stop user@<uid>.service` does.
+  ([docs/07](07-ssh-target.md) §10, `test/ssh-host`)
+- **POSIX sh has no `local`.** A helper's loop variable overwrites its
+  caller's of the same name; in the setup script that dropped the wrong
+  file from the rollback journal. Give every function its own variable
+  names. ([docs/07](07-ssh-target.md) §10)
+- **Closing an `x/crypto/ssh` client right after `Session.Signal` can
+  lose the signal.** A test host saw `KILL` only some of the time when
+  the connection closed right after it. Give the session a moment to
+  end before closing. ([docs/07](07-ssh-target.md) §10)
+- **A shell splits words only on ASCII blanks, but Telegram shows any
+  Unicode space as a space.** `cat notes<U+00A0># ; curl … | sh` reads
+  as a command and a comment, yet `#` starts no comment on the host.
+  Show every space but U+0020 escaped. Lookalike punctuation, such as
+  U+FF03 for `#`, is not escaped: read a command with non-ASCII
+  characters with care. ([docs/07](07-ssh-target.md) D2)
 
 **Tooling and dependencies**
 
@@ -212,3 +236,10 @@ the doc.
 - **asciicast v3 (the asciinema 3.x default) isn't readable by
   asciinema 2.x**, and its timestamps are relative intervals rather than
   absolute times. ([docs/03](https://github.com/Tuhis/Nyyrikki/blob/0ea8b56/docs/03-audit-log.md) M2)
+- **Go's `GET /path` mux pattern also matches `HEAD`.** An endpoint that
+  must answer only `GET` checks the method itself.
+  ([docs/07](07-ssh-target.md) D16, `internal/hostsetup`)
+- **`helm template` never renders `NOTES.txt`, and sprig's `required`
+  accepts an empty list.** Test NOTES by rendering a copy as an ordinary
+  template, and fail on `(not .Values.x)` for lists.
+  ([docs/07](07-ssh-target.md) §10, `deploy/chart/chart_test.go`)

@@ -79,6 +79,12 @@ func newResolver() *fakeResolver {
 	return &fakeResolver{state: make(map[string]string), until: time.Date(2026, 10, 26, 12, 18, 4, 0, time.UTC)}
 }
 
+func (r *fakeResolver) set(id, state string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.state[id] = state
+}
+
 func (r *fakeResolver) pending(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -104,6 +110,9 @@ func (r *fakeResolver) Resolve(ctx context.Context, id string, action approval.A
 	case action == approval.ActionDeny && r.state[id] == "pending":
 		r.state[id] = "denied"
 		o = approval.Outcome{Kind: approval.Denied, At: at}
+	case action == approval.ActionEnd && r.state[id] == "session":
+		r.state[id] = "ended"
+		o = approval.Outcome{Kind: approval.SessionEnded, At: at}
 	case action == approval.ActionEnd && r.state[id] == "live":
 		r.state[id] = "ended"
 		o = approval.Outcome{Kind: approval.ElevationEnded, At: at}

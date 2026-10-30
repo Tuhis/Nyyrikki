@@ -32,12 +32,12 @@ type ListTargetsOut struct {
 // RunIn is run's input (docs/02 §5.2).
 type RunIn struct {
 	Target      string   `json:"target" jsonschema:"the target name, from list_targets"`
-	Args        []string `json:"args" jsonschema:"kubectl arguments, without the leading kubectl"`
-	Stdin       string   `json:"stdin,omitempty" jsonschema:"input for commands that read stdin (-f -, or exec/attach with -i)"`
+	Args        []string `json:"args" jsonschema:"kubernetes targets: kubectl arguments, without the leading kubectl; ssh targets: the command, joined with spaces into one string the host's shell runs"`
+	Stdin       string   `json:"stdin,omitempty" jsonschema:"input for commands that read stdin (kubectl -f -, exec/attach -i; any ssh command). On ssh targets the approver sees only its size and hash"`
 	Reason      string   `json:"reason" jsonschema:"why you need this; shown to the approver as your claim"`
 	Elevation   string   `json:"elevation,omitempty" jsonschema:"the handle of a live elevation covering this target"`
 	Timeout     string   `json:"timeout,omitempty" jsonschema:"how long the command may run, Go duration syntax, e.g. 2m"`
-	Interactive bool     `json:"interactive,omitempty" jsonschema:"for exec/attach with -i -t: return a stream ticket instead of output (the nyyrikki CLI uses this)"`
+	Interactive bool     `json:"interactive,omitempty" jsonschema:"a terminal session (kubectl exec/attach -i -t, or an ssh command or login shell): return a stream ticket instead of output (the nyyrikki CLI uses this)"`
 }
 
 // RunOut is run's result.
@@ -52,9 +52,11 @@ type RunOut struct {
 	Stderr          string     `json:"stderr,omitempty"`
 	StdoutTruncated bool       `json:"stdout_truncated,omitempty"`
 	StderrTruncated bool       `json:"stderr_truncated,omitempty"`
-	StreamTicket    string     `json:"stream_ticket,omitempty"`
-	StreamURL       string     `json:"stream_url,omitempty"`
-	TicketExpiresAt string     `json:"ticket_expires_at,omitempty"`
+	// Detail notes how the command ended, such as "signal: TERM".
+	Detail          string `json:"detail,omitempty"`
+	StreamTicket    string `json:"stream_ticket,omitempty"`
+	StreamURL       string `json:"stream_url,omitempty"`
+	TicketExpiresAt string `json:"ticket_expires_at,omitempty"`
 }
 
 // ElevateIn is elevate's input (docs/02 D8).

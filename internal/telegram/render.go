@@ -94,6 +94,10 @@ func hidden(r rune) bool {
 		return true
 	case r == 0x2800: // Braille pattern blank: a visible-width blank
 		return true
+	// Every space but U+0020 (docs/07 D2): a shell splits words only on
+	// ASCII blanks, so "notes<NBSP>#" is one word, not a comment.
+	case unicode.Is(unicode.Zs, r) && r != ' ':
+		return true
 	}
 	return false
 }
@@ -169,8 +173,34 @@ func renderReason(sb *strings.Builder, reason string) {
 	sb.WriteString("</blockquote>\n")
 }
 
-// renderRun renders the one-off prompt of docs/05 D5, without a status line.
+// Fixed texts of docs/07 D12, one definition each.
+const (
+	rootViaSudo    = "root via sudo"
+	interactiveSSH = "what is typed is not shown"
+	loginShell     = "none, a login shell"
+	stdinNotShown  = "stdin is not shown. If the command runs it, you can't see what runs"
+	noSessionKill  = "This host doesn't finish cuts: what this starts may keep running after the approval ends, and anything does if the host is unreachable"
+)
+
+// renderSSHRunAs is "Runs as" for an SSH target: the account on the
+// host's address, and whether that is root (docs/07 D12).
+func renderSSHRunAs(sb *strings.Builder, h approval.SSHHost) {
+	sb.WriteString("<b>Runs as:</b> ")
+	sb.WriteString(code(h.Account))
+	sb.WriteString(" on ")
+	sb.WriteString(code(h.Address))
+	sb.WriteString("\n")
+	if h.Sudo {
+		sb.WriteString("<b>" + rootViaSudo + "</b>\n")
+	}
+}
+
+// renderRun renders the one-off prompt of docs/05 D5 (docs/07 D12 for an
+// SSH target), without a status line.
 func renderRun(p approval.RunPrompt) string {
+	if p.SSH != nil {
+		return renderSSHRun(p)
+	}
 	var sb strings.Builder
 	sb.WriteString("<b>Run request</b> on ")
 	sb.WriteString(code(p.Target))
@@ -194,7 +224,46 @@ func renderRun(p approval.RunPrompt) string {
 	return sb.String()
 }
 
-// renderElevation renders the elevation prompt of docs/05 D7.
+// renderSSHRun renders a one-off prompt for an SSH target (docs/07 D12,
+// §5.3). The command is shown in full, newlines included: it is what the
+// host's shell reads. stdin is never shown, only its size and hash
+// (docs/07 OD6).
+func renderSSHRun(p approval.RunPrompt) string {
+	var sb strings.Builder
+	sb.WriteString("<b>Run request</b> on ")
+	sb.WriteString(code(p.Target))
+	sb.WriteString("\n")
+	renderSSHRunAs(&sb, *p.SSH)
+	renderAgent(&sb, p.Agent)
+	if p.Argv == "" {
+		// A login shell (sshtarget.Build allows no command only for an
+		// interactive run). Outside <pre>, so no command reads like it.
+		sb.WriteString("\n<b>Command:</b> <i>" + loginShell + "</i>\n")
+	} else {
+		sb.WriteString("\n<b>Command:</b>\n<pre>")
+		sb.WriteString(show(p.Argv, true))
+		sb.WriteString("</pre>\n")
+	}
+	if p.Stdin != "" {
+		sb.WriteString("<b>stdin:</b> ")
+		sb.WriteString(code(p.Stdin))
+		sb.WriteString("\n<b>" + stdinNotShown + "</b>\n")
+	}
+	if p.Interactive {
+		sb.WriteString("<b>Interactive:</b> " + interactiveSSH + "\n")
+	}
+	if !p.SSH.SessionKill {
+		sb.WriteString("<b>" + noSessionKill + "</b>\n")
+	}
+	sb.WriteString("\n")
+	renderReason(&sb, p.Reason)
+	sb.WriteString("\n<b>Answer by:</b> " + clock(p.ExpiresAt) + " UTC")
+	return sb.String()
+}
+
+// renderElevation renders the elevation prompt of docs/05 D7. Each SSH
+// target gets its own line, saying whether the window is one of root
+// there (docs/07 D12).
 func renderElevation(p approval.ElevationPrompt) string {
 	var sb strings.Builder
 	sb.WriteString("<b>Elevation request</b>\n<b>Targets:</b> ")
@@ -205,7 +274,19 @@ func renderElevation(p approval.ElevationPrompt) string {
 		sb.WriteString(code(t))
 	}
 	sb.WriteString("\n<b>Duration:</b> " + duration(p.Duration) + "\n")
-	renderRunAs(&sb, p.RunAs)
+	if len(p.SSH) < len(p.Targets) {
+		renderRunAs(&sb, p.RunAs)
+	}
+	for _, h := range p.SSH {
+		sb.WriteString("<b>On</b> " + code(h.Target) + ": " + code(h.Account) + " on " + code(h.Address))
+		if h.Sudo {
+			sb.WriteString(", <b>" + rootViaSudo + "</b>")
+		}
+		sb.WriteString("\n")
+		if !h.SessionKill {
+			sb.WriteString("<b>" + noSessionKill + "</b>\n")
+		}
+	}
 	renderAgent(&sb, p.Agent)
 	sb.WriteString("\n")
 	renderReason(&sb, p.Reason)
@@ -250,6 +331,14 @@ func statusLine(o approval.Outcome, now time.Time) (string, error) {
 		s = "Ended at " + clock(at) + " UTC"
 	case approval.ElevationExpired:
 		s = "Expired at " + clock(at) + " UTC"
+	case approval.SessionApproved:
+		s = "Approved at " + clock(at) + " UTC"
+	case approval.SessionLive:
+		s = "Session live since " + clock(at) + " UTC"
+	case approval.SessionEnded:
+		s = "Session ended at " + clock(at) + " UTC"
+	case approval.SessionUnused:
+		s = "Approved; the session was never started"
 	default:
 		return "", fmt.Errorf("telegram: unknown outcome kind %d", o.Kind)
 	}

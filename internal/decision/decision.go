@@ -26,7 +26,7 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/config"
 	"github.com/Tuhis/Nyyrikki/internal/decision/internal/grant"
-	"github.com/Tuhis/Nyyrikki/internal/kubectl/request"
+	"github.com/Tuhis/Nyyrikki/internal/target"
 )
 
 const (
@@ -90,7 +90,19 @@ type Point struct {
 	// handles holds the handle of an elevation between the approval's
 	// commit and the waiting call picking it up.
 	handles map[string]string
+	// sessions are the live interactive runs under a one-off approval,
+	// by approval ID, which "End now" ends (docs/07 D17).
+	sessions map[string]*Grant
 }
+
+// ErrEndedByApprover is the cause a grant's context ends with when the
+// approver taps "End now" on its session (docs/07 D17). Runners report
+// it as DetailEndedByApprover.
+var ErrEndedByApprover = errors.New("ended by the approver")
+
+// DetailEndedByApprover is the run_cut detail of a session the approver
+// ended (docs/07 D17).
+const DetailEndedByApprover = "ended_by_approver"
 
 type liveElevation struct {
 	id         string
@@ -101,11 +113,11 @@ type liveElevation struct {
 }
 
 type ticket struct {
-	grant     *Grant
-	canonical *request.Canonical
-	agentKey  string
-	expires   time.Time
-	timer     *time.Timer
+	grant    *Grant
+	request  target.Request
+	agentKey string
+	expires  time.Time
+	timer    *time.Timer
 }
 
 // New returns a Point, after expiring every approval left pending by an
@@ -125,6 +137,7 @@ func New(ctx context.Context, c Config) (*Point, error) {
 		elevations: map[string]*liveElevation{},
 		tickets:    map[[32]byte]*ticket{},
 		handles:    map[string]string{},
+		sessions:   map[string]*Grant{},
 	}
 	if err := p.recover(ctx); err != nil {
 		cancel()
@@ -202,7 +215,7 @@ type RunRequest struct {
 	Principal *authn.Principal
 	RunID     string
 	Target    string
-	Canonical *request.Canonical
+	Request   target.Request
 	Handle    string
 	Reason    string
 	// Progress, if set, is called while the call waits for an approval
@@ -245,20 +258,28 @@ func (p *Point) deny(ctx context.Context, r audit.Record, err error) error {
 // is a deny.
 func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 	pr := r.Principal
-	if pr == nil || r.Canonical == nil {
+	if pr == nil || r.Request == nil {
 		return nil, codes.New(codes.Internal, "incomplete request")
 	}
 	h, err := p.human(pr)
 	if err != nil {
 		return nil, err
 	}
+	t, known := p.cfg.TargetByName(r.Target)
+	visible := known && t.Visible(pr.Human, pr.ClientID)
+	// A target the agent may not see is recorded as an unknown name is
+	// (docs/02 D5): the audit log is agent-readable (docs/01 D16).
+	runAs := RunAs(h, nil)
+	if visible {
+		runAs = RunAs(h, t)
+	}
 	rec := p.base_(pr, codes.KindRunRequested)
 	rec.RunID = r.RunID
 	rec.Targets = []string{r.Target}
-	req := r.Canonical.Audit()
+	req := r.Request.Audit()
 	rec.Request = &req
 	rec.Reason = r.Reason
-	rec.RunAs = &audit.RunAs{User: h.Kubernetes.User, Groups: h.Kubernetes.Groups}
+	rec.RunAs = &audit.RunAs{User: runAs.User, Groups: runAs.Groups}
 	if err := p.audit.Append(ctx, rec); err != nil {
 		return nil, codes.Wrap(codes.Unavailable, err, "audit log unavailable")
 	}
@@ -271,15 +292,19 @@ func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 		return nil, p.deny(ctx, rec, err)
 	}
 	// 2. Visibility (docs/02 D5).
-	t, ok := p.cfg.TargetByName(r.Target)
-	if !ok || !t.Visible(pr.Human, pr.ClientID) {
+	if !visible {
 		return nil, p.deny(ctx, rec, codes.New(codes.TargetNotAllowed, "no such target, or not available to this agent"))
 	}
-	digest := request.Digest(r.Target, r.Canonical)
+	// A request is read by its target's type (docs/07 D13); one built for
+	// another type is a bug in the caller, and nothing runs.
+	if r.Request.Type() != t.Type() {
+		return nil, p.deny(ctx, rec, codes.WithDetail(codes.Internal, "target_type_mismatch", "the request is not for this target's type"))
+	}
+	digest := r.Request.Digest(r.Target, runAs.User)
 	spec := grant.Spec{
 		RunID: r.RunID, Target: r.Target,
-		RunAs:  approval.Identity{User: h.Kubernetes.User, Groups: h.Kubernetes.Groups},
-		Digest: digest, Interactive: r.Canonical.Interactive(),
+		RunAs:  runAs,
+		Digest: digest, Interactive: r.Request.Interactive(),
 		Human: pr.Human, AgentKey: pr.AgentKey, ClientID: pr.ClientID,
 	}
 
@@ -313,8 +338,9 @@ func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 		ID: id, ApproverID: h.TelegramUserID, Target: r.Target,
 		RunAs: spec.RunAs,
 		Agent: approval.Agent{ClientName: pr.ClientID, KeyShort: p.audit.AgentHash(pr.AgentKey), SignedInAt: pr.SignedInAt},
-		Argv:  r.Canonical.DisplayArgv(), Stdin: r.Canonical.DisplayStdin(),
-		Interactive: r.Canonical.Interactive(),
+		Type:  t.Type(), SSH: sshHost(t, runAs.User),
+		Argv: r.Request.DisplayCommand(), Stdin: r.Request.DisplayStdin(),
+		Interactive: r.Request.Interactive(),
 		Reason:      r.Reason, ExpiresAt: expires,
 	}
 	targets, _ := json.Marshal([]string{r.Target})
@@ -332,7 +358,7 @@ func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 		p.settle(id, stateApproved, stateWithdrawn, nil)
 		return nil, p.deny(ctx, rec, codes.New(codes.Withdrawn, "the call ended before the approval arrived"))
 	}
-	gctx, cancel := context.WithCancel(p.base)
+	gctx, cancel := context.WithCancelCause(p.base)
 	spec.CoveredBy = codes.CoveredOneOff
 	spec.ApprovalID = id
 	g := grant.New(gctx, cancel, spec)
@@ -344,8 +370,33 @@ func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 		p.settle(id, stateApproved, stateFailed, nil)
 		return nil, codes.Wrap(codes.Unavailable, err, "audit log unavailable")
 	}
-	go p.settlePrompt(id, approval.Outcome{Kind: approval.Approved, At: p.now()})
+	outcome := approval.Approved
+	if g.Interactive() {
+		// The message keeps room for "Session live" and its End now
+		// button (docs/07 D17).
+		outcome = approval.SessionApproved
+	}
+	go p.settlePrompt(id, approval.Outcome{Kind: outcome, At: p.now()})
 	return g, nil
+}
+
+// RunAs is who a request of human runs as on target t (docs/02 D4,
+// docs/07 D3): from the registry, never from the request. A nil t (an
+// unknown target) gets the Kubernetes identity; nothing runs on it.
+func RunAs(h *config.Human, t *config.Target) approval.Identity {
+	if t != nil && t.SSH != nil {
+		return approval.Identity{User: config.SSHAccount(h.ID)}
+	}
+	return approval.Identity{User: h.Kubernetes.User, Groups: h.Kubernetes.Groups}
+}
+
+// sshHost is what the approver is shown about an SSH target (docs/07
+// D12); nil for any other type.
+func sshHost(t *config.Target, account string) *approval.SSHHost {
+	if t == nil || t.SSH == nil {
+		return nil
+	}
+	return &approval.SSHHost{Target: t.Name, Account: account, Address: t.SSH.Address, Sudo: t.SSH.Sudo, SessionKill: t.SSH.SessionKill}
 }
 
 func stateError(state string) error {
@@ -412,7 +463,9 @@ func (p *Point) coveredByElevation(ctx context.Context, r RunRequest, h *config.
 	if le == nil || le.ctx.Err() != nil {
 		return nil, "elevation_ended", nil
 	}
-	gctx, cancel := context.WithDeadline(le.ctx, expires)
+	cctx, cancelCause := context.WithCancelCause(le.ctx)
+	gctx, cancelDeadline := context.WithDeadline(cctx, expires)
+	cancel := func(cause error) { cancelCause(cause); cancelDeadline() }
 	spec.CoveredBy = codes.CoveredElevation
 	spec.ElevationID = id
 	spec.NotAfter = expires
@@ -654,6 +707,9 @@ func (p *Point) Resolve(ctx context.Context, id string, action approval.Action, 
 		}
 		return p.settle(id, statePending, stateDenied, nil), nil
 	case approval.ActionEnd:
+		if kind == "run" {
+			return p.endSession(id), nil
+		}
 		if kind != "elevation" {
 			return false, nil
 		}

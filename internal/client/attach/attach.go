@@ -184,5 +184,14 @@ func AttachTerminal(ctx context.Context, client *http.Client, streamURL, ticket 
 			}
 		}
 	}()
+	// The terminal's TERM, for an SSH session (docs/07 D9); the server
+	// checks it and has its own default.
+	if t := os.Getenv("TERM"); t != "" && len(t) <= 32 {
+		header = header.Clone()
+		if header == nil {
+			header = http.Header{}
+		}
+		header.Set(protocol.TermHeader, t)
+	}
 	return AttachClient(ctx, client, streamURL, ticket, header, stdin, stdout, resizes)
 }

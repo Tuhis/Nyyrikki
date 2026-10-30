@@ -221,3 +221,125 @@ func TestChartTrustedCA(t *testing.T) {
 		t.Fatalf("env without trustedCA: %v", ctr["env"])
 	}
 }
+
+var sshSet = []string{
+	"--set", "targets[2].name=db-1", "--set", "targets[2].description=DB",
+	"--set", "targets[2].ssh.address=db-1.example.com:2222",
+	"--set", "targets[2].ssh.hostKeys[0]=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
+	"--set", "targets[2].ssh.sudo=true", "--set", "targets[2].ssh.sessionKill=true",
+	"--set", "ssh.userCAPublicKeys[0]=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y",
+	"--set", "ssh.sourceAddresses[0]=203.0.113.10/32", "--set", "ssh.connectTimeout=7s",
+	"--set", "secrets.sshUserCA.name=my-ca", "--set", "secrets.sshUserCA.key=ca-key",
+}
+
+func podSpec(t *testing.T, objs []object) map[string]any {
+	t.Helper()
+	deps := kind(objs, "Deployment")
+	if len(deps) != 1 {
+		t.Fatalf("%d Deployments", len(deps))
+	}
+	return deps[0]["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+}
+
+// TestChartSSHTarget covers docs/07 §5.5: every SSH field reaches the
+// binary's config, and the CA Secret is mounted at the fixed path, only
+// when an SSH target exists.
+func TestChartSSHTarget(t *testing.T) {
+	objs := render(t, sshSet...)
+	src := kind(objs, "ConfigMap")[0]["data"].(map[string]any)["config.yaml"].(string)
+	c, err := config.Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("config refused: %v\n%s", err, src)
+	}
+	db, ok := c.TargetByName("db-1")
+	if !ok || db.SSH == nil || db.SSH.Address != "db-1.example.com:2222" || len(db.SSH.HostKeys) != 1 || !db.SSH.Sudo || !db.SSH.SessionKill || db.Description != "DB" {
+		t.Fatalf("db-1 %+v", db)
+	}
+	if c.SSH.UserCAKeyFile != "/etc/nyyrikki/ssh/user-ca" || len(c.SSH.UserCAPublicKeys) != 1 || c.SSH.SourceAddresses[0] != "203.0.113.10/32" || c.SSH.ConnectTimeout.D().String() != "7s" {
+		t.Fatalf("ssh %+v", c.SSH)
+	}
+	spec := podSpec(t, objs)
+	var vol map[string]any
+	for _, v := range spec["volumes"].([]any) {
+		if v.(map[string]any)["name"] == "ssh-user-ca" {
+			vol = v.(map[string]any)["secret"].(map[string]any)
+		}
+		if v.(map[string]any)["name"] == "target-db-1" {
+			t.Error("an SSH target got a Kubernetes target volume")
+		}
+	}
+	if vol == nil || vol["secretName"] != "my-ca" {
+		t.Fatalf("CA volume %v", vol)
+	}
+	items := vol["items"].([]any)
+	if it := items[0].(map[string]any); it["key"] != "ca-key" || it["path"] != "user-ca" {
+		t.Fatalf("CA items %v", items)
+	}
+	mounted := false
+	for _, m := range spec["containers"].([]any)[0].(map[string]any)["volumeMounts"].([]any) {
+		if mm := m.(map[string]any); mm["name"] == "ssh-user-ca" && mm["mountPath"] == "/etc/nyyrikki/ssh" && mm["readOnly"] == true {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Fatal("CA not mounted at /etc/nyyrikki/ssh")
+	}
+
+	// Without an SSH target: no CA mount, no ssh block.
+	objs = render(t)
+	src = kind(objs, "ConfigMap")[0]["data"].(map[string]any)["config.yaml"].(string)
+	if strings.Contains(src, "ssh:") {
+		t.Errorf("ssh block without an SSH target:\n%s", src)
+	}
+	for _, v := range podSpec(t, objs)["volumes"].([]any) {
+		if v.(map[string]any)["name"] == "ssh-user-ca" {
+			t.Error("CA mounted without an SSH target")
+		}
+	}
+}
+
+// TestChartSSHRequiresShared: an SSH target without the CA keys or the
+// source addresses fails at render time.
+func TestChartSSHRequiresShared(t *testing.T) {
+	if os.Getenv("NYYRIKKI_CHART_TESTS") != "1" {
+		t.Skip("set NYYRIKKI_CHART_TESTS=1")
+	}
+	out, err := exec.Command("helm", "template", "t", "nyyrikki", "-f", "nyyrikki/ci/test-values.yaml", "--kube-version", "1.35.0",
+		"--set", "targets[2].name=db-1", "--set", "targets[2].ssh.address=db-1.example.com:22").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "ssh.userCAPublicKeys is required") {
+		t.Fatalf("rendered without ssh values: %s", out)
+	}
+}
+
+// TestChartSSHNotes: NOTES names each SSH target's setup command, and
+// says runs wait for the host keys.
+func TestChartSSHNotes(t *testing.T) {
+	if os.Getenv("NYYRIKKI_CHART_TESTS") != "1" {
+		t.Skip("set NYYRIKKI_CHART_TESTS=1")
+	}
+	// helm template skips NOTES.txt: render a copy of the chart in which
+	// it is an ordinary template, with no cluster involved.
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS("nyyrikki")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(dir+"/templates/NOTES.txt", dir+"/notes.txt"); err != nil {
+		t.Fatal(err)
+	}
+	wrap := "notes: |\n{{ tpl (.Files.Get \"notes.txt\") . | indent 2 }}\n"
+	if err := os.WriteFile(dir+"/templates/notes-render.yaml", []byte(wrap), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := append(append([]string{"template", "t", dir, "-f", "nyyrikki/ci/test-values.yaml", "--kube-version", "1.35.0",
+		"--show-only", "templates/notes-render.yaml"}, sshSet...), "--set", "targets[2].ssh.hostKeys=null")
+	out, err := exec.Command("helm", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("helm template: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "curl -fsSL https://nyyrikki.example.com/hosts/db-1/setup.sh | sudo sh") {
+		t.Fatalf("NOTES lack the setup command:\n%s", out)
+	}
+	if !strings.Contains(string(out), "Runs on db-1 are refused until") {
+		t.Fatalf("NOTES don't say runs wait for host keys:\n%s", out)
+	}
+}

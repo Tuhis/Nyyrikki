@@ -14,21 +14,14 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/decision"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl/request"
+	"github.com/Tuhis/Nyyrikki/internal/target"
 )
 
 // Size is a terminal size.
-type Size struct{ Cols, Rows uint16 }
+type Size = target.Size
 
-// Terminal is the far end of an interactive run (docs/04 D12): bytes the
-// user types come from Read, the child's output goes to Write, and size
-// changes arrive on Resizes. A Read error means the user has gone, and
-// ends the run. The caller closes the Terminal after RunInteractive
-// returns, which must unblock any pending Read or Write.
-type Terminal interface {
-	Read(p []byte) (int, error)
-	Write(p []byte) (int, error)
-	Resizes() <-chan Size
-}
+// Terminal is the far end of an interactive run (docs/04 D12).
+type Terminal = target.Terminal
 
 // defaultSize is the pty's size until the client sends its own.
 var defaultSize = Size{Cols: 80, Rows: 24}

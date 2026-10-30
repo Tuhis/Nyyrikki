@@ -12,6 +12,14 @@ package protocol
 // TicketHeader carries the stream ticket on the WebSocket handshake.
 const TicketHeader = "Nyyrikki-Stream-Ticket"
 
+// TermHeader carries the client's TERM on the WebSocket handshake, for an
+// SSH session's pty-req (docs/07 D9). The server checks it against
+// TermPattern and uses its default otherwise.
+const TermHeader = "Nyyrikki-Term"
+
+// TermPattern is what a TERM must match (docs/07 D9).
+const TermPattern = `^[a-z0-9.+-]{1,32}$`
+
 // ReadLimit bounds every message either side reads.
 const ReadLimit = 64 << 10
 

@@ -52,6 +52,25 @@ targets:
   #   server: https://lab.example.com:6443
   #   secretName: nyyrikki-target-lab
   #   clients: []
+  # An SSH host (docs/07, docs/setup/ssh-hosts.md). Start with empty
+  # hostKeys, run the setup script on the host, then copy what it prints.
+  # - name: db-1
+  #   description: Primary database host
+  #   ssh:
+  #     address: db-1.example.com:22
+  #     hostKeys: []
+  #     hostCAs: []
+  #     sudo: false          # the human's account has passwordless sudo
+  #     sessionKill: false   # as the setup script reported
+  #   clients: []
+
+# Shared by every SSH target (docs/07 §5.5); required as soon as one exists.
+ssh:
+  # What hosts trust; must include the public key of secrets.sshUserCA.
+  userCAPublicKeys: []
+  # Nyyrikki's egress addresses as CIDRs, ideally its own (docs/07 §6).
+  sourceAddresses: []
+  connectTimeout: 10s
 
 telegram:
   apiURL: https://api.telegram.org
@@ -71,6 +90,11 @@ secrets:
   introspection:
     name: nyyrikki-keycloak
     key: client-secret
+  # The SSH user CA's private key (docs/07 D6), mounted only with an SSH
+  # target. Create it as docs/setup/ssh-hosts.md says.
+  sshUserCA:
+    name: nyyrikki-ssh-user-ca
+    key: user-ca
 
 # Impersonate the human's user and groups, nothing else (docs/06 D3).
 rbac:

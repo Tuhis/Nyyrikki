@@ -19,3 +19,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- range .Values.targets }}{{ if .inCluster }}{{ $in = true }}{{ end }}{{ end -}}
 {{- if $in }}true{{ end -}}
 {{- end -}}
+
+{{/* "true" when any target is an SSH target (docs/07 §5.5). */}}
+{{- define "nyyrikki.hasSSH" -}}
+{{- $ssh := false -}}
+{{- range .Values.targets }}{{ if .ssh }}{{ $ssh = true }}{{ end }}{{ end -}}
+{{- $ssh -}}
+{{- end -}}

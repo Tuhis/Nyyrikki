@@ -29,6 +29,7 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/decision"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl/request"
+	"github.com/Tuhis/Nyyrikki/internal/target"
 )
 
 // ChildArg is the first argument that makes nyyrikkid run ChildMain.
@@ -114,12 +115,7 @@ type Runner struct {
 }
 
 // Result is the outcome of a non-interactive run (docs/04 D13).
-type Result struct {
-	ExitCode        int
-	Stdout, Stderr  []byte
-	StdoutTruncated bool
-	StderrTruncated bool
-}
+type Result = target.Result
 
 // NewRunner validates cfg and returns a Runner. In-cluster targets are
 // resolved here, from KUBERNETES_SERVICE_HOST/_PORT and the
@@ -283,6 +279,9 @@ func (r *Runner) limitsFor(g *decision.Grant, limit time.Duration) *runLimits {
 // cutDetail says why a killed run was cut.
 func (l *runLimits) cutDetail() string {
 	switch {
+	// "End now" on the session (docs/07 D17).
+	case errors.Is(context.Cause(l.grant), decision.ErrEndedByApprover):
+		return decision.DetailEndedByApprover
 	// At an elevation's expiry the decision point also ends the grant, at
 	// the same instant as this deadline: past it, the cut was the expiry.
 	case l.byNotAfter && !time.Now().Before(l.notAfter):
@@ -392,8 +391,8 @@ func (r *Runner) Run(g *decision.Grant, c *request.Canonical, timeout time.Durat
 
 	cmd, killed := r.childCommand(l, rd.dir, c)
 	cmd.Stdin = bytes.NewReader(c.Stdin())
-	stdout := &capWriter{limit: r.limits.MaxOutput}
-	stderr := &capWriter{limit: r.limits.MaxOutput}
+	stdout := target.NewCapWriter(r.limits.MaxOutput)
+	stderr := target.NewCapWriter(r.limits.MaxOutput)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
 
@@ -410,17 +409,17 @@ func (r *Runner) Run(g *decision.Grant, c *request.Canonical, timeout time.Durat
 	waitErr := cmd.Wait()
 	res := &Result{
 		ExitCode:        exitCode(cmd, waitErr),
-		Stdout:          stdout.buf.Bytes(),
-		Stderr:          stderr.buf.Bytes(),
-		StdoutTruncated: stdout.truncated(),
-		StderrTruncated: stderr.truncated(),
+		Stdout:          stdout.Bytes(),
+		Stderr:          stderr.Bytes(),
+		StdoutTruncated: stdout.Truncated(),
+		StderrTruncated: stderr.Truncated(),
 	}
 	if killed.Load() {
 		detail := l.cutDetail()
-		r.finish(g, c, codes.KindRunCut, res.ExitCode, stdout.n, stderr.n, codes.Expired, detail)
+		r.finish(g, c, codes.KindRunCut, res.ExitCode, stdout.N(), stderr.N(), codes.Expired, detail)
 		return res, codes.WithDetail(codes.Expired, detail, "the run was cut: %s", cutMessage(detail))
 	}
-	r.finish(g, c, codes.KindRunFinished, res.ExitCode, stdout.n, stderr.n, "", "")
+	r.finish(g, c, codes.KindRunFinished, res.ExitCode, stdout.N(), stderr.N(), "", "")
 	return res, nil
 }
 
@@ -438,6 +437,8 @@ func (r *Runner) finish(g *decision.Grant, c *request.Canonical, kind string, ex
 
 func cutMessage(detail string) string {
 	switch detail {
+	case decision.DetailEndedByApprover:
+		return "the approver ended it"
 	case DetailGrantEnded:
 		return "what covered it ended"
 	case DetailGrantExpired:
@@ -457,29 +458,4 @@ func exitCode(cmd *exec.Cmd, err error) int {
 		return -1
 	}
 	return 0
-}
-
-// capWriter keeps the first limit bytes and counts the rest, so the child
-// never blocks on a full pipe (docs/04 D7).
-type capWriter struct {
-	mu    sync.Mutex
-	limit int64
-	n     int64
-	buf   bytes.Buffer
-}
-
-func (w *capWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if room := w.limit - int64(w.buf.Len()); room > 0 {
-		w.buf.Write(p[:min(int64(len(p)), room)])
-	}
-	w.n += int64(len(p))
-	return len(p), nil
-}
-
-func (w *capWriter) truncated() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.n > int64(w.buf.Len())
 }

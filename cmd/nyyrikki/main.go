@@ -39,6 +39,11 @@ const usage = `usage:
   nyyrikki logout [--mcp]
   nyyrikki targets
   nyyrikki run [--reason TEXT] [--elevation HANDLE] [--timeout D] [-i] [-t] TARGET -- KUBECTL-ARGS...
+  nyyrikki run [--reason TEXT] [--elevation HANDLE] [--timeout D] [-i] [-t] SSH-TARGET [-- COMMAND...]
+
+  On an SSH target, stdin is sent only with -i, and the approver sees only its
+  size and hash: put a script the approver must read in the command (a heredoc).
+  -t with no command opens a login shell.
   nyyrikki elevate --reason TEXT [--for D] TARGET...
   nyyrikki mcp-headers
   nyyrikki version
@@ -246,22 +251,28 @@ func (c *cli) run(ctx context.Context, args []string) int {
 	reason := fs.String("reason", "", "why; shown to the approver as the agent's claim")
 	elevation := fs.String("elevation", os.Getenv("NYYRIKKI_ELEVATION"), "elevation handle (env NYYRIKKI_ELEVATION)")
 	timeout := fs.String("timeout", "", "how long the command may run (Go duration)")
-	stdinFlag := fs.Bool("i", false, "send stdin to the command (exec/attach -i)")
-	tty := fs.Bool("t", false, "interactive terminal (exec/attach -it)")
+	stdinFlag := fs.Bool("i", false, "send stdin to the command (exec/attach -i; on SSH targets, the only way stdin is sent)")
+	tty := fs.Bool("t", false, "interactive terminal (exec/attach -it; on SSH targets, a session, or a login shell without a command)")
 	path := loginPath(fs, false)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	rest := fs.Args()
-	if len(rest) < 3 || rest[1] != "--" {
-		fmt.Fprintln(c.stderr, "usage: nyyrikki run [flags] TARGET -- KUBECTL-ARGS...")
+	// TARGET alone is an SSH login shell (-t); the server refuses it for
+	// any other target (docs/07 §5.4).
+	loginShell := len(rest) == 1 && *tty
+	if !loginShell && (len(rest) < 3 || rest[1] != "--") {
+		fmt.Fprintln(c.stderr, "usage: nyyrikki run [flags] TARGET -- ARGS...   (or: nyyrikki run -t SSH-TARGET)")
 		return exitUsage
 	}
 	if *reason == "" {
 		fmt.Fprintln(c.stderr, "nyyrikki: --reason is required: the approver sees it")
 		return exitUsage
 	}
-	in := api.RunIn{Target: rest[0], Args: rest[2:], Reason: *reason, Elevation: *elevation, Timeout: *timeout}
+	in := api.RunIn{Target: rest[0], Reason: *reason, Elevation: *elevation, Timeout: *timeout}
+	if !loginShell {
+		in.Args = rest[2:]
+	}
 
 	stdinFile, isFile := c.stdin.(*os.File)
 	interactive := *tty && isFile && term.IsTerminal(int(stdinFile.Fd()))
@@ -270,7 +281,24 @@ func (c *cli) run(ctx context.Context, args []string) int {
 		return exitUsage
 	}
 	in.Interactive = interactive
-	if !interactive && (*stdinFlag || readsStdin(in.Args)) {
+
+	l, s, err := c.session(ctx, *path)
+	if err != nil {
+		return c.fail(err)
+	}
+	defer s.Close()
+	// kubectl's -f - reads a manifest from stdin; on an SSH target the
+	// same letters are part of a shell command, and stdin goes only with
+	// -i, like ssh -n otherwise (docs/07 §5.4).
+	sendStdin := *stdinFlag
+	if !interactive && !sendStdin && readsStdin(in.Args) {
+		typ, err := c.targetType(ctx, s, in.Target)
+		if err != nil {
+			return c.fail(err)
+		}
+		sendStdin = typ != codes.TypeSSH
+	}
+	if !interactive && sendStdin {
 		b, err := io.ReadAll(io.LimitReader(c.stdin, 1<<20+1))
 		if err != nil {
 			return c.fail(err)
@@ -281,12 +309,6 @@ func (c *cli) run(ctx context.Context, args []string) int {
 		}
 		in.Stdin = string(b)
 	}
-
-	l, s, err := c.session(ctx, *path)
-	if err != nil {
-		return c.fail(err)
-	}
-	defer s.Close()
 	fmt.Fprintln(c.stderr, "nyyrikki: waiting for the approver…")
 	var out api.RunOut
 	if err := s.Call(ctx, api.ToolRun, in, &out); err != nil {
@@ -321,6 +343,21 @@ func (c *cli) run(ctx context.Context, args []string) int {
 	return *out.ExitCode
 }
 
+// targetType asks list_targets for a target's type; "" when it isn't
+// listed (the run is then refused by the server).
+func (c *cli) targetType(ctx context.Context, s *client.Session, name string) (string, error) {
+	var out api.ListTargetsOut
+	if err := s.Call(ctx, api.ToolListTargets, api.ListTargetsIn{}, &out); err != nil {
+		return "", err
+	}
+	for _, t := range out.Targets {
+		if t.Name == name {
+			return t.Type, nil
+		}
+	}
+	return "", nil
+}
+
 // printOutput writes a run's output: stdout to stdout (base64 when it
 // isn't text), stderr to stderr, and a note when it was truncated.
 func (c *cli) printOutput(out api.RunOut) {
@@ -333,6 +370,9 @@ func (c *cli) printOutput(out api.RunOut) {
 	io.WriteString(c.stderr, out.Stderr)
 	if out.StdoutTruncated || out.StderrTruncated {
 		fmt.Fprintln(c.stderr, "nyyrikki: output truncated")
+	}
+	if out.Detail != "" {
+		fmt.Fprintf(c.stderr, "nyyrikki: %s\n", out.Detail)
 	}
 }
 

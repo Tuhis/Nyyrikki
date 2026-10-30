@@ -30,7 +30,9 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/decision/decisiontest"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl/request"
+	"github.com/Tuhis/Nyyrikki/internal/runner"
 	"github.com/Tuhis/Nyyrikki/internal/stream/protocol"
+	"github.com/Tuhis/Nyyrikki/internal/target"
 )
 
 // Built from parts so the secret scan, which matches real tickets, stays quiet.
@@ -100,9 +102,11 @@ type fakeTickets struct {
 	req     *request.Canonical
 	used    bool
 	redeems int
+	started int
+	ended   int
 }
 
-func (f *fakeTickets) Redeem(_ context.Context, tk string, p *authn.Principal) (*decision.Grant, *request.Canonical, error) {
+func (f *fakeTickets) Redeem(_ context.Context, tk string, p *authn.Principal) (*decision.Grant, target.Request, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.redeems++
@@ -111,6 +115,18 @@ func (f *fakeTickets) Redeem(_ context.Context, tk string, p *authn.Principal) (
 	}
 	f.used = true
 	return f.grant, f.req, nil
+}
+
+func (f *fakeTickets) SessionStarted(*decision.Grant) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.started++
+}
+
+func (f *fakeTickets) SessionEnded(*decision.Grant) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ended++
 }
 
 func (f *fakeTickets) count() int {
@@ -127,7 +143,7 @@ func (f fakeIntro) Introspect(context.Context, *authn.Principal) error { return 
 // resizes, exits with N on "exit N", and is cut when the grant ends.
 type echoRunner struct{ called chan struct{} }
 
-func (e *echoRunner) RunInteractive(g *decision.Grant, c *request.Canonical, t kubectl.Terminal) (int, error) {
+func (e *echoRunner) RunInteractive(g *decision.Grant, c target.Request, t target.Terminal) (int, error) {
 	defer g.Release()
 	if e.called != nil {
 		close(e.called)
@@ -463,7 +479,7 @@ func TestStreamEndToEnd(t *testing.T) {
 	if err := os.Symlink(self, exe); err != nil {
 		t.Fatal(err)
 	}
-	runner, err := kubectl.NewRunner(kubectl.RunnerConfig{
+	kr, err := kubectl.NewRunner(kubectl.RunnerConfig{
 		RuntimeDir: t.TempDir(), Executable: exe, Audit: &recAudit{},
 		Targets: map[string]kubectl.Target{"lab": {Name: "lab", Server: api.URL, CAFile: ca, TokenFile: tok}},
 	})
@@ -471,7 +487,7 @@ func TestStreamEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := interactiveRequest(t)
-	e := newEnv(t, &fakeTickets{grant: grantFor(t.Context(), c, nil), req: c}, runner, fakeIntro{}, true)
+	e := newEnv(t, &fakeTickets{grant: grantFor(t.Context(), c, nil), req: c}, runner.Runners{Kubernetes: kr}, fakeIntro{}, true)
 	inR, inW := io.Pipe()
 	defer inW.Close()
 	out := &output{}

@@ -3,3 +3,5 @@ bin
 test
 docs
 deploy
+!deploy/ssh-host/embed.go
+!deploy/ssh-host/nyyrikki-host-setup.sh

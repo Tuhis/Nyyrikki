@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/coder/websocket"
@@ -19,21 +20,26 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/authn"
 	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/decision"
-	"github.com/Tuhis/Nyyrikki/internal/kubectl"
-	"github.com/Tuhis/Nyyrikki/internal/kubectl/request"
 	"github.com/Tuhis/Nyyrikki/internal/stream/protocol"
+	"github.com/Tuhis/Nyyrikki/internal/target"
 )
 
 // Tickets redeems a stream ticket (docs/02 D10): once, within 30 s, only
 // for the agent key it was issued to. Any error is a refusal.
+// SessionStarted and SessionEnded bracket the attached run, so that the
+// approver can end it (docs/07 D17).
 type Tickets interface {
-	Redeem(ctx context.Context, ticket string, p *authn.Principal) (*decision.Grant, *request.Canonical, error)
+	Redeem(ctx context.Context, ticket string, p *authn.Principal) (*decision.Grant, target.Request, error)
+	SessionStarted(g *decision.Grant)
+	SessionEnded(g *decision.Grant)
 }
 
-// Runner runs an interactive request; *kubectl.Runner implements it.
+// Runner runs an interactive request of any target type.
 type Runner interface {
-	RunInteractive(g *decision.Grant, c *request.Canonical, term kubectl.Terminal) (int, error)
+	RunInteractive(g *decision.Grant, c target.Request, term target.Terminal) (int, error)
 }
+
+var termPattern = regexp.MustCompile(protocol.TermPattern)
 
 type handler struct {
 	tickets Tickets
@@ -122,7 +128,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	termCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
 	term := newWSTerm(termCtx, conn)
+	if t := r.Header.Get(protocol.TermHeader); termPattern.MatchString(t) {
+		term.term = t
+	}
+	h.tickets.SessionStarted(g)
 	exit, runErr := h.runner.RunInteractive(g, c, term)
+	h.tickets.SessionEnded(g)
 	finish(termCtx, conn, exit, runErr)
 	stop()
 }
@@ -172,7 +183,7 @@ func (h *handler) auditPrincipal(ctx context.Context, p *authn.Principal, kind s
 	}
 }
 
-func grantRecord(kind string, g *decision.Grant, c *request.Canonical) audit.Record {
+func grantRecord(kind string, g *decision.Grant, c target.Request) audit.Record {
 	req := c.Audit()
 	ra := g.RunAs()
 	return audit.Record{
@@ -183,18 +194,19 @@ func grantRecord(kind string, g *decision.Grant, c *request.Canonical) audit.Rec
 	}
 }
 
-// wsTerm adapts the WebSocket to kubectl.Terminal: binary messages are
+// wsTerm adapts the WebSocket to target.Terminal: binary messages are
 // terminal bytes, text messages are resizes.
 type wsTerm struct {
 	ctx     context.Context
 	conn    *websocket.Conn
 	in      *io.PipeReader
-	resizes chan kubectl.Size
+	resizes chan target.Size
+	term    string
 }
 
 func newWSTerm(ctx context.Context, conn *websocket.Conn) *wsTerm {
 	pr, pw := io.Pipe()
-	t := &wsTerm{ctx: ctx, conn: conn, in: pr, resizes: make(chan kubectl.Size, 8)}
+	t := &wsTerm{ctx: ctx, conn: conn, in: pr, resizes: make(chan target.Size, 8)}
 	go t.readLoop(pw)
 	return t
 }
@@ -216,7 +228,7 @@ func (t *wsTerm) readLoop(pw *io.PipeWriter) {
 			if json.Unmarshal(data, &m) != nil || m.Resize == nil || m.Resize.Cols == 0 || m.Resize.Rows == 0 {
 				continue // not a resize: ignored
 			}
-			s := kubectl.Size{Cols: m.Resize.Cols, Rows: m.Resize.Rows}
+			s := target.Size{Cols: m.Resize.Cols, Rows: m.Resize.Rows}
 			select {
 			case t.resizes <- s:
 			default: // the run is behind on resizes; drop the oldest
@@ -242,4 +254,6 @@ func (t *wsTerm) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (t *wsTerm) Resizes() <-chan kubectl.Size { return t.resizes }
+func (t *wsTerm) Resizes() <-chan target.Size { return t.resizes }
+
+func (t *wsTerm) Term() string { return t.term }

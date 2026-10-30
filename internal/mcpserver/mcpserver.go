@@ -22,8 +22,9 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/config"
 	"github.com/Tuhis/Nyyrikki/internal/decision"
-	"github.com/Tuhis/Nyyrikki/internal/kubectl"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl/request"
+	"github.com/Tuhis/Nyyrikki/internal/sshtarget"
+	"github.com/Tuhis/Nyyrikki/internal/target"
 )
 
 // Limits on tool arguments (docs/02 D13).
@@ -35,9 +36,10 @@ const (
 	maxBodyBytes = 4 << 20
 )
 
-// Runner is the part of *kubectl.Runner the tools use.
+// Runner runs a non-interactive request of any target type
+// (runner.Runners).
 type Runner interface {
-	Run(g *decision.Grant, c *request.Canonical, timeout time.Duration) (*kubectl.Result, error)
+	Run(g *decision.Grant, c target.Request, timeout time.Duration) (*target.Result, error)
 }
 
 // Deps wires the server.
@@ -66,8 +68,9 @@ func New(d Deps) *Server {
 		// Tools only: no logging, prompts, resources or completions
 		// (docs/01 D4).
 		Capabilities: &mcp.ServerCapabilities{},
-		Instructions: "Nyyrikki runs privileged kubectl requests on target clusters after a human approves them on Telegram. " +
-			"Call list_targets first. run takes kubectl arguments (without the leading 'kubectl') and waits for approval. " +
+		Instructions: "Nyyrikki runs privileged requests on target systems after a human approves them on Telegram: " +
+			"kubectl requests on Kubernetes targets, shell commands on SSH hosts. " +
+			"Call list_targets first; its 'type' says how run reads 'args'. run waits for approval. " +
 			"elevate asks for a window of up to 30 minutes; pass its handle as 'elevation' to run without asking again.",
 	})
 	s.mcp.AddReceivingMiddleware(onlyTools)
@@ -77,9 +80,12 @@ func New(d Deps) *Server {
 	}, s.listTargets)
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: api.ToolRun,
-		Description: "Run one kubectl command on a target, as the human you act for. Waits until the approver answers on Telegram, " +
-			"unless 'elevation' carries the handle of a live elevation covering the target. 'args' are the kubectl arguments without 'kubectl'. " +
-			"'stdin' is sent to commands that read it ('-f -', or exec/attach with -i). 'reason' is shown to the approver as your claim.",
+		Description: "Run one request on a target, as the human you act for. Waits until the approver answers on Telegram, " +
+			"unless 'elevation' carries the handle of a live elevation covering the target. 'reason' is shown to the approver as your claim. " +
+			"On a kubernetes target, 'args' are the kubectl arguments without 'kubectl', and 'stdin' is sent to commands that read it ('-f -', or exec/attach with -i). " +
+			"On an ssh target, 'args' are joined with single spaces into one command string, as ssh does, which the host's shell runs. " +
+			"The approver never sees stdin, only its size and hash, and will deny a command that runs what it reads (sh, bash -s, python3 -): " +
+			"put anything the approver must read, such as a script, in the command itself, for example as a heredoc.",
 	}, s.run)
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: api.ToolElevate,
@@ -174,16 +180,17 @@ func (s *Server) listTargets(ctx context.Context, req *mcp.CallToolRequest, _ ap
 	}
 	out := api.ListTargetsOut{Targets: []api.TargetInfo{}}
 	for _, t := range s.d.Point.VisibleTargets(p) {
-		out.Targets = append(out.Targets, api.TargetInfo{Name: t.Name, Description: t.Description, Type: "kubernetes"})
+		out.Targets = append(out.Targets, api.TargetInfo{Name: t.Name, Description: t.Description, Type: t.Type()})
 	}
 	return nil, out, nil
 }
 
-func validateRun(in api.RunIn) (time.Duration, error) {
+func validateRun(in api.RunIn, ssh bool) (time.Duration, error) {
 	if !config.IsSlug(in.Target) {
 		return 0, codes.New(codes.InvalidRequest, "target must be a target name")
 	}
-	if len(in.Args) == 0 || len(in.Args) > maxArgs {
+	// An SSH login shell has no args (docs/07 D13); Build checks the rest.
+	if (len(in.Args) == 0 && !(ssh && in.Interactive)) || len(in.Args) > maxArgs {
 		return 0, codes.New(codes.InvalidRequest, "args must have 1 to %d elements", maxArgs)
 	}
 	for _, a := range in.Args {
@@ -221,7 +228,12 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 		r, b := errOut(err)
 		return r, api.RunOut{Error: b}, nil
 	}
-	timeout, err := validateRun(in)
+	// The target's type says how args are read (docs/07 D13). An unknown
+	// target, or one this agent may not see, is read as kubectl and the
+	// decision point refuses it: both answer the same (docs/02 D5).
+	t, _ := s.d.Config.TargetByName(in.Target)
+	isSSH := t != nil && t.Visible(p.Human, p.ClientID) && t.Type() == codes.TypeSSH
+	timeout, err := validateRun(in, isSSH)
 	if err != nil {
 		r, b := errOut(s.invalid(ctx, p, []string{in.Target}, err))
 		return r, api.RunOut{Error: b}, nil
@@ -230,17 +242,14 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 	if in.Stdin != "" {
 		stdin = []byte(in.Stdin)
 	}
-	c, err := request.Parse(in.Args, stdin, in.Interactive)
+	c, err := buildRequest(isSSH, in.Args, stdin, in.Interactive)
 	if err != nil {
-		if codes.Of(err) == codes.Internal {
-			err = codes.Wrap(codes.InvalidRequest, err, "the kubectl arguments could not be parsed")
-		}
 		r, b := errOut(s.invalid(ctx, p, []string{in.Target}, err))
 		return r, api.RunOut{Error: b}, nil
 	}
 	runID := decision.NewRunID()
 	g, err := s.d.Point.DecideRun(ctx, decision.RunRequest{
-		Principal: p, RunID: runID, Target: in.Target, Canonical: c,
+		Principal: p, RunID: runID, Target: in.Target, Request: c,
 		Handle: in.Elevation, Reason: in.Reason, Progress: progress(ctx, req),
 	})
 	if err != nil {
@@ -250,8 +259,7 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 	out := api.RunOut{RunID: runID, CoveredBy: g.CoveredBy()}
 	if c.Interactive() {
 		tk, exp, err := s.d.Point.IssueTicket(g, c)
-		if err != nil {
-			g.Release()
+		if err != nil { // IssueTicket has released g
 			r, b := errOut(err)
 			return r, api.RunOut{Error: b}, nil
 		}
@@ -275,6 +283,7 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 	}
 	out.Stderr = string(res.Stderr)
 	out.StdoutTruncated, out.StderrTruncated = res.StdoutTruncated, res.StderrTruncated
+	out.Detail = res.Detail
 	text := out.Stdout
 	if out.StdoutBase64 != "" {
 		text = "(binary output in stdout_base64)"
@@ -292,6 +301,22 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 	}
 	text += fmt.Sprintf("\n--- exit code %d ---", *out.ExitCode)
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}, IsError: *out.ExitCode != 0}, out, nil
+}
+
+// buildRequest parses args for the target's type, once, before the
+// decision (CODE-REVIEW.md: what is forwarded is what was approved).
+func buildRequest(ssh bool, args []string, stdin []byte, interactive bool) (target.Request, error) {
+	if ssh {
+		return sshtarget.Build(args, stdin, interactive)
+	}
+	c, err := request.Parse(args, stdin, interactive)
+	if err != nil {
+		if codes.Of(err) == codes.Internal {
+			err = codes.Wrap(codes.InvalidRequest, err, "the kubectl arguments could not be parsed")
+		}
+		return nil, err
+	}
+	return c, nil
 }
 
 func (s *Server) elevate(ctx context.Context, req *mcp.CallToolRequest, in api.ElevateIn) (*mcp.CallToolResult, api.ElevateOut, error) {
