@@ -154,10 +154,11 @@ func TestPollingContract(t *testing.T) {
 	}
 
 	// A new bot on the same database starts from the stored offset.
+	// Healthy turns true just before the first getUpdates, so the offset
+	// is waited for, not read. With no updates pending, a bot that ignored
+	// the stored offset would keep polling from 0 and never get there.
 	e2 := newEnv(t, withDB(db)).start()
-	if got := e2.fake.LastOffset(); got != 1003 {
-		t.Errorf("restarted bot polled from %d, want 1003", got)
-	}
+	e2.fake.Wait(t, "a restarted bot polling from the stored offset 1003", func() bool { return e2.fake.LastOffset() == 1003 })
 }
 
 func TestRunRequiresResolver(t *testing.T) {
