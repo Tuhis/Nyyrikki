@@ -166,6 +166,14 @@ func (c *cli) asyncEnv(t *testing.T, extra []string, args ...string) chan result
 // approver, retrying while the bot hasn't stored the prompt's keys yet.
 func (e *env) tap(t *testing.T, n int, button string) telegramtest.Message {
 	t.Helper()
+	m, _ := e.tapAt(t, n, button)
+	return m
+}
+
+// tapAt is tap, also returning when the tap that counted was sent: the
+// server can't have acted on it before then.
+func (e *env) tapAt(t *testing.T, n int, button string) (telegramtest.Message, time.Time) {
+	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
 	for len(e.tg.Sent(t)) < n {
 		if time.Now().After(deadline) {
@@ -180,13 +188,14 @@ func (e *env) tap(t *testing.T, n int, button string) telegramtest.Message {
 			time.Sleep(300 * time.Millisecond)
 			continue
 		}
+		sent := time.Now()
 		if e.tg.Tap(t, cur, button) != "No longer valid" {
-			return cur
+			return cur, sent
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
 	t.Fatalf("tap %q on prompt %d never counted", button, n)
-	return telegramtest.Message{}
+	return telegramtest.Message{}, time.Time{}
 }
 
 func get(t *testing.T, ch chan result, within time.Duration) result {

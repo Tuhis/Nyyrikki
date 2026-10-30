@@ -125,7 +125,9 @@ func TestEndToEnd(t *testing.T) {
 
 	step(t, "M3: an elevation covers requests without asking, and cuts a stream at expiry", func(t *testing.T) {
 		ch := agent.async(t, "elevate", "--reason", "a burst of work", "--for", "1m", "this-cluster")
-		e.tap(t, next(), "Approve")
+		// The elevation's minute starts when the server approves: after the
+		// tap was sent, before the tap's answer came back.
+		_, tappedAt := e.tapAt(t, next(), "Approve")
 		approvedAt := time.Now()
 		r := get(t, ch, time.Minute)
 		handle := strings.TrimSpace(r.stdout)
@@ -153,11 +155,15 @@ func TestEndToEnd(t *testing.T) {
 		out, wait := startPTY(t, cmd)
 		code := wait(2 * time.Minute)
 		lasted := time.Since(approvedAt)
+		sinceTap := time.Since(tappedAt)
 		// Cut by the elevation's expiry, and by nothing else (a dropped
 		// connection, another cut, kubectl failing): exit 75 with the
 		// server's reason, after the stream stayed up the whole minute.
-		if code != 75 || !strings.Contains(out(), "the elevation expired") || lasted < 55*time.Second || lasted > 80*time.Second {
-			t.Fatalf("stream not cut at expiry: code %d after %v, output %q", code, lasted, out())
+		// The minute is bounded below from the tap (2026-10-30: the tap's
+		// answer took ~5 s on a busy runner, so timing from the answer
+		// read 54.7 s) and above from the answer.
+		if code != 75 || !strings.Contains(out(), "the elevation expired") || sinceTap < 59*time.Second || lasted > 80*time.Second {
+			t.Fatalf("stream not cut at expiry: code %d after %v (%v since the tap), output %q", code, lasted, sinceTap, out())
 		}
 		if len(e.tg.Sent(t)) != before {
 			t.Fatal("the covered exec asked the approver")
