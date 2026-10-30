@@ -530,12 +530,21 @@ account_check() {
 		case $ny_ac_f in
 		"$NY_SUDO_PREFIX$1" | */.nyyrikki-new) continue ;;
 		esac
-		if grep -E -q -- '^[[:space:]]*ALL[[:space:]]' "$ny_ac_f"; then
+		# Comment lines aside: "#" then a digit is a UID, not a comment.
+		ny_ac_rules=$(grep -E -v -- '^[[:space:]]*#([^0-9]|$)' "$ny_ac_f")
+		case $? in
+		0 | 1) ;; # 1: nothing but comments
+		*)
+			printf "can't read %s" "$ny_ac_f"
+			return 1
+			;;
+		esac
+		if printf '%s\n' "$ny_ac_rules" | grep -E -q -- '^[[:space:]]*ALL[[:space:]]'; then
 			printf '%s gives every user a rule (ALL)' "$ny_ac_f"
 			return 1
 		fi
 		for ny_ac_n in $ny_ac_names; do
-			if grep -E -q -- "(^|[^A-Za-z0-9_.-])$ny_ac_n([^A-Za-z0-9_.-]|\$)" "$ny_ac_f"; then
+			if printf '%s\n' "$ny_ac_rules" | grep -E -q -- "(^|[^A-Za-z0-9_.-])$ny_ac_n([^A-Za-z0-9_.-]|\$)"; then
 				printf '%s names %s' "$ny_ac_f" "$ny_ac_n"
 				return 1
 			fi

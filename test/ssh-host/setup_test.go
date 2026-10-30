@@ -373,6 +373,11 @@ func TestRefusedHostStates(t *testing.T) {
 		refused("a rule by UID", "echo \"#$(id -u ny-owner) ALL=(ALL) ALL\" > /etc/sudoers.d/10-uid", "rm /etc/sudoers.d/10-uid", "10-uid names #")
 		refused("the account in the docker group", "groupadd -f docker && usermod -aG docker ny-owner", "gpasswd -d ny-owner docker", "group docker")
 		refused("PermitUserEnvironment on", "echo 'PermitUserEnvironment yes' > /etc/ssh/sshd_config.d/60-env.conf", "rm /etc/ssh/sshd_config.d/60-env.conf", "permituserenvironment no")
+		// Review round 3 on #30, finding 4: a comment naming the UID is no
+		// rule.
+		h.must("echo \"# see ticket #$(id -u ny-owner) and ny-owner\" > /etc/sudoers.d/10-comment")
+		h.mustSetup(v)
+		h.must("rm /etc/sudoers.d/10-comment")
 		refused("an invalid revocation list", "cp /etc/ssh/nyyrikki/revoked.krl /root/krl && : > /etc/ssh/nyyrikki/revoked.krl", "cp /root/krl /etc/ssh/nyyrikki/revoked.krl", "revocation list")
 		h.mustSetup(v)
 	})

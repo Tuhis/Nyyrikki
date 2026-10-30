@@ -433,6 +433,8 @@ func (r *Runner) Run(g *decision.Grant, req *Request, timeout time.Duration) (*t
 	c.session.Stdin = bytes.NewReader(req.Stdin())
 	c.session.Stdout, c.session.Stderr = stdout, stderr
 	if err := c.session.Start(req.Command()); err != nil {
+		// A host refusal that races the guard is recorded as a cut too:
+		// "may have run" is the cautious reading (review round 3).
 		if c.cutEarly() {
 			return &target.Result{ExitCode: -1}, r.finish(g, req, c, l, true, err, -1, "", 0, 0)
 		}

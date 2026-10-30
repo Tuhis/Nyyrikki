@@ -165,7 +165,9 @@ Re-running is safe: it brings the host to what the values say.
 re-run with `sudo: false` removes Nyyrikki's sudoers file, and refuses
 an account it finds with UID 0, in a root-equivalent group (root, sudo,
 wheel, admin, docker, lxd, incus, disk), or named in another sudoers
-file. That check is best effort: a command that ran as root could have
+file. A sudoers rule for `ALL` users blocks the setup on every run, a
+first one included: it would give each `ny-*` account more than the
+setup does. That check is best effort: a command that ran as root could have
 kept root in ways it can't see (a key in root's `authorized_keys`, a
 setuid binary, a cron job). Treat a host that had `sudo: true` as
 possibly still giving root to its `ny-*` accounts until they are made
