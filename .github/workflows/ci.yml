@@ -21,13 +21,19 @@ env:
   KUBECONFORM_VERSION: v0.8.0
   HELM_VERSION: v3.19.0
 
+# RUNNER POOL (docs/01 D18). `runs-on` reads the repository variable
+# RUNNER_LABEL: the owner's self-hosted pool (ioio-k8s-nyyrikki). A pull
+# request from a fork always runs on GitHub-hosted runners, so nobody
+# outside the repository runs code on the owner's cluster. Unset, or in a
+# fork's own runs (which inherit no variables), it falls back to
+# ubuntu-latest.
 jobs:
   build:
     # docs/01 G3: static binaries on both supported Go majors.
     strategy:
       matrix:
         go: ["1.26.x", "1.27.x"]
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.pull_request.head.repo.fork && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -49,7 +55,7 @@ jobs:
         run: go test -race -count=1 ./...
 
   gates:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.pull_request.head.repo.fork && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -74,7 +80,7 @@ jobs:
         run: scripts/gates-selftest.sh
 
   image:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.pull_request.head.repo.fork && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the image

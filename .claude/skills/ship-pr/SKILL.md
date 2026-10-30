@@ -155,9 +155,13 @@ Then act on what you find:
   A re-run `claude-review` job whose `## Code review` summary was already
   posted posts its review again; reply to the duplicates once.
 - **`queued` with no `runner_name`**: no runner picked it up. Look for
-  other queued runs. Every workflow here runs on `ubuntu-latest`, so a
-  queued job points at GitHub-hosted capacity or an Actions outage. Stop
-  and report: rerunning won't help.
+  other queued runs. `ci.yml` and `e2e.yml` run on the owner's
+  self-hosted pools (`vars.RUNNER_LABEL`, `vars.RUNNER_LABEL_DISK`,
+  docs/01 D18), the rest on `ubuntu-latest`. A queued self-hosted job
+  points at the pool (its listener in `actions-runner-system`, or runner
+  pods stuck Pending in `actions-runners` on the owner's cluster); a
+  queued hosted one at GitHub-hosted capacity, billing or an Actions
+  outage. Stop and report: rerunning won't help.
 - **Running much longer than on `main`, but within its timeout**: read
   the live log (`gh api repos/{owner}/{repo}/actions/jobs/<id>/logs`) for
   a hang. Cancel and rerun once only if it is clearly stuck, and say so in
