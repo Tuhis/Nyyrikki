@@ -231,7 +231,10 @@ These kinds of issue are always in scope:
   a cron job) outlives any cut, and on a host without session kill so
   may anything it started (docs/07 D11). The defence is the approver
   reading the command; the message says when it runs as root and when
-  the host doesn't finish cuts (docs/07 D12).
+  the host doesn't finish cuts (docs/07 D12). Turning `sudo` off later
+  doesn't undo root kept that way: the setup's check for it is best
+  effort, so such a host's accounts are remade (`--uninstall`, then the
+  setup) to be sure (docs/setup/ssh-hosts.md).
 - **Whoever controls Nyyrikki's pod controls the SSH setup script and
   holds the SSH user CA key** (docs/07 OD3, D6): root on every host
   onboarded afterwards, and on every host already set up with sudo. The

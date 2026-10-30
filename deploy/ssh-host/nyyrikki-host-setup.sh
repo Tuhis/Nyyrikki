@@ -498,9 +498,10 @@ account_check() {
 		printf "its home %s isn't a directory it owns" "$ny_home"
 		return 1
 	fi
-	# Root by another way than Nyyrikki's sudoers file, e.g. given by an
-	# approved command earlier: a re-run with SUDO=false would otherwise
-	# report no sudo while the account keeps it.
+	# Root by another way than Nyyrikki's own sudoers file for it, e.g.
+	# given by an approved command earlier: a re-run with SUDO=false would
+	# otherwise leave it. Best effort: an account that had root can keep it
+	# in ways no check finds (docs/setup/ssh-hosts.md).
 	if [ "$ny_uid" = 0 ]; then
 		printf 'its UID is 0'
 		return 1
@@ -509,10 +510,13 @@ account_check() {
 		printf "can't list its groups"
 		return 1
 	}
-	ny_ac_names=$1
+	ny_ac_names="$1 #$ny_uid"
+	for ny_ac_gid in $(id -G -- "$1" 2>/dev/null); do
+		ny_ac_names="$ny_ac_names %#$ny_ac_gid"
+	done
 	for ny_ac_g in $ny_ac_gs; do
 		case $ny_ac_g in
-		root | sudo | wheel | admin)
+		root | sudo | wheel | admin | docker | lxd | incus | disk)
 			printf 'it is in the group %s' "$ny_ac_g"
 			return 1
 			;;
@@ -521,9 +525,15 @@ account_check() {
 	done
 	for ny_ac_f in /etc/sudoers /etc/sudoers.d/*; do
 		[ -f "$ny_ac_f" ] || continue
+		# Only the setup's own file for this account: step 2 or step 6
+		# handles it. Any other file, even one named like the setup's, counts.
 		case $ny_ac_f in
-		"$NY_SUDO_PREFIX"* | */.nyyrikki-new) continue ;;
+		"$NY_SUDO_PREFIX$1" | */.nyyrikki-new) continue ;;
 		esac
+		if grep -E -q -- '^[[:space:]]*ALL[[:space:]]' "$ny_ac_f"; then
+			printf '%s gives every user a rule (ALL)' "$ny_ac_f"
+			return 1
+		fi
 		for ny_ac_n in $ny_ac_names; do
 			if grep -E -q -- "(^|[^A-Za-z0-9_.-])$ny_ac_n([^A-Za-z0-9_.-]|\$)" "$ny_ac_f"; then
 				printf '%s names %s' "$ny_ac_f" "$ny_ac_n"
@@ -1031,11 +1041,11 @@ ny_remove_stale() {
 		if account_exists "$ny_a"; then
 			has_processes "$ny_a"
 			case $? in
-			0) die "the account $ny_a of a human no longer on the target has processes; end them ($(ny_end_hint "$ny_a")) and run the setup again. It has no sudo and no principals file: it is inert. Running: $(ps -o pid=,args= -u "$ny_a" 2>/dev/null | head -n 5 | tr '\n' ';')" ;;
+			0) die "the account $ny_a of a human no longer on the target has processes; end them ($(ny_end_hint "$ny_a")) and run the setup again. Nyyrikki's sudoers and principals files for it are gone, so Nyyrikki can't log in to it. Running: $(ps -o pid=,args= -u "$ny_a" 2>/dev/null | head -n 5 | tr '\n' ';')" ;;
 			1) ;;
 			*) die "can't tell whether $ny_a has processes" ;;
 			esac
-			ny_why=$(account_check "$ny_a") || die "the account $ny_a of a human no longer on the target changed since the setup created it ($ny_why); it has no sudo and no principals file. Delete it by hand"
+			ny_why=$(account_check "$ny_a") || die "the account $ny_a of a human no longer on the target changed since the setup created it ($ny_why); Nyyrikki's sudoers and principals files for it are gone. Delete it by hand"
 			ny_delete_account "$ny_a" || die "can't delete the account $ny_a"
 			say "deleted the account $ny_a and /home/$ny_a"
 		fi
@@ -1220,7 +1230,7 @@ ny_uninstall() {
 		account_exists "$ny_a" || continue
 		has_processes "$ny_a"
 		case $? in
-		0) die "the account $ny_a has processes; end them first ($(ny_end_hint "$ny_a")), then run --uninstall again. Its sudoers and principals files are gone: it is inert. Running: $(ps -o pid=,args= -u "$ny_a" 2>/dev/null | head -n 5 | tr '\n' ';')" ;;
+		0) die "the account $ny_a has processes; end them first ($(ny_end_hint "$ny_a")), then run --uninstall again. Nyyrikki's sudoers and principals files are gone, so Nyyrikki can't log in to it. Running: $(ps -o pid=,args= -u "$ny_a" 2>/dev/null | head -n 5 | tr '\n' ';')" ;;
 		1) ;;
 		*) die "can't tell whether $ny_a has processes" ;;
 		esac

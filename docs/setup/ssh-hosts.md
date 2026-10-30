@@ -161,6 +161,16 @@ Run the command again whenever the target's humans, CA keys, source
 addresses or `sudo` change, and on every host during a CA rotation.
 Re-running is safe: it brings the host to what the values say.
 
+**Turning `sudo` off doesn't undo root an account already used.** A
+re-run with `sudo: false` removes Nyyrikki's sudoers file, and refuses
+an account it finds with UID 0, in a root-equivalent group (root, sudo,
+wheel, admin, docker, lxd, incus, disk), or named in another sudoers
+file. That check is best effort: a command that ran as root could have
+kept root in ways it can't see (a key in root's `authorized_keys`, a
+setuid binary, a cron job). Treat a host that had `sudo: true` as
+possibly still giving root to its `ny-*` accounts until they are made
+again: run `--uninstall`, then the setup.
+
 ### Uninstalling
 
 ```sh
@@ -173,6 +183,18 @@ and their homes (it stops if one has processes: end them with
 `systemctl stop user@<uid>.service` the message names, and run it again), the logind and
 session-scope drop-ins, the sshd drop-in, and `/etc/ssh/nyyrikki`, and
 reloads sshd and logind.
+
+It refuses, changing nothing, if `sshd -t` fails first. If it is
+Nyyrikki's drop-in that sshd rejects (a newer OpenSSH dropping a
+keyword), remove it by hand, check and reload, then run `--uninstall`:
+
+```sh
+rm /etc/ssh/sshd_config.d/50-nyyrikki.conf && sshd -t && systemctl reload ssh   # sshd on RHEL-family hosts
+```
+
+`/etc/ssh/nyyrikki` is removed only after sshd has reloaded without the
+drop-in, since sshd refuses every key login while its `RevokedKeys` file
+is missing.
 
 ## Manual setup
 

@@ -365,6 +365,13 @@ func TestRefusedHostStates(t *testing.T) {
 		refused("the account in the root group", "usermod -aG root ny-owner", "gpasswd -d ny-owner root", "group root")
 		refused("another sudoers file naming the account", "echo 'ny-owner ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/10-local", "rm /etc/sudoers.d/10-local", "10-local names ny-owner")
 		refused("a sudoers rule for one of its groups", "groupadd ops && usermod -aG ops ny-owner && echo '%ops ALL=(ALL) ALL' > /etc/sudoers.d/10-ops", "rm /etc/sudoers.d/10-ops; gpasswd -d ny-owner ops; groupdel ops", "names %ops")
+		// Review round 2 on #30, finding 1 and 2: a file named like the
+		// setup's, a rule for every user, a rule by UID, and a
+		// root-equivalent group.
+		refused("a stray 50-nyyrikki- file naming the account", "echo 'ny-owner ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/50-nyyrikki-x", "rm /etc/sudoers.d/50-nyyrikki-x", "50-nyyrikki-x names ny-owner")
+		refused("a rule for every user", "echo 'ALL ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/10-all", "rm /etc/sudoers.d/10-all", "every user")
+		refused("a rule by UID", "echo \"#$(id -u ny-owner) ALL=(ALL) ALL\" > /etc/sudoers.d/10-uid", "rm /etc/sudoers.d/10-uid", "10-uid names #")
+		refused("the account in the docker group", "groupadd -f docker && usermod -aG docker ny-owner", "gpasswd -d ny-owner docker", "group docker")
 		refused("PermitUserEnvironment on", "echo 'PermitUserEnvironment yes' > /etc/ssh/sshd_config.d/60-env.conf", "rm /etc/ssh/sshd_config.d/60-env.conf", "permituserenvironment no")
 		refused("an invalid revocation list", "cp /etc/ssh/nyyrikki/revoked.krl /root/krl && : > /etc/ssh/nyyrikki/revoked.krl", "cp /root/krl /etc/ssh/nyyrikki/revoked.krl", "revocation list")
 		h.mustSetup(v)
