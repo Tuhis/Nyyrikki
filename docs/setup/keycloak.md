@@ -25,8 +25,8 @@ Write `NYYRIKKI` for Nyyrikki's canonical URL, e.g.
   that ask for it at registration, as Claude Code does, then can't sign
   in, and neither can `nyyrikki login --mcp`, which asks for it whenever
   discovery lists it (not measured: expect `invalid_scope`). Without the
-  role, `login --mcp` gets the error above, as harnesses asking for
-  `offline_access` do.
+  role, expect `login --mcp` to get the error above, as harnesses asking
+  for `offline_access` do (not measured).
 
 ## The audience scope
 
