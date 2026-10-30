@@ -335,7 +335,7 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	// Last: it ends the owner's sessions, which would empty the step above.
-	step(t, "OD17: an offline MCP harness has no browser session and ends on revoke or sign-out", func(t *testing.T) {
+	step(t, "OD17: an offline MCP harness outlives the browser sessions and ends on revoke or sign-out", func(t *testing.T) {
 		e.checkOffline(t, next)
 	})
 }

@@ -130,11 +130,11 @@ the doc.
   may give the user no roles; consent then succeeds and the token
   request fails with `Offline tokens not allowed for the user or
   client`. ([docs/01](01-foundations.md) OD17)
-- **Keycloak keeps no online session for an offline sign-in.** Right
-  after a harness signs in with `offline_access`, the user's Sessions
-  list doesn't have it; the token's `sid` is the ID of its offline
-  session. Signing out sessions there doesn't end it: revoke its consent
-  or sign the user out. ([docs/01](01-foundations.md) M9)
+- **Signing out a user's sessions doesn't end an offline harness.** Its
+  token's `sid` is its offline session, which the Sessions list's sign-out
+  leaves alone. Revoke its consent, or sign the user out (that sets a
+  not-before time offline tokens are checked against).
+  ([docs/01](01-foundations.md) M9)
 - **Keycloak requires PKCE in the device grant for a client with PKCE
   set**, which the pkce-enforcer client policy does for every registered
   client: without `code_challenge` the device authorization request fails

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -575,9 +576,9 @@ func runVia(t *testing.T, cs *mcp.ClientSession, reason string) (*mcp.CallToolRe
 }
 
 // offlineHarness registers a harness asking for offline_access, as Claude
-// Code does, and signs it in; it returns the client ID, an access token
-// and the offline refresh token.
-func (e *env) offlineHarness(t *testing.T, name string) (string, string, string) {
+// Code does, and signs it in through b; it returns the client ID, an
+// access token and the offline refresh token.
+func (e *env) offlineHarness(t *testing.T, b *browser, name string) (string, string, string) {
 	t.Helper()
 	code, out := e.register(t, map[string]any{
 		"client_name": name, "redirect_uris": []string{loopback},
@@ -588,7 +589,7 @@ func (e *env) offlineHarness(t *testing.T, name string) (string, string, string)
 	if code != http.StatusCreated || id == "" {
 		t.Fatalf("registering a harness that asks for offline_access: %d %v", code, redact(out))
 	}
-	at, rt := e.newBrowser().signInScope(t, id, "nyyrikki offline_access")
+	at, rt := b.signInScope(t, id, "nyyrikki offline_access")
 	if claims(rt)["typ"] != "Offline" {
 		t.Fatalf("refresh token type %v, want Offline", claims(rt)["typ"])
 	}
@@ -596,39 +597,30 @@ func (e *env) offlineHarness(t *testing.T, name string) (string, string, string)
 }
 
 // checkOffline is an MCP harness holding an offline session (docs/01
-// OD17): Keycloak keeps no browser session for its sign-in, it stays one
-// agent across refreshes, and it ends when its client's access is revoked
-// or the owner is signed out (docs/setup/keycloak.md, Revoking an agent).
+// OD17): it stays one agent across refreshes, signing out the owner's
+// browser sessions leaves it working, and it ends when its client's access
+// is revoked or the owner is signed out (docs/setup/keycloak.md, Revoking
+// an agent).
 func (e *env) checkOffline(t *testing.T, next func() int) {
 	users := "/admin/realms/" + realm + "/users/" + e.ownerID
-	id, at, rt := e.offlineHarness(t, "offline harness")
+	// The owner's browser is usually signed in to Keycloak already, so the
+	// harness signs in through a browser that has a session of its own.
+	b := e.newBrowser()
+	b.signIn(t, e.harness(t, "the browser's first harness"))
+	id, at, rt := e.offlineHarness(t, b, "offline harness")
 	sid := claims(at)["sid"]
-
-	// Right after the sign-in, its sid is the ID of its offline session and
-	// of no online one: Keycloak keeps no browser session for an offline
-	// sign-in, so no browser session's sign-out can reach it (measured on
-	// Keycloak 26.8.1, 2026-10-30; the docs had assumed one).
-	var online, offline []struct {
+	type session struct {
 		ID string `json:"id"`
 	}
+	var online, offline []session
 	onlineRaw := e.admin(t, "GET", users+"/sessions", nil)
 	offlineRaw := e.admin(t, "GET", users+"/offline-sessions/"+fmt.Sprint(e.adminClient(t, id)["id"]), nil)
 	json.Unmarshal(onlineRaw, &online)
 	json.Unmarshal(offlineRaw, &offline)
-	has := func(ss []struct {
-		ID string `json:"id"`
-	}) bool {
-		for _, s := range ss {
-			if s.ID == sid {
-				return true
-			}
-		}
-		return false
+	t.Logf("M9 OD17: after an offline sign-in through a signed-in browser, sid %v; online sessions %s; the harness's offline sessions %s", sid, onlineRaw, offlineRaw)
+	if !slices.ContainsFunc(offline, func(s session) bool { return s.ID == sid }) {
+		t.Errorf("the harness's sid %v isn't one of its offline sessions: %s", sid, offlineRaw)
 	}
-	if !has(offline) || has(online) {
-		t.Errorf("after an offline sign-in with sid %v: online sessions %s, offline sessions %s; want it offline only", sid, onlineRaw, offlineRaw)
-	}
-
 	at2, rt2 := e.refresh(t, id, rt)
 	if at2 == "" || claims(at2)["sid"] != sid || claims(at2)["aud"] != e.canonical+"/mcp" {
 		t.Fatalf("offline refresh: issued=%v sid %v -> %v aud=%v", at2 != "", sid, claims(at2)["sid"], claims(at2)["aud"])
@@ -642,13 +634,35 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 		t.Fatalf("run as the offline harness: %s", raw)
 	}
 
+	// Signing out every browser session of the owner leaves it working:
+	// it refreshes, and its next run reaches the approver.
+	if len(online) == 0 {
+		t.Fatal("the browser had no session to sign out, so this measures nothing")
+	}
+	for _, ss := range online {
+		e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+ss.ID, nil)
+	}
+	if rest := e.admin(t, "GET", users+"/sessions", nil); string(rest) != "[]" {
+		t.Fatalf("online sessions left after signing them out: %s", rest)
+	}
+	at3, rt3 := e.refresh(t, id, rt2)
+	if at3 == "" {
+		t.Fatal("signing out the browser sessions ended the offline harness too")
+	}
+	ch = make(chan string, 1)
+	go func() { _, raw := runVia(t, e.mcpSession(t, at3), "after the browser sessions ended"); ch <- raw }()
+	e.tap(t, next(), "Deny")
+	if raw := <-ch; !strings.Contains(raw, "denied") {
+		t.Fatalf("offline harness after the browser sessions ended: %s", raw)
+	}
+
 	// Removing its client's access ends it at once ...
 	e.admin(t, "DELETE", users+"/consents/"+url.PathEscape(id), nil)
-	if a, _ := e.refresh(t, id, rt2); a != "" {
+	if a, _ := e.refresh(t, id, rt3); a != "" {
 		t.Fatal("an offline token still refreshes after its client's access was revoked")
 	}
 	before := len(e.tg.Sent(t))
-	r, raw := runVia(t, e.mcpSession(t, at2), "after revoke")
+	r, raw := runVia(t, e.mcpSession(t, at3), "after revoke")
 	if !r.IsError || !strings.Contains(raw, "session_inactive") {
 		t.Fatalf("offline harness after revoke: %s", raw)
 	}
@@ -657,7 +671,7 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 	// sets a not-before time for the user, which refuses every token issued
 	// before it, offline ones included; a token issued in the same second
 	// survives, so the test steps past it.
-	id2, at4, rt4 := e.offlineHarness(t, "second offline harness")
+	id2, at4, rt4 := e.offlineHarness(t, e.newBrowser(), "second offline harness")
 	time.Sleep(1100 * time.Millisecond)
 	e.admin(t, "POST", users+"/logout", nil)
 	if a, _ := e.refresh(t, id2, rt4); a != "" {

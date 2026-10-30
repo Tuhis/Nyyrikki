@@ -122,8 +122,8 @@ by the chart's `secrets.introspection`.
 - **One MCP harness** (it may hold an offline session, docs/01 OD17):
   Users → the owner → Consents → **Revoke** its client, or, as the owner,
   the account console's Applications → **Remove access**. Signing out
-  sessions under Sessions does **not** end it: Keycloak keeps no online
-  session for an offline sign-in, only the offline one.
+  the owner's sessions under Sessions does **not** end it: its session
+  is an offline one.
 - **A CLI login** (no offline session): Users → the owner → Sessions →
   sign its session out.
 - **Every agent at once**: Users → the owner → **Sign out**. It sets a
@@ -135,7 +135,8 @@ by the chart's `secrets.introspection`.
 
 Nyyrikki introspects on every run and elevate, so the agent is cut off at
 once (docs/01 OD13). The e2e test measures, on Keycloak 26.8.1: revoking
-a harness's consent (through the admin API), ending only the browser
-session it signed in through, and signing the owner out. The account
+a harness's consent (through the admin API), signing out every one of
+the owner's sessions (through the admin API) without ending an offline
+harness, and signing the owner out. The account
 console's Remove access, a single CLI session's sign-out and Set to now
 follow Keycloak's documentation and aren't measured.

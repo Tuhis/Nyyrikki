@@ -170,9 +170,9 @@ These kinds of issue are always in scope:
 ### Accepted risks
 
 - **An MCP harness may stay signed in for as long as the offline session
-  cap** (docs/01 OD17, owner decision 2026-10-30). Keycloak keeps no
-  browser session for its sign-in, so signing browser sessions out
-  doesn't end it, and a stolen copy of its token
+  cap** (docs/01 OD17, owner decision 2026-10-30). Its tokens outlive the
+  browser session it signed in through, which signing out doesn't end,
+  and a stolen copy of its token
   store keeps working until its client's consent is revoked, the owner is
   signed out, or the cap passes. What it buys an attacker alone is
   being an agent: listing targets and asking the approver; every
