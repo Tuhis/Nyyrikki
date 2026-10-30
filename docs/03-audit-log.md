@@ -45,7 +45,7 @@ None. The questions R3 raises (what to record, where) are answered by
 
 | # | Decision | Why |
 |---|---|---|
-| D1 | **One record per event**, with: `id` (`aud_` ULID), `time`, `kind` (§5.1), `human`, `agent` (the agent key as a keyed hash, D3), `client_id`, `target` (or targets), `run_id`, `elevation_id`, `approval_id`, `request` (the canonical argv after docs/04 D14's redaction, plus stdin length and SHA-256), `run_as` (Kubernetes user and groups), `covered_by` (`one-off`, `elevation`, or empty), `decision` (`allow`, `deny`, or empty), `code` (docs/02 D14), `exit_code`, `detail` (Nyyrikki's own short text, never agent text). The agent's reason is stored too, as `reason`, since it is part of what the approver saw. | `CLAUDE.md`: every request recorded with agent, human, target, exact request, what covered it and what it did. |
+| D1 | **One record per event**, with: `id` (`aud_` ULID), `time`, `kind` (§5.1), `human`, `agent` (the agent key as a keyed hash, D3), `client_id`, `target` (or targets), `run_id`, `elevation_id`, `approval_id`, `request` (the canonical argv after docs/04 D14's redaction, plus stdin length and SHA-256), `run_as` (Kubernetes user and groups), `covered_by` (`one-off`, `elevation`, or empty), `decision` (`allow`, `deny`, or empty), `code` (docs/02 D14), `exit_code`, `detail` (Nyyrikki's own short text, never agent text). The agent's reason is stored too, as `reason`, since it is part of what the approver saw. | `CLAUDE.md`: every request recorded with agent, human, target, exact request, what covered it and what it did. *Extended 2026-10-30 by [docs/07](07-ssh-target.md) D2, D5*: `request.command` holds an SSH request's command string, and `cert_serial` the serial of the certificate an SSH run was issued, in `run_started` (written before anything reaches the host) and the run's last record. |
 | D2 | **Append-only in SQLite**: table `audit` with triggers that abort any `UPDATE` or `DELETE` (M1). The audit code has only an `Append` function. | No path in the code can rewrite history. |
 | D3 | **The agent key appears only as `HMAC-SHA256(audit_key, agent key)`, first 16 hex characters**, where `audit_key` is 32 random bytes generated on first start and kept in the database. | docs/01 D16: agent keys appear only as a keyed hash. A plain hash of a guessable `sid` could be reversed. |
 | D4 | **A failed write is a deny.** The decision point and the runner write the record of a step before acting on it: the allow record before forwarding, the approval-requested record before sending to Telegram. If that write fails, the step doesn't happen and the call fails `unavailable`. The record of a run's result is written after the run; if that fails, it is logged on stderr and the call still returns the result, since the request already ran. | INV-10: a failed audit write doesn't turn into an allow. |
@@ -69,6 +69,10 @@ approved, denied, expired, withdrawn), `decision` (allow or deny, with
 `covered_by`), `run_started`, `run_finished` (`exit_code`, output sizes),
 `run_cut`, `elevation_live`, `elevation_ended`, `elevation_expired`,
 `stream_attached`, `dependency_failed`.
+
+*Extended 2026-10-30 by [docs/07](07-ssh-target.md) D16*: `host_setup_served`
+(the target and the client address), once per fetch of an SSH host's
+setup script.
 
 ### 5.2 Schema
 

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/Tuhis/Nyyrikki/internal/codes"
+	"github.com/Tuhis/Nyyrikki/internal/decision"
+	"github.com/Tuhis/Nyyrikki/internal/decision/decisiontest"
 )
 
 // fakeTerm is a Terminal driven by the test.
@@ -33,6 +35,7 @@ func (f *fakeTerm) Write(p []byte) (int, error) {
 	return f.out.Write(p)
 }
 func (f *fakeTerm) Resizes() <-chan Size { return f.resizes }
+func (f *fakeTerm) Term() string         { return "" }
 func (f *fakeTerm) close()               { f.in.CloseWithError(io.ErrClosedPipe) }
 
 func (f *fakeTerm) output() string {
@@ -133,6 +136,28 @@ func TestRunInteractiveCut(t *testing.T) {
 		r := waitResult(t, done)
 		wantCode(t, r.err, codes.Expired, DetailGrantEnded)
 		if rec, ok := h.audit.last(codes.KindRunCut); !ok || rec.Detail != DetailGrantEnded {
+			t.Errorf("run_cut = %+v", rec)
+		}
+		h.assertRuntimeEmpty()
+	})
+	// docs/07 D17: "End now" ends the grant with ErrEndedByApprover, and
+	// the cut says so (TestEndNowInteractive, kubectl half).
+	t.Run("ended by approver", func(t *testing.T) {
+		h := newHarness(t, exe, nil)
+		term := newFakeTerm()
+		t.Cleanup(term.close)
+		c := parse(t, []string{"exec", "-it", "web", "--", "sh"}, nil, true)
+		g := grantFor(t.Context(), "lab", c, nil)
+		done := make(chan interactiveResult, 1)
+		go func() {
+			code, err := h.runner.RunInteractive(g, c, term)
+			done <- interactiveResult{code, err}
+		}()
+		term.waitFor(t, "READY")
+		decisiontest.End(g, decision.ErrEndedByApprover)
+		r := waitResult(t, done)
+		wantCode(t, r.err, codes.Expired, decision.DetailEndedByApprover)
+		if rec, ok := h.audit.last(codes.KindRunCut); !ok || rec.Detail != decision.DetailEndedByApprover {
 			t.Errorf("run_cut = %+v", rec)
 		}
 		h.assertRuntimeEmpty()

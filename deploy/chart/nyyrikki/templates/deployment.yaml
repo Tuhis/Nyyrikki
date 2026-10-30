@@ -71,9 +71,13 @@ spec:
             {{- if .Values.trustedCA.configMap }}
             - {name: trusted-ca, mountPath: /etc/nyyrikki/trusted-ca, readOnly: true}
             {{- end }}
-            {{- range .Values.targets }}{{ if not .inCluster }}
+            {{- range .Values.targets }}{{ if not (or .inCluster .ssh) }}
             - {name: target-{{ .name }}, mountPath: /etc/nyyrikki/targets/{{ .name }}, readOnly: true}
             {{- end }}{{ end }}
+            {{- if eq (include "nyyrikki.hasSSH" .) "true" }}
+            # The SSH user CA key (docs/07 D6), read on each use.
+            - {name: ssh-user-ca, mountPath: /etc/nyyrikki/ssh, readOnly: true}
+            {{- end }}
       volumes:
         - name: config
           configMap: {name: {{ include "nyyrikki.name" . }}}
@@ -102,7 +106,14 @@ spec:
             name: {{ .Values.trustedCA.configMap }}
             items: [{key: {{ .Values.trustedCA.key }}, path: ca.crt}]
         {{- end }}
-        {{- range .Values.targets }}{{ if not .inCluster }}
+        {{- if eq (include "nyyrikki.hasSSH" .) "true" }}
+        - name: ssh-user-ca
+          secret:
+            secretName: {{ .Values.secrets.sshUserCA.name }}
+            defaultMode: 0400
+            items: [{key: {{ .Values.secrets.sshUserCA.key }}, path: user-ca}]
+        {{- end }}
+        {{- range .Values.targets }}{{ if not (or .inCluster .ssh) }}
         - name: target-{{ .name }}
           secret:
             secretName: {{ required (printf "targets[%s].secretName is required" .name) .secretName }}

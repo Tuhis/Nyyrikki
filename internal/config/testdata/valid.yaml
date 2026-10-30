@@ -31,5 +31,19 @@ targets:
       server: https://lab.example.com:6443
       ca_file: /etc/nyyrikki/targets/lab/ca.crt
       token_file: /etc/nyyrikki/targets/lab/token
+  - name: db-1
+    description: Primary database host
+    humans: [owner]
+    ssh:
+      address: db-1.example.com:22
+      host_keys:
+        - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+      sudo: true
+      session_kill: true
+ssh:
+  user_ca_key_file: /etc/nyyrikki/ssh/user-ca
+  user_ca_public_keys:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y nyyrikki-user-ca
+  source_addresses: [203.0.113.10/32]
 telegram:
   bot_token_file: /etc/nyyrikki/telegram/bot-token

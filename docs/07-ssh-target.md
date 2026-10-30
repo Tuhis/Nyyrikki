@@ -1,8 +1,8 @@
 # R10 — SSH target: commands on Linux hosts, as the human (docs/07)
 
 **Status**: drafted 2026-10-29. Owner decisions OD1–OD6 taken the same
-day. Awaiting the owner's approval of the doc as a whole; merging the PR
-that adds it is that approval. Status lives in
+day. Approved 2026-10-30, when the PR that added it (#25) merged.
+SH1–SH6 implemented 2026-10-30 (§10). Status lives in
 [`ROADMAP.md`](../ROADMAP.md).
 
 Chunks **SH1–SH6** (`SH` = SSH; unused).
@@ -92,8 +92,8 @@ container. SH5 turns the same checks into `test/ssh-host`.
 | M11 | A `signal` request with `TERM` stops the command, including through `sudo` and for `a; b`; `KILL` stops a plain command and `a; b`, but under `sudo` it kills only sudo and leaves the root child running | Go probe: `Session.Signal`, then `ps` | Confirmed. D11: `TERM` first |
 | M12 | sshd logs the certificate's key ID and serial on login (`… ED25519-CERT SHA256:… ID nyyrikki:<id> (serial N) CA ED25519 …`) | sshd log at `LogLevel VERBOSE` | Confirmed, as `docs/measured.md` SSH M4. D5 |
 | M13 | `ssh` joins its command arguments with single spaces and sends one string, which the remote user's shell interprets | ssh(1); OpenSSH `ssh.c` | Re-read; confirmed. D1 |
-| M14 | Debian 12+, Ubuntu 22.04+ and RHEL 9+ ship `Include /etc/ssh/sshd_config.d/*.conf` as the first line of `sshd_config` other than comments, so a drop-in's settings win over the main file's for keywords where the first value counts | read `sshd_config` | Confirmed on Debian 13 (OpenSSH 10.0p2), 2026-10-29. **Not yet measured** on Ubuntu and RHEL; SH5 measures them before the script relies on it |
-| M15 | RHEL-family sudo with `Defaults requiretty` refuses a command without a TTY unless `!requiretty` applies to the user | sudoers(5) | **Not yet measured**. SH5 |
+| M14 | Debian 12+, Ubuntu 22.04+ and RHEL 9+ ship `Include /etc/ssh/sshd_config.d/*.conf` as the first line of `sshd_config` other than comments, so a drop-in's settings win over the main file's for keywords where the first value counts | read `sshd_config` | Confirmed on Debian 13 (OpenSSH 10.0p2), 2026-10-29. *Measured 2026-10-30 by `test/ssh-host` (`TestMeasureM14`)*: confirmed on Ubuntu 24.04 (OpenSSH 9.6p1) and Rocky 9 (OpenSSH 9.9p1, whose own drop-in is `50-redhat.conf`, which sorts after Nyyrikki's `50-nyyrikki.conf`); the script's `sshd -T` check still guards each value |
+| M15 | RHEL-family sudo with `Defaults requiretty` refuses a command without a TTY unless `!requiretty` applies to the user | sudoers(5) | **Not yet measured**. SH5 *Measured 2026-10-30 by `test/ssh-host` (`TestMeasureM15`)*: the default sudoers of Rocky 9, Ubuntu 24.04 and Debian 13 has no `requiretty`; the script writes `Defaults:ny-<human> !requiretty` anyway (D7), and `sudo -n id -u` without a TTY prints `0` on all three (`TestSetupAndLogin`) |
 | M16 | `AuthorizedKeysFile none` in the `Match User` block does **not** turn off a global `AuthorizedKeysCommand` (as EC2 Instance Connect images set): a plain key the command returns logs in to the Nyyrikki account. Adding `AuthenticationMethods publickey`, `AuthorizedKeysCommand none`, `KbdInteractiveAuthentication no`, `HostbasedAuthentication no` and `GSSAPIAuthentication no` to the block refuses it, certificates still work, and `sshd -T -C user=<account>,…` shows each value. On a build without GSSAPI (Alpine's), `GSSAPIAuthentication` logs "Unsupported option" and `sshd -t` still passes | global `AuthorizedKeysCommand` that prints the client's key; plain key and certificate with each block, 2026-10-29 (review of #25) | Confirmed. D3, §5.7 step 3 |
 | M17 | `ssh-keygen -k -u -f <file>` refuses a zero-byte file ("KRL file has invalid magic number"), though sshd accepts one as `RevokedKeys`. `ssh-keygen -k -f <file>` with no keys writes a valid empty KRL (44 bytes) that sshd accepts and `-u` then extends; `ssh-keygen -Q` reports the added key as revoked | as stated, 2026-10-29 (review of #25) | Confirmed. §5.6, §5.7 step 3 |
 | M18 | On a systemd host whose sshd uses PAM with `pam_systemd` (Debian 13: systemd 257, OpenSSH 10.0p2, sudo 1.9.16p2), a command run through sudo stays in the SSH session's scope (`session-N.scope`), root processes included: sudo's PAM stack doesn't move it. By default the scope outlives the connection ("logged out. Waiting for processes to exit"), and a sudo command that ignores `TERM` keeps running. With logind's `KillUserProcesses=yes` and `KillOnlyUsers=ny-owner`, closing the connection stops the scope: `TERM` to every process in it, then `KILL` after the scope's `TimeoutStopSec` (gone after 92 s by default; after 6 s with a `session-.scope.d` drop-in setting `TimeoutStopSec=5s`). A `setsid nohup` process started under sudo is gone too. `KillOnlyUsers` without `KillUserProcesses=yes` kills nothing | Debian 13 container running systemd; Go probe started `sudo -n sh -c 'trap "" TERM HUP INT; …'` and closed the connection; `ps` and the journal, 2026-10-29 (review of #25) | Confirmed on Debian 13. **Not yet measured** on Ubuntu and Rocky: on RHEL-family hosts `/etc/pam.d/sudo` includes `system-auth`, whose session part calls `pam_systemd`, which might move sudo's child into a session of its own (root's, which logind excludes by default), though `pam_systemd` normally declines to start a session for a process already in one. SH5 measures both; until a distribution is measured, the script reports `session_kill: false` there (§5.7 step 7). D11 |
@@ -606,9 +606,91 @@ can go in parallel; its endpoint needs SH1's config. SH6 needs all the others.
   already trust signed it; and an external signer (Vault's SSH engine,
   step-ca, a KMS), so the CA key never sits in Nyyrikki's pod.
 
-## 10. How it was implemented (YYYY-MM-DD)
+## 10. How it was implemented (2026-10-30)
 
-<!-- Added during implementation. -->
+- **One request type per target type.** `internal/target` holds the
+  `Request` interface the decision point binds approvals to
+  (`Type`, `Interactive`, `Digest(target, runAs)`, `Audit`, the display
+  forms), with the result and terminal types the runners share. The
+  kubectl `Canonical` and the SSH `Request` implement it; the MCP server
+  builds one or the other from the target's type before the decision,
+  and `internal/runner` hands a Grant to the runner of its request's
+  type. The decision point refuses a request whose type differs from its
+  target's (`target_type_mismatch`). The kubectl digest is unchanged and
+  ignores `runAs`; the SSH digest covers the account (D2).
+- **The account comes from one function**, `config.SSHAccount`
+  (`ny-<human id>`), used by the decision point for the Grant's identity;
+  the setup script derives the same name from the `HUMAN` data line.
+  D16 lists "the human IDs of the target and their account names": the
+  data lines carry only the IDs, since the name is derived, and
+  `test/ssh-host` checks the accounts the script creates.
+- **Data lines** (D16): `TARGET`, one `HUMAN` per human, one `CA_KEY` per
+  `user_ca_public_keys` entry (type and base64 only: the key's comment
+  is free text and stays out), one `SOURCE` per source address, `SUDO`,
+  then `END=<count>` and the terminator. Config validation checks each
+  value's format first (ed25519 only, base64 characters, canonical
+  CIDRs, slugs, human IDs of at most 29 characters).
+- **`run_started` is written before the dial**, with the certificate's
+  serial (`cert_serial`), so a certificate is never used without a
+  record of it; a failure after that (unreachable, host key, refused
+  authentication or session) is `dependency_failed` with the same
+  serial. Nothing is sent to the host before that record exists.
+- **Host verification** uses `ssh.CertChecker` for host certificates and
+  refuses one without principals itself (CertChecker treats those as
+  valid for every host). The host key algorithms offered are the pinned
+  keys' types, plus the certificate algorithms only when `host_cas` is
+  set, so a pin alone never accepts a certificate.
+- **The cut** (D11) waits up to 1 s after `KILL` for the session to end
+  before closing the connection: with an immediate close, a test host
+  sometimes never received the `KILL`. Before the command has started,
+  a guard on the run's context sends `TERM` and closes, so a host that
+  stalls the session, pty or exec request can't hold a run past its
+  limit.
+- **"End now" on interactive runs** (D17): an approved interactive
+  one-off run's message is settled as `SessionApproved` (no buttons,
+  still editable), then `SessionLive` with End now once `/stream`
+  attaches, `SessionEnded` when the run is over, or `SessionUnused` when
+  its ticket expires unredeemed ("Approved; the session was never
+  started"). The edits come from goroutines in any order; a closed
+  message never reopens. End now ends the Grant's context with
+  `decision.ErrEndedByApprover`, which both runners report as
+  `ended_by_approver`.
+- **TERM**: the CLI sends the terminal's `TERM` as the
+  `Nyyrikki-Term` header on the `/stream` handshake; the server keeps it
+  only if it matches D9's pattern.
+- **The CLI** asks `list_targets` for the target's type only when
+  kubectl's `-f -` heuristics would send stdin without `-i`, so that an
+  SSH command containing `-f -` reads an empty stdin (§5.4).
+- **The image** copies `deploy/ssh-host/` into the build stage (and
+  `.dockerignore` lets those two files through): the e2e test's first
+  run found the image wouldn't build without them.
+- **`test/ssh-host`** (build tag `sshhost`) runs in its own workflow,
+  `.github/workflows/ssh-host.yml`, on changes to the script, its tests
+  or the manual page, and nightly. Failures and signals are injected by
+  shimming a command inside the container; the script has no test seam.
+  Session kill (M18) is exercised on Debian only, in a privileged
+  systemd container; on Ubuntu and Rocky the script reports
+  `session_kill: false` until M18 is measured there.
+- **The setup script differs from §5.7 in three fail-closed ways**
+  (decided while writing it, 2026-10-30; the owner may revisit):
+  a rollback restores every file *except* what step 2 took away, since
+  restoring a removed human's sudoers and principals files would hand
+  their access back; an account step 5 deleted stays deleted when a
+  later step rolls back (the list and its `Match` block are restored, and
+  a re-run clears them); and step 4's refusals of a changed or unlisted
+  account are checked in step 1, so they change nothing, and again just
+  before `useradd`. Step 1 also refuses a host whose `sshd -t` already
+  fails, Nyyrikki directories not owned by root or writable by others,
+  symlinked Nyyrikki files, an invalid existing KRL, and `SUDO=true`
+  without `visudo` or an `includedir` for `/etc/sudoers.d`; it scans the
+  configuration files for the trust keywords, since on a re-run
+  `sshd -T` shows Nyyrikki's own value first. A repeated `HUMAN`,
+  `CA_KEY` or `SOURCE` line is refused. `--uninstall` only takes access
+  away and doesn't roll back; a re-run continues it. Session kill counts
+  as measured on Debian 13 and later only.
+- **The release** publishes the checksum of the script's body in the
+  release notes; the script itself is not a release asset, since it is
+  meant to come only from Nyyrikki (OD3).
 
 ## 11. Post-implementation review (YYYY-MM-DD)
 

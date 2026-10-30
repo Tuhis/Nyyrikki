@@ -77,6 +77,9 @@ type env struct {
 	cli        string // the nyyrikki binary
 	tg         *fakeBot
 	ownerID    string // the owner's Keycloak user ID (the token sub)
+	root       string // the checkout
+	values     string // the chart values installed
+	ssh        *sshEnv
 	adminToken string
 }
 
@@ -111,6 +114,7 @@ func setup(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.root = root
 
 	// The network and the cluster on it.
 	teardown := func() {
@@ -232,6 +236,7 @@ spec:
 			}
 		}
 	})
+	e.ssh = e.setupSSH(t)
 	values := fmt.Sprintf(`image: {repository: nyyrikki, tag: e2e, pullPolicy: Never}
 canonicalURL: %s
 auth: {issuer: %s}
@@ -244,13 +249,22 @@ targets:
   - name: this-cluster
     description: the kind cluster
     inCluster: true
+%s
 telegram: {apiURL: %s}
 trustedCA: {configMap: e2e-ca}
-`, e.canonical, e.issuer, e.ownerID, ownerK8sUser, approverID, e.tg.api)
+`, e.canonical, e.issuer, e.ownerID, ownerK8sUser, approverID, strings.TrimSuffix(e.ssh.values(e.nodeIP, nil), "\n"), e.tg.api)
+	e.values = values
 	run(t, "helm", "--kubeconfig", e.kubeconfig, "install", "nyyrikki", filepath.Join(root, "deploy/chart/nyyrikki"),
 		"-n", namespace, "-f", writeFile(t, e.dir, "values.yaml", []byte(values)), "--wait", "--timeout", "180s")
 	e.kubectl(t, "-n", workNS, "wait", "--for=condition=Ready", "pod/box", "--timeout=120s")
-	// The pod is ready before the NodePort is: wait for the canonical URL.
+	e.waitCanonical(t)
+	return e
+}
+
+// waitCanonical waits until the canonical URL answers: the pod is ready
+// before the NodePort is.
+func (e *env) waitCanonical(t *testing.T) {
+	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
 	for {
 		resp, err := e.httpClient().Get(e.canonical + "/.well-known/oauth-protected-resource/mcp")
@@ -265,7 +279,6 @@ trustedCA: {configMap: e2e-ca}
 		}
 		time.Sleep(time.Second)
 	}
-	return e
 }
 
 // httpClient trusts the test CA and follows no redirect unless told to.

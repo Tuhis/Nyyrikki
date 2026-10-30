@@ -237,6 +237,17 @@ func (c *Canonical) Stdin() []byte { return bytes.Clone(c.stdin) }
 // Interactive reports whether this is a terminal session (docs/04 D12).
 func (c *Canonical) Interactive() bool { return c.interactive }
 
+// Type is the target type kubectl requests are for.
+func (c *Canonical) Type() string { return codes.TypeKubernetes }
+
+// Digest is Digest(target, c). The identity isn't part of a kubectl
+// request's digest (docs/04 §5.3): the decision point and the runner
+// take it from the Grant.
+func (c *Canonical) Digest(target, _ string) [32]byte { return Digest(target, c) }
+
+// DisplayCommand is DisplayArgv.
+func (c *Canonical) DisplayCommand() string { return c.DisplayArgv() }
+
 // ReadsStdin reports whether kubectl reads stdin for this request:
 // "-f -", or exec and attach with --stdin.
 func (c *Canonical) ReadsStdin() bool {

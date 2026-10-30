@@ -9,6 +9,8 @@ COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 COPY cmd ./cmd
 COPY internal ./internal
+# The SSH host setup script, embedded and served as is (docs/07 D16).
+COPY deploy/ssh-host/embed.go deploy/ssh-host/nyyrikki-host-setup.sh ./deploy/ssh-host/
 ARG VERSION=dev
 ARG TARGETOS TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOFLAGS=-mod=readonly go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/nyyrikkid ./cmd/nyyrikkid

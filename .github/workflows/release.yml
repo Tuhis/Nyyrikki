@@ -88,10 +88,16 @@ jobs:
           # (docs/06 D6). Line 1: the full reference; line 2: the value for
           # image.digest.
           printf 'ghcr.io/tuhis/nyyrikki:%s@%s\n%s\n' "$VERSION" "$DIGEST" "$DIGEST" > dist/IMAGE
+          # The checksum of the SSH host setup script's body, byte for byte
+          # what nyyrikkid serves before the data lines, for an administrator
+          # to compare with (docs/07 D16, §5.7). Only the checksum: the
+          # script is served by Nyyrikki, never handed out on its own (OD3).
+          SETUP_SHA=$(sha256sum deploy/ssh-host/nyyrikki-host-setup.sh | cut -d' ' -f1)
           (cd dist && sha256sum * > SHA256SUMS)
           gh release upload "$TAG" dist/* --clobber
           # Idempotent on re-run: replace any earlier Image line.
           body=$(gh release view "$TAG" --json body --jq .body)
-          printf '%s\n' "$body" | grep -v '^Image: ' > notes.md || true
+          printf '%s\n' "$body" | grep -v -e '^Image: ' -e '^SSH host setup script: ' > notes.md || true
           printf '\nImage: `ghcr.io/tuhis/nyyrikki:%s@%s` (set `image.digest` to `%s`)\n' "$VERSION" "$DIGEST" "$DIGEST" >> notes.md
+          printf '\nSSH host setup script: body sha256 `%s` (docs/setup/ssh-hosts.md)\n' "$SETUP_SHA" >> notes.md
           gh release edit "$TAG" --notes-file notes.md

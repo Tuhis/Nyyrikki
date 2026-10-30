@@ -322,6 +322,24 @@ func TestEndToEnd(t *testing.T) {
 		e.checkLoginMCP(t)
 	})
 
+	step(t, "D17: End now cuts an interactive kubectl session", func(t *testing.T) {
+		cmd := agent.cmd("run", "-t", "--reason", "a session", "this-cluster", "--",
+			"exec", "-it", "box", "-n", workNS, "--", "sh", "-c", "echo e2e-ready; sleep 600")
+		out, wait := startPTY(t, cmd)
+		n := next()
+		e.tap(t, n, "Approve")
+		deadline := time.Now().Add(30 * time.Second)
+		for !strings.Contains(out(), "e2e-ready") && time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+		}
+		e.tap(t, n, "End now")
+		if code := wait(30 * time.Second); code != 75 || !strings.Contains(out(), "the approver ended it") {
+			t.Fatalf("End now: code %d, output %q", code, out())
+		}
+	})
+
+	e.sshSteps(t, e.ssh, agent, next)
+
 	step(t, "a session ended in Keycloak is denied at once", func(t *testing.T) {
 		e.admin(t, "POST", "/admin/realms/"+realm+"/users/"+e.ownerID+"/logout", nil)
 		before := len(e.tg.Sent(t))

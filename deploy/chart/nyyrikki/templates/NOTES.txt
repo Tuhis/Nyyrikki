@@ -1,0 +1,17 @@
+Nyyrikki is at {{ .Values.canonicalURL }}.
+{{- if eq (include "nyyrikki.hasSSH" .) "true" }}
+
+SSH targets: set up each host by running, as root on the host
+(docs/setup/ssh-hosts.md; check the script first with --dry-run):
+{{- range .Values.targets }}{{ if .ssh }}
+
+  curl -fsSL {{ trimSuffix "/" $.Values.canonicalURL }}/hosts/{{ .name }}/setup.sh | sudo sh
+{{- if not .ssh.hostKeys }}
+  Runs on {{ .name }} are refused until targets[{{ .name }}].ssh.hostKeys holds
+  the keys the script prints.
+{{- end }}
+{{- end }}{{ end }}
+
+If Nyyrikki's certificate comes from a private CA, add --cacert with that CA.
+Never -k: a script fetched without checking the server can come from anyone.
+{{- end }}

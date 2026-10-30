@@ -86,6 +86,12 @@ const (
 	Deny  = "deny"
 )
 
+// Target types (docs/02 D5, docs/07 D13), as list_targets returns them.
+const (
+	TypeKubernetes = "kubernetes"
+	TypeSSH        = "ssh"
+)
+
 // What covered an allowed request.
 const (
 	CoveredOneOff    = "one-off"
@@ -110,4 +116,5 @@ const (
 	KindElevationExpired   = "elevation_expired"
 	KindStreamAttached     = "stream_attached"
 	KindDependencyFailed   = "dependency_failed"
+	KindHostSetupServed    = "host_setup_served"
 )

@@ -28,6 +28,7 @@ type Config struct {
 	Humans   []Human  `yaml:"humans"`
 	Targets  []Target `yaml:"targets"`
 	Telegram Telegram `yaml:"telegram"`
+	SSH      SSH      `yaml:"ssh"`
 }
 
 // Server holds listeners, TLS and directories (docs/01 D10, D11).
@@ -86,7 +87,63 @@ type Target struct {
 	Humans      []string   `yaml:"humans"`
 	Clients     []string   `yaml:"clients"`
 	Kubernetes  KubeTarget `yaml:"kubernetes"`
+	// SSH is set for an SSH target, instead of Kubernetes (docs/07 D13).
+	SSH *SSHTarget `yaml:"ssh"`
 }
+
+// Type is the target's type (codes.TypeKubernetes or codes.TypeSSH).
+func (t *Target) Type() string {
+	if t.SSH != nil {
+		return typeSSH
+	}
+	return typeKubernetes
+}
+
+// The values of codes.TypeKubernetes and codes.TypeSSH; config doesn't
+// import codes, and TestTypesMatchCodes keeps them equal.
+const (
+	typeKubernetes = "kubernetes"
+	typeSSH        = "ssh"
+)
+
+// SSHTarget says how to reach an SSH host (docs/07 §5.5).
+type SSHTarget struct {
+	// Address is host:port.
+	Address string `yaml:"address"`
+	// HostKeys are pinned host public keys, authorized_keys format
+	// (docs/07 D8).
+	HostKeys []string `yaml:"host_keys"`
+	// HostCAs are host CA public keys whose host certificates are
+	// accepted (docs/07 D8).
+	HostCAs []string `yaml:"host_cas"`
+	// Sudo states that the host gives the human's account passwordless
+	// sudo (docs/07 D7, D12).
+	Sudo bool `yaml:"sudo"`
+	// SessionKill states that the host ends a cut session's processes,
+	// as its setup reported (docs/07 D11, D12).
+	SessionKill bool `yaml:"session_kill"`
+}
+
+// SSH holds what all SSH targets share (docs/07 §5.5).
+type SSH struct {
+	// UserCAKeyFile is the user CA's private key, a mounted Secret
+	// (docs/07 D6).
+	UserCAKeyFile string `yaml:"user_ca_key_file"`
+	// UserCAPublicKeys are the CA keys hosts trust; the key of
+	// UserCAKeyFile must be one of them.
+	UserCAPublicKeys []string `yaml:"user_ca_public_keys"`
+	// SourceAddresses are Nyyrikki's egress CIDRs (docs/07 D4, D5).
+	SourceAddresses []string `yaml:"source_addresses"`
+	ConnectTimeout  Duration `yaml:"connect_timeout"`
+}
+
+// SSHAccount is the account of human on SSH hosts (docs/07 D3). It is
+// the one definition of the name; the setup script derives the same.
+func SSHAccount(human string) string { return "ny-" + human }
+
+// MaxSSHHumanID is the longest human ID usable with SSH targets, so
+// that SSHAccount fits Linux's 32 characters (docs/07 D3).
+const MaxSSHHumanID = 29
 
 // KubeTarget says how to reach a Kubernetes target.
 type KubeTarget struct {
@@ -200,6 +257,7 @@ func Defaults() *Config {
 			MaxOutput:      ByteSize(1 << 20),
 		},
 		Telegram: Telegram{APIURL: "https://api.telegram.org"},
+		SSH:      SSH{ConnectTimeout: Duration(10 * time.Second)},
 	}
 }
 
@@ -297,6 +355,20 @@ func (c *Config) Validate() error {
 				bad("targets[%d].humans names unknown human %q", i, h)
 			}
 		}
+		if t.SSH != nil {
+			if t.Kubernetes != (KubeTarget{}) {
+				bad("targets[%d] has both kubernetes and ssh", i)
+			}
+			for _, h := range t.Humans {
+				if len(h) > MaxSSHHumanID {
+					bad("targets[%d]: human %q is longer than %d characters, too long for an SSH account", i, h, MaxSSHHumanID)
+				}
+			}
+			for _, e := range validateSSHTarget(t.SSH) {
+				bad("targets[%d].ssh: %v", i, e)
+			}
+			continue
+		}
 		k := t.Kubernetes
 		if k.InCluster {
 			if k.Server != "" || k.CAFile != "" || k.TokenFile != "" {
@@ -311,7 +383,28 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	if c.hasSSH() {
+		for _, e := range validateSSH(&c.SSH) {
+			bad("ssh: %v", e)
+		}
+	} else if !reflectZeroSSH(&c.SSH) {
+		bad("ssh is set, but no target is an SSH target")
+	}
 	return errors.Join(errs...)
+}
+
+func (c *Config) hasSSH() bool {
+	for _, t := range c.Targets {
+		if t.SSH != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// reflectZeroSSH reports whether s holds only defaults.
+func reflectZeroSSH(s *SSH) bool {
+	return s.UserCAKeyFile == "" && len(s.UserCAPublicKeys) == 0 && len(s.SourceAddresses) == 0
 }
 
 // MCPURL is the canonical URL of /mcp.

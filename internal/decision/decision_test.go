@@ -212,7 +212,7 @@ func get(t *testing.T, ch chan result) result {
 }
 
 func runReq(t *testing.T, key, target string, args ...string) decision.RunRequest {
-	return decision.RunRequest{Principal: principal(key), RunID: decision.NewRunID(), Target: target, Canonical: canonical(t, args...), Reason: "because"}
+	return decision.RunRequest{Principal: principal(key), RunID: decision.NewRunID(), Target: target, Request: canonical(t, args...), Reason: "because"}
 }
 
 func TestOneOffApproved(t *testing.T) {
@@ -231,7 +231,7 @@ func TestOneOffApproved(t *testing.T) {
 		t.Fatal(res.err)
 	}
 	g := res.g
-	if g.CoveredBy() != codes.CoveredOneOff || g.ApprovalID() != id || g.Digest() != request.Digest("prod", r.Canonical) ||
+	if g.CoveredBy() != codes.CoveredOneOff || g.ApprovalID() != id || g.Digest() != r.Request.Digest("prod", "") ||
 		g.RunAs().User != "owner@example.com" || g.Target() != "prod" {
 		t.Fatalf("grant %+v", g)
 	}
@@ -562,7 +562,7 @@ func TestStreamTicket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ch := e.runAsync(context.Background(), decision.RunRequest{Principal: principal("agent-a"), RunID: decision.NewRunID(), Target: "prod", Canonical: c, Reason: "debug"})
+	ch := e.runAsync(context.Background(), decision.RunRequest{Principal: principal("agent-a"), RunID: decision.NewRunID(), Target: "prod", Request: c, Reason: "debug"})
 	e.p.Resolve(context.Background(), e.prompt(), approval.ActionApprove, approverID)
 	res := get(t, ch)
 	if res.err != nil {

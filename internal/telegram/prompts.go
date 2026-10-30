@@ -70,7 +70,8 @@ func (b *Bot) ask(ctx context.Context, id string, approverID int64, kind, body s
 
 // Settle edits the prompt to show o (docs/05 D6, D7). Settled prompts lose
 // their buttons, and their callback keys are dropped first, so a later tap
-// is rejected. ElevationLive swaps Approve and Deny for End now. Settle is
+// is rejected. ElevationLive swaps Approve and Deny for End now, and so
+// does SessionLive on an interactive run's message (docs/07 D17). Settle is
 // idempotent: settling a closed prompt, or a live one live again, changes
 // nothing and returns nil. A prompt that was never sent is not an error.
 //
@@ -113,6 +114,31 @@ func (b *Bot) Settle(ctx context.Context, id string, o approval.Outcome) error {
 			from, to = stateOpen, stateLive
 			newKeys = []keyedAction{{end, approval.ActionEnd}}
 			kb = &inlineKeyboard{InlineKeyboard: [][]inlineButton{{{Text: "End now", CallbackData: end}}}}
+		case o.Kind == approval.SessionApproved:
+			// docs/07 D17: an approved interactive run keeps its message
+			// (state live, no buttons) until its session attaches or not.
+			if row.kind != kindRun {
+				return codes.New(codes.Internal, "SessionApproved for an elevation prompt")
+			}
+			if row.state == stateLive {
+				return nil // SessionLive came first
+			}
+			from, to = stateOpen, stateLive
+		case o.Kind == approval.SessionLive:
+			if row.kind != kindRun {
+				return codes.New(codes.Internal, "SessionLive for an elevation prompt")
+			}
+			end := newCallbackKey()
+			from, to = row.state, stateLive
+			newKeys = []keyedAction{{end, approval.ActionEnd}}
+			kb = &inlineKeyboard{InlineKeyboard: [][]inlineButton{{{Text: "End now", CallbackData: end}}}}
+		case row.state == stateLive && row.kind == kindRun:
+			switch o.Kind {
+			case approval.SessionEnded, approval.SessionUnused, approval.Failed:
+			default:
+				return codes.New(codes.Internal, "outcome %d does not follow a live session", o.Kind)
+			}
+			from, to = stateLive, stateClosed
 		case row.state == stateLive:
 			switch o.Kind {
 			case approval.ElevationEnded, approval.ElevationExpired, approval.Failed:

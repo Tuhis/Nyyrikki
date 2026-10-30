@@ -171,7 +171,9 @@ func (b *Bot) handleCallback(ctx context.Context, cq *tgCallbackQuery) {
 			return
 		}
 	case approval.ActionEnd:
-		if p.state != stateLive || p.kind != kindElevation {
+		// End now: a live elevation, or a live interactive run
+		// (docs/07 D17).
+		if p.state != stateLive {
 			reject(rejectNotPending, &p)
 			return
 		}

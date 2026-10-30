@@ -41,7 +41,7 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 | R7 | [Operator surface](#r7--operator-surface) | 💡 proposed 2026-10-25 |
 | R8 | [AI risk assessment](#r8--ai-risk-assessment) | ⏸️ deferred 2026-10-26 (owner decision: not in the first version) |
 | R9 | [Optional response redaction](#r9--optional-response-redaction) | ⏸️ deferred 2026-10-26 (owner decision: future, and optional) |
-| R10 | [SSH target](#r10--ssh-target) | 📝 designing 2026-10-29: [docs/07](docs/07-ssh-target.md) drafted, OD1–OD6 taken 2026-10-29 (root through passwordless sudo on a separate account per human; sudo `ALL`; the host setup script served by Nyyrikki; interactive sessions under a one-off approval, with "End now" for kubectl's too; no port forwarding; stdin never shown on Telegram); awaiting approval of the doc. Not in the first version |
+| R10 | [SSH target](#r10--ssh-target) | 🔧 implemented 2026-10-30, [docs/07](docs/07-ssh-target.md) approved (#25): SH1–SH6, unit and in-process tests against a fake SSH host, `test/ssh-host` runs the setup script in Debian, Ubuntu and Rocky containers, e2e on kind against an OpenSSH container set up by the served script; open: G12 (a real command on a real host, approved on a real phone, set up with the script), and session kill measured only on Debian (§2 M18). Not in the first version |
 | R11 | [SSH CA hardening](#r11--ssh-ca-hardening) | 💡 proposed 2026-10-29, after R10 |
 
 ## Milestones to the first version

@@ -1,0 +1,41 @@
+name: SSH host setup
+
+# docs/07 G8, G9, G13: the SSH host setup script run in Debian, Ubuntu and
+# Rocky containers (test/ssh-host), on changes to it and nightly.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/ssh-host/**"
+      - "test/ssh-host/**"
+      - "docs/setup/ssh-hosts.md"
+      - ".github/workflows/ssh-host.yml"
+  pull_request:
+    paths:
+      - "deploy/ssh-host/**"
+      - "test/ssh-host/**"
+      - "docs/setup/ssh-hosts.md"
+      - ".github/workflows/ssh-host.yml"
+  schedule:
+    - cron: "47 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ssh-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ssh-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Setup script in containers
+        run: go test -tags sshhost -count=1 -timeout 60m -v ./test/ssh-host/

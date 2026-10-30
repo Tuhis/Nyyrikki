@@ -4,6 +4,15 @@
 {{- end -}}
 {{- $targets := list -}}
 {{- range .Values.targets -}}
+{{- if .ssh -}}
+{{- /* An SSH target (docs/07 §5.5): its host keys come from the setup script's output. */ -}}
+{{- $s := dict "address" (required (printf "targets[%s].ssh.address is required" .name) .ssh.address)
+  "host_keys" (.ssh.hostKeys | default list) "host_cas" (.ssh.hostCAs | default list)
+  "sudo" (.ssh.sudo | default false) "session_kill" (.ssh.sessionKill | default false) -}}
+{{- $t := dict "name" .name "description" (.description | default "") "humans" (list $.Values.human.id) "ssh" $s -}}
+{{- if .clients }}{{- $_ := set $t "clients" .clients -}}{{- end -}}
+{{- $targets = append $targets $t -}}
+{{- else -}}
 {{- $k := dict -}}
 {{- if .inCluster -}}{{- $_ := set $k "in_cluster" true -}}
 {{- else -}}
@@ -14,6 +23,7 @@
 {{- $t := dict "name" .name "description" (.description | default "") "humans" (list $.Values.human.id) "kubernetes" $k -}}
 {{- if .clients }}{{- $_ := set $t "clients" .clients -}}{{- end -}}
 {{- $targets = append $targets $t -}}
+{{- end -}}
 {{- end -}}
 {{- $cfg := dict
   "server" (dict
@@ -37,6 +47,15 @@
   "targets" $targets
   "telegram" (dict "bot_token_file" "/etc/nyyrikki/telegram/bot-token" "api_url" .Values.telegram.apiURL)
 -}}
+{{- if eq (include "nyyrikki.hasSSH" .) "true" -}}
+{{- if not .Values.ssh.userCAPublicKeys }}{{ fail "ssh.userCAPublicKeys is required with an SSH target" }}{{ end -}}
+{{- if not .Values.ssh.sourceAddresses }}{{ fail "ssh.sourceAddresses is required with an SSH target" }}{{ end -}}
+{{- $_ := set $cfg "ssh" (dict
+  "user_ca_key_file" "/etc/nyyrikki/ssh/user-ca"
+  "user_ca_public_keys" .Values.ssh.userCAPublicKeys
+  "source_addresses" .Values.ssh.sourceAddresses
+  "connect_timeout" .Values.ssh.connectTimeout) -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:

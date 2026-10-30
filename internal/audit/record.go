@@ -7,10 +7,12 @@ import "context"
 // redaction of docs/04 D14, and the size and hash of stdin, never its
 // contents (docs/03 D6).
 type Request struct {
-	Argv        []string `json:"argv,omitempty"`
-	StdinBytes  int      `json:"stdin_bytes,omitempty"`
-	StdinSHA256 string   `json:"stdin_sha256,omitempty"`
-	Interactive bool     `json:"interactive,omitempty"`
+	Argv []string `json:"argv,omitempty"`
+	// Command is an SSH request's command string, as sent (docs/07 D2).
+	Command     string `json:"command,omitempty"`
+	StdinBytes  int    `json:"stdin_bytes,omitempty"`
+	StdinSHA256 string `json:"stdin_sha256,omitempty"`
+	Interactive bool   `json:"interactive,omitempty"`
 }
 
 // RunAs is the identity a request runs as on the target.
@@ -44,6 +46,9 @@ type Record struct {
 	ExitCode    *int     `json:"exit_code,omitempty"`
 	StdoutBytes int64    `json:"stdout_bytes,omitempty"`
 	StderrBytes int64    `json:"stderr_bytes,omitempty"`
+	// CertSerial is the serial of the SSH certificate a run was issued
+	// (docs/07 D5), in decimal; its key ID is "nyyrikki:" and the run ID.
+	CertSerial string `json:"cert_serial,omitempty"`
 }
 
 // Appender appends records. An error means the record was not stored, and

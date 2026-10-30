@@ -15,7 +15,8 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/authn"
 	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/config"
-	"github.com/Tuhis/Nyyrikki/internal/kubectl/request"
+	"github.com/Tuhis/Nyyrikki/internal/decision/internal/grant"
+	"github.com/Tuhis/Nyyrikki/internal/target"
 )
 
 // ElevateRequest asks for an elevation (docs/02 D8).
@@ -91,10 +92,14 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 	targets := slices.Clone(r.Targets)
 	slices.Sort(targets)
 	targets = slices.Compact(targets)
+	var hosts []approval.SSHHost
 	for _, name := range targets {
 		t, ok := p.cfg.TargetByName(name)
 		if !ok || !t.Visible(pr.Human, pr.ClientID) {
 			return nil, p.deny(ctx, rec, codes.New(codes.TargetNotAllowed, "no such target, or not available to this agent"))
+		}
+		if hh := sshHost(t, RunAs(h, t).User); hh != nil {
+			hosts = append(hosts, *hh)
 		}
 	}
 	rec.Targets = targets
@@ -105,6 +110,7 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 	prompt := approval.ElevationPrompt{
 		ID: id, ApproverID: h.TelegramUserID, Targets: targets, Duration: dur,
 		RunAs:  approval.Identity{User: h.Kubernetes.User, Groups: h.Kubernetes.Groups},
+		SSH:    hosts,
 		Agent:  approval.Agent{ClientName: pr.ClientID, KeyShort: p.audit.AgentHash(pr.AgentKey), SignedInAt: pr.SignedInAt},
 		Reason: r.Reason, ExpiresAt: expires,
 	}
@@ -297,7 +303,7 @@ func (p *Point) endElevation(elevID, to, detail string) bool {
 // IssueTicket makes the one-time stream ticket for an allowed interactive
 // run (docs/02 D10). The ticket goes only to the call that asked. If it
 // isn't redeemed within 30 s, the grant is released.
-func (p *Point) IssueTicket(g *Grant, c *request.Canonical) (string, time.Time, error) {
+func (p *Point) IssueTicket(g *Grant, c target.Request) (string, time.Time, error) {
 	if !g.Interactive() || !c.Interactive() {
 		return "", time.Time{}, codes.New(codes.Internal, "not an interactive run")
 	}
@@ -307,14 +313,14 @@ func (p *Point) IssueTicket(g *Grant, c *request.Canonical) (string, time.Time, 
 	}
 	hash := HashSecret(tk)
 	expires := p.now().Add(ticketTTL)
-	t := &ticket{grant: g, canonical: c, agentKey: g.AgentKey(), expires: expires}
+	t := &ticket{grant: g, request: c, agentKey: g.AgentKey(), expires: expires}
 	t.timer = time.AfterFunc(ticketTTL, func() {
 		p.mu.Lock()
 		cur := p.tickets[hash]
 		delete(p.tickets, hash)
 		p.mu.Unlock()
 		if cur != nil {
-			cur.grant.Release()
+			p.unused(cur.grant)
 		}
 	})
 	p.mu.Lock()
@@ -325,7 +331,7 @@ func (p *Point) IssueTicket(g *Grant, c *request.Canonical) (string, time.Time, 
 
 // Redeem exchanges a stream ticket for its grant, once, for the agent key
 // it was issued to.
-func (p *Point) Redeem(ctx context.Context, tk string, pr *authn.Principal) (*Grant, *request.Canonical, error) {
+func (p *Point) Redeem(ctx context.Context, tk string, pr *authn.Principal) (*Grant, target.Request, error) {
 	hash := HashSecret(tk)
 	p.mu.Lock()
 	t := p.tickets[hash]
@@ -340,8 +346,62 @@ func (p *Point) Redeem(ctx context.Context, tk string, pr *authn.Principal) (*Gr
 	}
 	t.timer.Stop()
 	if !p.now().Before(t.expires) || t.grant.Context().Err() != nil {
-		t.grant.Release()
+		p.unused(t.grant)
 		return nil, nil, codes.New(codes.Expired, "stream ticket expired")
 	}
-	return t.grant, t.canonical, nil
+	return t.grant, t.request, nil
+}
+
+// unused releases the grant of a ticket that was never attached, and
+// closes its one-off approval's message as approved, without a button
+// (docs/07 D17).
+func (p *Point) unused(g *Grant) {
+	g.Release()
+	if g.CoveredBy() == codes.CoveredOneOff && g.Interactive() {
+		go p.settlePrompt(g.ApprovalID(), approval.Outcome{Kind: approval.SessionUnused, At: p.now()})
+	}
+}
+
+// SessionStarted is called once an interactive run's stream has
+// attached (docs/07 D17). Under a one-off approval, the approver's
+// message then shows "Session live" with an End now button, which ends g.
+// Under an elevation nothing changes: its own End now ends the run.
+// SessionEnded must follow, whatever happens to the run.
+func (p *Point) SessionStarted(g *Grant) {
+	if g == nil || g.CoveredBy() != codes.CoveredOneOff || !g.Interactive() || g.ApprovalID() == "" {
+		return
+	}
+	p.mu.Lock()
+	p.sessions[g.ApprovalID()] = g
+	p.mu.Unlock()
+	go p.settlePrompt(g.ApprovalID(), approval.Outcome{Kind: approval.SessionLive, At: p.now()})
+}
+
+// SessionEnded is called when an interactive run is over, for any
+// reason: End now no longer acts, and the message shows when it ended.
+func (p *Point) SessionEnded(g *Grant) {
+	if g == nil || g.CoveredBy() != codes.CoveredOneOff || !g.Interactive() || g.ApprovalID() == "" {
+		return
+	}
+	p.mu.Lock()
+	delete(p.sessions, g.ApprovalID())
+	p.mu.Unlock()
+	go p.settlePrompt(g.ApprovalID(), approval.Outcome{Kind: approval.SessionEnded, At: p.now()})
+}
+
+// endSession is End now on a live session (docs/07 D17). It acts only
+// while the run is live, and only once.
+func (p *Point) endSession(approvalID string) bool {
+	p.mu.Lock()
+	g := p.sessions[approvalID]
+	delete(p.sessions, approvalID)
+	p.mu.Unlock()
+	if g == nil || g.Context().Err() != nil {
+		return false
+	}
+	grant.End(g, ErrEndedByApprover)
+	_ = p.audit.Append(p.base, audit.Record{Kind: codes.KindDecision, RunID: g.RunID(), ApprovalID: approvalID,
+		Human: g.Human(), Agent: g.AgentKey(), ClientID: g.ClientID(), Targets: []string{g.Target()},
+		Decision: codes.Deny, Detail: DetailEndedByApprover})
+	return true
 }

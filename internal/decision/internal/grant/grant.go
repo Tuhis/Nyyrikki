@@ -30,14 +30,24 @@ type Spec struct {
 // request on one target. Its context ends when whatever covers it ends.
 type Grant struct {
 	ctx    context.Context
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 	spec   Spec
 }
 
-// New makes a Grant. ctx must end when the grant's cover ends.
-func New(ctx context.Context, cancel context.CancelFunc, s Spec) *Grant {
+// New makes a Grant. ctx must end when the grant's cover ends, and
+// cancel must end ctx with the cause it is given.
+func New(ctx context.Context, cancel context.CancelCauseFunc, s Spec) *Grant {
 	s.RunAs.Groups = append([]string(nil), s.RunAs.Groups...)
 	return &Grant{ctx: ctx, cancel: cancel, spec: s}
+}
+
+// End ends g's context with cause, which the runner reads back with
+// context.Cause to say why the run was cut. It is a function of this
+// internal package, so only the decision point can call it.
+func End(g *Grant, cause error) {
+	if g.cancel != nil {
+		g.cancel(cause)
+	}
 }
 
 // Context ends when what covers the grant ends (elevation expiry or end,
@@ -48,7 +58,7 @@ func (g *Grant) Context() context.Context { return g.ctx }
 // over; calling it more than once is harmless.
 func (g *Grant) Release() {
 	if g.cancel != nil {
-		g.cancel()
+		g.cancel(nil)
 	}
 }
 
