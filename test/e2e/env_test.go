@@ -196,6 +196,10 @@ func setup(t *testing.T) *env {
 	e.kubectl(t, "create", "namespace", namespace)
 	e.kubectl(t, "create", "namespace", workNS)
 	e.kubectl(t, "create", "clusterrolebinding", "e2e-owner-edit", "--clusterrole=edit", "--user="+ownerK8sUser)
+	// The namespace's default ServiceAccount is made by a controller after
+	// the namespace; a pod created before it is refused. On a busy runner
+	// that gap was long enough to fail the setup (2026-10-30).
+	e.kubectl(t, "-n", workNS, "wait", "--for=create", "serviceaccount/default", "--timeout=120s")
 	e.kubectl(t, "-n", workNS, "run", "box", "--image="+busyboxImage, "--image-pull-policy=IfNotPresent", "--restart=Never", "--", "sleep", "3600")
 	sdir := filepath.Join(e.dir, "secrets")
 	os.MkdirAll(sdir, 0o700)
