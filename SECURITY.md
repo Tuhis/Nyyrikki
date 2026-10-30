@@ -237,6 +237,11 @@ These kinds of issue are always in scope:
   onboarded afterwards, and on every host already set up with sudo. The
   script's body is checksummed per release; the CA is revoked by KRL
   (docs/07 §5.6).
+- **The SSH setup script is served without authentication, and each
+  fetch writes an audit record** (docs/07 D16). Nothing limits the rate:
+  anyone who can reach `:8443` can fill the audit volume, after which
+  every request is refused (fail closed). Availability only; limit who
+  can reach the listener if that matters.
 - **The human approves their own agents' requests.** In the first
   version there is one human, who is also the approver (docs/01 OD1).
   The defence is a message that shows exactly what will run (R5).

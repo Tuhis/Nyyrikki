@@ -347,7 +347,9 @@ ny_rollback() {
 	trap '' INT TERM HUP PIPE
 	trap - EXIT
 	NY_CHANGED=0
-	warn "rolling back this run's changes (what step 2 took away stays away: the target no longer grants it)"
+	warn "rolling back this run's changes: every file returns to what it was before the run, including an earlier CA key or source address; only what step 2 took away stays away, since the target no longer grants it"
+	ny_rb_krl=0
+	ny_rb_dir=0
 	if [ -f "$NY_WORK/journal" ]; then
 		awk '{ l[NR] = $0 } END { for (i = NR; i > 0; i--) print l[i] }' \
 			"$NY_WORK/journal" >"$NY_WORK/reverse" 2>/dev/null ||
@@ -359,10 +361,22 @@ ny_rollback() {
 				{ cp -p -- "$NY_WORK/$ny_b" "$ny_tmp" && mv -f -- "$ny_tmp" "$ny_p"; } ||
 					warn "rollback: can't restore $ny_p (the old copy is $NY_WORK/$ny_b)"
 				;;
-			N) rm -f -- "$ny_p" || warn "rollback: can't remove $ny_p" ;;
+			N)
+				# A running sshd may read RevokedKeys from here until the
+				# reload below, and refuses every key login without it.
+				if [ "$ny_p" = "$NY_KRL" ]; then
+					ny_rb_krl=1
+				else
+					rm -f -- "$ny_p" || warn "rollback: can't remove $ny_p"
+				fi
+				;;
 			D)
 				rm -f -- "$ny_p/.nyyrikki-new" 2>/dev/null
-				rmdir -- "$ny_p" || warn "rollback: can't remove $ny_p"
+				if [ "$ny_p" = "$NY_DIR" ]; then
+					ny_rb_dir=1
+				else
+					rmdir -- "$ny_p" || warn "rollback: can't remove $ny_p"
+				fi
 				;;
 			A)
 				if account_exists "$ny_p"; then
@@ -378,10 +392,21 @@ ny_rollback() {
 		systemctl daemon-reload || warn "rollback: systemctl daemon-reload failed"
 		ny_restart_logind || warn "rollback: restarting systemd-logind failed"
 	fi
+	ny_rb_reloaded=0
 	if "$NY_SSHD_BIN" -t; then
-		ny_reload_sshd || warn "rollback: reloading sshd failed"
+		if ny_reload_sshd; then
+			ny_rb_reloaded=1
+		else
+			warn "rollback: reloading sshd failed"
+		fi
 	else
 		warn "rollback: sshd -t fails on the restored configuration; sshd was not reloaded"
+	fi
+	if [ "$ny_rb_reloaded" = 1 ]; then
+		[ "$ny_rb_krl" = 1 ] && { rm -f -- "$NY_KRL" || warn "rollback: can't remove $NY_KRL"; }
+		[ "$ny_rb_dir" = 1 ] && { rmdir -- "$NY_DIR" || warn "rollback: can't remove $NY_DIR"; }
+	elif [ "$ny_rb_krl" = 1 ] || [ "$ny_rb_dir" = 1 ]; then
+		warn "rollback: kept $NY_KRL, which the running sshd may still read; remove $NY_DIR once sshd is reloaded"
 	fi
 	warn "rolled back"
 	ny_cleanup
@@ -473,6 +498,39 @@ account_check() {
 		printf "its home %s isn't a directory it owns" "$ny_home"
 		return 1
 	fi
+	# Root by another way than Nyyrikki's sudoers file, e.g. given by an
+	# approved command earlier: a re-run with SUDO=false would otherwise
+	# report no sudo while the account keeps it.
+	if [ "$ny_uid" = 0 ]; then
+		printf 'its UID is 0'
+		return 1
+	fi
+	ny_ac_gs=$(id -Gn -- "$1" 2>/dev/null) || {
+		printf "can't list its groups"
+		return 1
+	}
+	ny_ac_names=$1
+	for ny_ac_g in $ny_ac_gs; do
+		case $ny_ac_g in
+		root | sudo | wheel | admin)
+			printf 'it is in the group %s' "$ny_ac_g"
+			return 1
+			;;
+		esac
+		ny_ac_names="$ny_ac_names %$ny_ac_g"
+	done
+	for ny_ac_f in /etc/sudoers /etc/sudoers.d/*; do
+		[ -f "$ny_ac_f" ] || continue
+		case $ny_ac_f in
+		"$NY_SUDO_PREFIX"* | */.nyyrikki-new) continue ;;
+		esac
+		for ny_ac_n in $ny_ac_names; do
+			if grep -E -q -- "(^|[^A-Za-z0-9_.-])$ny_ac_n([^A-Za-z0-9_.-]|\$)" "$ny_ac_f"; then
+				printf '%s names %s' "$ny_ac_f" "$ny_ac_n"
+				return 1
+			fi
+		done
+	done
 	return 0
 }
 
@@ -634,6 +692,8 @@ ny_gen_sshd() {
 			printf '\tAuthorizedKeysFile none\n'
 			printf '\tAuthorizedKeysCommand none\n'
 			printf '\tAuthorizedKeysCommandUser nobody\n'
+			printf '\tAuthorizedPrincipalsCommand none\n'
+			printf '\tAuthorizedPrincipalsCommandUser nobody\n'
 			printf '\tPasswordAuthentication no\n'
 			printf '\tKbdInteractiveAuthentication no\n'
 			printf '\tHostbasedAuthentication no\n'
@@ -885,6 +945,9 @@ ny_sshd_verify() {
 authorizedkeysfile none
 authorizedkeyscommand none
 authorizedkeyscommanduser nobody
+authorizedprincipalscommand none
+authorizedprincipalscommanduser nobody
+permituserenvironment no
 passwordauthentication no
 kbdinteractiveauthentication no
 hostbasedauthentication no
@@ -1141,6 +1204,9 @@ ny_uninstall() {
 		ny_cleanup
 		exit 0
 	fi
+	# sshd must accept its configuration before anything changes: a failed
+	# check after the drop-in is gone would leave sshd unreloaded.
+	ny_t=$("$NY_SSHD_BIN" -t 2>&1) || die "refused: sshd -t fails before any change; fix sshd's configuration first: $ny_t"
 	for ny_f in "$NY_SUDO_PREFIX"*; do
 		[ -e "$ny_f" ] || [ -L "$ny_f" ] || continue
 		rm -f -- "$ny_f" || die "can't remove $ny_f"
@@ -1183,10 +1249,13 @@ ny_uninstall() {
 		ny_restart_logind || die "restarting systemd-logind failed"
 	fi
 	rm -f -- "$NY_SSHD" "$NY_SSHD_DIR/.nyyrikki-new" /etc/sudoers.d/.nyyrikki-new || die "can't remove $NY_SSHD"
+	say "removed $NY_SSHD"
+	# $NY_DIR goes only once sshd runs without the drop-in: until then it
+	# reads RevokedKeys from there, and refuses every key login without it.
+	ny_t=$("$NY_SSHD_BIN" -t 2>&1) || die "sshd -t fails after removing Nyyrikki's drop-in: $ny_t. $NY_DIR is kept, since the running sshd still reads it; fix sshd's configuration, then run --uninstall again"
+	ny_reload_sshd || die "reloading sshd failed; $NY_DIR is kept, since the running sshd still reads it"
 	rm -rf -- "$NY_DIR" || die "can't remove $NY_DIR"
-	say "removed $NY_SSHD and $NY_DIR"
-	ny_t=$("$NY_SSHD_BIN" -t 2>&1) || die "sshd -t fails after removing Nyyrikki's drop-in: $ny_t"
-	ny_reload_sshd || die "reloading sshd failed"
+	say "removed $NY_DIR"
 	say "Nyyrikki's setup is removed; sshd reloaded."
 	ny_cleanup
 	exit 0

@@ -211,6 +211,8 @@ Match User ny-owner
 	AuthorizedKeysFile none
 	AuthorizedKeysCommand none
 	AuthorizedKeysCommandUser nobody
+	AuthorizedPrincipalsCommand none
+	AuthorizedPrincipalsCommandUser nobody
 	PasswordAuthentication no
 	KbdInteractiveAuthentication no
 	HostbasedAuthentication no
@@ -224,7 +226,7 @@ file whose values win shows up here), then reload sshd:
 
 ```sh
 sshd -t
-sshd -T -C user=ny-owner,host=203.0.113.10,addr=203.0.113.10 | grep -E '^(authenticationmethods|authorizedkeys|passwordauth|kbdinteractive|hostbased|gssapiauth|clientalive|trustedusercakeys|authorizedprincipalsfile|revokedkeys) '
+sshd -T -C user=ny-owner,host=203.0.113.10,addr=203.0.113.10 | grep -E '^(authenticationmethods|authorizedkeys|authorizedprincipals|permituserenvironment|passwordauth|kbdinteractive|hostbased|gssapiauth|clientalive|trustedusercakeys|revokedkeys) '
 systemctl reload ssh     # sshd on RHEL-family hosts
 ```
 

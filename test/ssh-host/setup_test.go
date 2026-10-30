@@ -360,6 +360,12 @@ func TestRefusedHostStates(t *testing.T) {
 		refused("a changed home owner", "chown root /home/ny-owner", "chown ny-owner /home/ny-owner", "owns")
 		refused("a moved home", "usermod -d /home/elsewhere ny-owner", "usermod -d /home/ny-owner ny-owner", "home")
 		refused("a corrupt accounts list", "echo root >> /etc/ssh/nyyrikki/accounts", "sed -i '/^root$/d' /etc/ssh/nyyrikki/accounts", "isn't a Nyyrikki account")
+		// Review round 1 on #30, finding 7: root given to the account by
+		// another way than Nyyrikki's sudoers file.
+		refused("the account in the root group", "usermod -aG root ny-owner", "gpasswd -d ny-owner root", "group root")
+		refused("another sudoers file naming the account", "echo 'ny-owner ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/10-local", "rm /etc/sudoers.d/10-local", "10-local names ny-owner")
+		refused("a sudoers rule for one of its groups", "groupadd ops && usermod -aG ops ny-owner && echo '%ops ALL=(ALL) ALL' > /etc/sudoers.d/10-ops", "rm /etc/sudoers.d/10-ops; gpasswd -d ny-owner ops; groupdel ops", "names %ops")
+		refused("PermitUserEnvironment on", "echo 'PermitUserEnvironment yes' > /etc/ssh/sshd_config.d/60-env.conf", "rm /etc/ssh/sshd_config.d/60-env.conf", "permituserenvironment no")
 		refused("an invalid revocation list", "cp /etc/ssh/nyyrikki/revoked.krl /root/krl && : > /etc/ssh/nyyrikki/revoked.krl", "cp /root/krl /etc/ssh/nyyrikki/revoked.krl", "revocation list")
 		h.mustSetup(v)
 	})
@@ -650,6 +656,57 @@ func TestUninstall(t *testing.T) {
 			t.Fatalf("--uninstall on a clean host: %s", r)
 		}
 		h.sameAs(pristine, "a second --uninstall")
+
+		// Review round 1 on #30, finding 2. A configuration sshd -t refuses
+		// stops --uninstall before it changes anything.
+		h.mustSetup(v)
+		h.must("echo 'NoSuchKeyword yes' > /etc/ssh/sshd_config.d/99-broken.conf")
+		before := h.snapshot()
+		if r := h.setup(v, "--uninstall"); r.code == 0 || !strings.Contains(r.err, "before any change") {
+			t.Fatalf("--uninstall with a broken sshd configuration: %s", r)
+		}
+		h.sameAs(before, "--uninstall refused by sshd -t")
+		h.must("rm /etc/ssh/sshd_config.d/99-broken.conf")
+		// A check that fails once the drop-in is gone keeps the revocation
+		// list the running sshd reads, so key logins keep working.
+		h.must("useradd -m -s /bin/sh admin")
+		h.installShim("sshd", "-t", "fail", 1, false)
+		r = h.setup(v, "--uninstall")
+		h.clearShim("sshd")
+		if r.code == 0 {
+			t.Fatalf("--uninstall with sshd -t failing at the end: %s", r)
+		}
+		if !h.exists("/etc/ssh/nyyrikki/revoked.krl") || !h.plainKeyReaches("admin") {
+			t.Fatalf("a failed --uninstall locked key logins out: %s", r)
+		}
+		if r := h.setup(v, "--uninstall"); r.code != 0 {
+			t.Fatalf("--uninstall again: %s", r)
+		}
+		h.must("userdel -r admin")
+		h.sameAs(pristine, "--uninstall after a failed one")
+	})
+}
+
+// TestRollbackKeepsRevocationList: a rollback that can't reload sshd keeps
+// the revocation list the running sshd reads, so key logins keep working
+// (review round 1 on #30, finding 2).
+func TestRollbackKeepsRevocationList(t *testing.T) {
+	forEachDistro(t, func(t *testing.T, d distro) {
+		h := newHost(t, d)
+		v := h.values("owner")
+		h.must("useradd -m -s /bin/sh admin")
+		h.installShim("visudo", "*", "fail", 0, false)
+		h.installShim("sshd", "-t", "fail", 2, false)
+		r := h.setup(v)
+		h.clearShim("visudo")
+		h.clearShim("sshd")
+		if r.code == 0 || !strings.Contains(r.err, "rolled back") || !strings.Contains(r.err, "kept /etc/ssh/nyyrikki/revoked.krl") {
+			t.Fatalf("rollback: %s", r)
+		}
+		if !h.plainKeyReaches("admin") {
+			t.Fatalf("a rollback that couldn't reload sshd locked key logins out: %s", r)
+		}
+		h.mustSetup(v)
 	})
 }
 
