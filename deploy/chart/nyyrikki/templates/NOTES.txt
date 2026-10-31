@@ -6,7 +6,7 @@ SSH targets: set up each host by running, as root on the host
 {{- range .Values.targets }}{{ if .ssh }}
 
   curl -fsSL {{ trimSuffix "/" $.Values.canonicalURL }}/hosts/{{ .name }}/setup.sh | sudo sh
-{{- if not .ssh.hostKeys }}
+{{- if not (or .ssh.hostKeys .ssh.hostCAs $.Values.ssh.hostCAs) }}
   Runs on {{ .name }} are refused until targets[{{ .name }}].ssh.hostKeys holds
   the keys the script prints.
 {{- end }}

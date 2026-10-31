@@ -57,12 +57,19 @@ targets:
   # - name: db-1
   #   description: Primary database host
   #   ssh:
-  #     address: db-1.example.com:22
+  #     address: db-1.example.com   # port 22 unless given, as host:port
   #     hostKeys: []
-  #     hostCAs: []
-  #     sudo: false          # the human's account has passwordless sudo
+  #     hostCAs: []          # in addition to ssh.hostCAs
+  #     sudo: false          # passwordless sudo; unset takes ssh.defaults.sudo
   #     sessionKill: false   # as the setup script reported
   #   clients: []
+
+# Named sets of targets, of any type, for elevate (docs/08 D11): an
+# elevation asked for a group covers the members it has at that moment.
+# Group names share one namespace with target names.
+groups: []
+#  - name: web
+#    targets: [web-1, web-2]
 
 # Shared by every SSH target (docs/07 §5.5); required as soon as one exists.
 ssh:
@@ -71,6 +78,14 @@ ssh:
   # Nyyrikki's egress addresses as CIDRs, ideally its own (docs/07 §6).
   sourceAddresses: []
   connectTimeout: 10s
+  # Host CA public keys trusted for every SSH target, besides each
+  # target's own hostCAs (docs/08 D9).
+  hostCAs: []
+  # Host keys and host CA keys never trusted: a host presenting one, or a
+  # certificate of or signed by one, is refused (docs/08 D9).
+  revokedHostKeys: []
+  defaults:
+    sudo: false            # for SSH targets that don't set sudo (docs/08 D11)
 
 telegram:
   apiURL: https://api.telegram.org
