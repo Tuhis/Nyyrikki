@@ -271,3 +271,7 @@ Settled on 2026-10-26 in [docs/01](docs/01-foundations.md):
 - **A model judging each request in the first version.** Deferred on
   2026-10-26 by owner decision: the first version is a plain escalation
   gateway. The item is R8 in `ROADMAP.md`.
+- **Targets, host keys or host facts kept anywhere but the Helm
+  values**, such as SSH hosts enrolled into Nyyrikki's own storage. Set
+  aside on 2026-10-31 by owner decision; the owner may revisit it
+  ([docs/08](docs/08-ssh-onboarding.md) OD1).

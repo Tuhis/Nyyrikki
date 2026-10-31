@@ -221,9 +221,31 @@ the doc.
   Show every space but U+0020 escaped. Lookalike punctuation, such as
   U+FF03 for `#`, is not escaped: read a command with non-ASCII
   characters with care. ([docs/07](07-ssh-target.md) D2)
+- **Debian's cron ignores files in `/etc/cron.d` whose names contain a
+  dot**, so `nyyrikki.conf` never runs while cronie runs it. BusyBox
+  `crond` ignores `/etc/cron.d` entirely; on Alpine use
+  `/etc/periodic/15min`. Name cron files `[A-Za-z0-9_-]` only.
+  ([docs/08](08-ssh-onboarding.md) M3)
+- **OpenSSH 10 penalises an address after one failed login**
+  (`PerSourcePenalties`, on by default): its next connections are
+  dropped for a while, so a retry loop after a refusal looks like an
+  unreachable host. Try once, then stop. ([docs/08](08-ssh-onboarding.md) M5)
+- **BusyBox `wget` can't be given a CA file**: its only TLS option is
+  `--no-check-certificate`. Use `curl --cacert`.
+  ([docs/08](08-ssh-onboarding.md) M6)
 
 **Tooling and dependencies**
 
+- **A `pre-install` hook can't create an object the chart also
+  templates**: Helm checks for conflicts before hooks run, then fails
+  the first install with "already exists". And a Helm-owned Secret
+  filled in by a hook is replaced by `helm upgrade --force`, so the hook
+  then makes new contents. Keep generated keys out of the release.
+  ([docs/08](08-ssh-onboarding.md) M7, M8)
+- **Argo CD's label tracking claims any object labelled
+  `app.kubernetes.io/instance: <app>`**, rendered or not, and auto-sync
+  with prune deletes the ones that aren't in the manifests. Don't put
+  that label on objects a hook creates. ([docs/08](08-ssh-onboarding.md) D16)
 - **`gopkg.in/yaml.v3` has been unmaintained since 2022.** Use
   `go.yaml.in/yaml/v3`. ([docs/01](https://github.com/Tuhis/Nyyrikki/blob/0ea8b56/docs/01-foundations.md) M4)
 - **Claude Code never reads `mcpServers` from `settings.json`.** Servers
