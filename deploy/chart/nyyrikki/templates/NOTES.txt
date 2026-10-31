@@ -1,5 +1,43 @@
 Nyyrikki is at {{ .Values.canonicalURL }}.
 {{- if eq (include "nyyrikki.hasSSH" .) "true" }}
+{{- if eq (include "nyyrikki.sshCompat" .) "true" }}
+
+secrets.sshUserCA is deprecated: Nyyrikki uses the R10 Secret
+{{ .Values.secrets.sshUserCA.name }} as its user CA, and stays without enrollment
+and CA rotation until you migrate (docs/08 D14). Migrate in this order:
+
+  1. kubectl -n {{ .Release.Namespace }} get secret {{ .Values.secrets.sshUserCA.name }} -o yaml \
+       | nyyrikkid ssh-ca import --key {{ .Values.secrets.sshUserCA.key }} --name {{ .Values.secrets.sshCA.name }} --release {{ .Release.Name }} \
+       | kubectl -n {{ .Release.Namespace }} create -f -
+     (run nyyrikkid from the image or a checkout, on a machine no agent runs on)
+  2. Remove that key from ssh.userCAPublicKeys and unset secrets.sshUserCA,
+     in one rollout.
+  3. After it, delete the Secret {{ .Values.secrets.sshUserCA.name }}.
+
+If step 1 fails with AlreadyExists, compare fingerprints: import printed
+the old key's, and
+  kubectl -n {{ .Release.Namespace }} get secret {{ .Values.secrets.sshCA.name }} -o jsonpath='{.data.user-ca}' | base64 -d | ssh-keygen -lf /dev/stdin
+prints the existing user-ca's. Equal: the migration is already done.
+Different: secrets.sshUserCA was unset first and a fresh CA no host trusts
+was made; delete {{ .Values.secrets.sshCA.name }} and run step 1 again.
+{{- else }}
+
+SSH CA keys: the Secret {{ .Values.secrets.sshCA.name }} (user-ca, and host-ca for
+enrollment) is mounted at /etc/nyyrikki/ssh/.
+{{- if eq (include "nyyrikki.generateCA" .) "true" }} The install hook made it, unless
+it existed already; Helm doesn't own it, so uninstall and --force leave it.
+Delete it, if you ever must, with
+  kubectl -n {{ .Release.Namespace }} delete secret -l nyyrikki.dev/release={{ .Release.Name }},nyyrikki.dev/component=ssh-ca
+{{- else }} Create it yourself, e.g. with
+  nyyrikkid ssh-ca init --namespace {{ .Release.Namespace }} --name {{ .Values.secrets.sshCA.name }} | kubectl create -f -
+{{- end }}
+A Secret without host-ca keeps enrollment off; add one with
+{{- if eq (include "nyyrikki.caJobs" .) "true" }}
+  kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ .Release.Name }}-ssh-ca-add-host-ca ssh-ca-add-host-ca-1
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} get secret {{ .Values.secrets.sshCA.name }} -o yaml | nyyrikkid ssh-ca add-host-ca | kubectl apply -f -
+{{- end }}
+{{- end }}
 
 SSH targets: set up each host by running, as root on the host
 (docs/setup/ssh-hosts.md; check the script first with --dry-run):
@@ -14,4 +52,6 @@ SSH targets: set up each host by running, as root on the host
 
 If Nyyrikki's certificate comes from a private CA, add --cacert with that CA.
 Never -k: a script fetched without checking the server can come from anyone.
+Enrollment with one command per host (nyyrikkid enroll-token) arrives in a
+later release (docs/08 D6, D7).
 {{- end }}

@@ -23,13 +23,7 @@ spec:
       {{- end }}
       automountServiceAccountToken: {{ eq (include "nyyrikki.inCluster" .) "true" }}
       enableServiceLinks: false
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
-        seccompProfile:
-          type: RuntimeDefault
+      securityContext: {{- include "nyyrikki.podSecurityContext" . | nindent 8 }}
       containers:
         - name: nyyrikkid
           image: {{ include "nyyrikki.image" . }}
@@ -46,11 +40,7 @@ spec:
           livenessProbe:
             httpGet: {path: /healthz, port: health}
             periodSeconds: 20
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
+          securityContext: {{- include "nyyrikki.containerSecurityContext" . | nindent 12 }}
           resources: {{- toYaml .Values.resources | nindent 12 }}
           {{- if .Values.trustedCA.configMap }}
           # Extra roots, added to the system ones (Go reads every file in
@@ -75,8 +65,9 @@ spec:
             - {name: target-{{ .name }}, mountPath: /etc/nyyrikki/targets/{{ .name }}, readOnly: true}
             {{- end }}{{ end }}
             {{- if eq (include "nyyrikki.hasSSH" .) "true" }}
-            # The SSH user CA key (docs/07 D6), read on each use.
-            - {name: ssh-user-ca, mountPath: /etc/nyyrikki/ssh, readOnly: true}
+            # The SSH CA keys (docs/08 D1), read on each use, so a rotated
+            # Secret applies without a rollout.
+            - {name: ssh-ca, mountPath: /etc/nyyrikki/ssh, readOnly: true}
             {{- end }}
       volumes:
         - name: config
@@ -107,11 +98,19 @@ spec:
             items: [{key: {{ .Values.trustedCA.key }}, path: ca.crt}]
         {{- end }}
         {{- if eq (include "nyyrikki.hasSSH" .) "true" }}
-        - name: ssh-user-ca
+        - name: ssh-ca
           secret:
+            {{- if eq (include "nyyrikki.sshCompat" .) "true" }}
+            # Deprecated R10 Secret, mounted instead of sshCA (docs/08 D14).
             secretName: {{ .Values.secrets.sshUserCA.name }}
             defaultMode: 0400
-            items: [{key: {{ .Values.secrets.sshUserCA.key }}, path: user-ca}]
+            items: [{key: {{ required "secrets.sshUserCA.key is required" .Values.secrets.sshUserCA.key }}, path: user-ca}]
+            {{- else }}
+            # Whole, with no items, so user-ca-next and host-ca appear when
+            # the Secret has them (docs/08 D1, D14).
+            secretName: {{ required "secrets.sshCA.name is required" .Values.secrets.sshCA.name }}
+            defaultMode: 0400
+            {{- end }}
         {{- end }}
         {{- range .Values.targets }}{{ if not (or .inCluster .ssh) }}
         - name: target-{{ .name }}

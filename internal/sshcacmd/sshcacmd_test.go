@@ -292,16 +292,16 @@ func TestSSHCACommandRefusals(t *testing.T) {
 			s.Labels = nil
 			s.Data = map[string][]byte{"user-ca": s.Data["user-ca"]}
 		}),
-		"other data key":   mk(func(s *corev1.Secret) { s.Data["ca-key"] = s.Data["user-ca"] }),
-		"stringData":       mk(func(s *corev1.Secret) { s.StringData = map[string]string{"user-ca-next": "x"} }),
-		"no user-ca":       mk(func(s *corev1.Secret) { delete(s.Data, "user-ca") }),
-		"user-ca garbage":  mk(func(s *corev1.Secret) { s.Data["user-ca"] = []byte("garbage") }),
-		"host-ca garbage":  mk(func(s *corev1.Secret) { s.Data["host-ca"] = []byte("garbage") }),
-		"wrong kind":       mk(func(s *corev1.Secret) { s.Kind = "ConfigMap" }),
-		"wrong type":       mk(func(s *corev1.Secret) { s.Type = corev1.SecretTypeTLS }),
-		"not YAML":         "{{{",
-		"empty":            "",
-		"two in one value": mk(func(s *corev1.Secret) { s.Labels[LabelComponent] = "ssh-ca-not" }),
+		"other data key":  mk(func(s *corev1.Secret) { s.Data["ca-key"] = s.Data["user-ca"] }),
+		"stringData":      mk(func(s *corev1.Secret) { s.StringData = map[string]string{"user-ca-next": "x"} }),
+		"no user-ca":      mk(func(s *corev1.Secret) { delete(s.Data, "user-ca") }),
+		"user-ca garbage": mk(func(s *corev1.Secret) { s.Data["user-ca"] = []byte("garbage") }),
+		"host-ca garbage": mk(func(s *corev1.Secret) { s.Data["host-ca"] = []byte("garbage") }),
+		"wrong kind":      mk(func(s *corev1.Secret) { s.Kind = "ConfigMap" }),
+		"wrong type":      mk(func(s *corev1.Secret) { s.Type = corev1.SecretTypeTLS }),
+		"not YAML":        "{{{",
+		"empty":           "",
+		"other component": mk(func(s *corev1.Secret) { s.Labels[LabelComponent] = "ssh-ca-not" }),
 	}
 	for name, in := range cases {
 		for _, c := range []string{"stage", "promote", "unstage", "add-host-ca"} {
