@@ -312,15 +312,23 @@ func (e *env) connect(tok string) (*mcp.ClientSession, error) {
 		&mcp.StreamableClientTransport{Endpoint: e.canonical + "/mcp", HTTPClient: hc, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
 }
 
+// runOut is runAsync's result: the run's structured content as JSON, or
+// why there is none.
+type runOut struct {
+	raw string
+	err error
+}
+
 // runAsync is runVia through a new session, in the background. It never
 // calls t.Fatal off the test's goroutine, which would only end that
-// goroutine: a failure goes on failed, for tapUnless to report.
-func (e *env) runAsync(tok, reason string) (done chan string, failed chan error) {
-	done, failed = make(chan string, 1), make(chan error, 1)
+// goroutine: a failure is its result, which tapUnless reports if it comes
+// before the prompt.
+func (e *env) runAsync(tok, reason string) *pending[runOut] {
+	p := &pending[runOut]{ch: make(chan runOut, 1)}
 	go func() {
 		cs, err := e.connect(tok)
 		if err != nil {
-			failed <- fmt.Errorf("connect: %w", err)
+			p.ch <- runOut{err: fmt.Errorf("connect: %w", err)}
 			return
 		}
 		defer cs.Close()
@@ -328,27 +336,23 @@ func (e *env) runAsync(tok, reason string) (done chan string, failed chan error)
 			"target": "this-cluster", "args": []string{"auth", "whoami", "-o", "jsonpath={.status.userInfo.username}"}, "reason": reason,
 		}})
 		if err != nil {
-			failed <- fmt.Errorf("run: %w", err)
+			p.ch <- runOut{err: fmt.Errorf("run: %w", err)}
 			return
 		}
 		raw, _ := json.Marshal(r.StructuredContent)
-		done <- string(raw)
+		p.ch <- runOut{raw: string(raw)}
 	}()
-	return done, failed
+	return p
 }
 
 // runResult waits for runAsync's result.
-func runResult(t *testing.T, done chan string, failed chan error) string {
+func runResult(t *testing.T, p *pending[runOut]) string {
 	t.Helper()
-	select {
-	case raw := <-done:
-		return raw
-	case err := <-failed:
-		t.Fatalf("the request failed: %v", err)
-	case <-time.After(time.Minute):
-		t.Fatal("the request never finished")
+	o := p.wait(t, time.Minute)
+	if o.err != nil {
+		t.Fatalf("the request failed: %v", o.err)
 	}
-	return ""
+	return o.raw
 }
 
 // mcpStatus is the HTTP status /mcp answers a tools/list with tok.
@@ -682,9 +686,9 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 	}
 
 	// Nyyrikki takes it: a run reaches the approver and runs.
-	ch, failed := e.runAsync(at2, "offline harness")
-	e.tapUnless(t, next(), "Approve", failed)
-	if raw := runResult(t, ch, failed); !strings.Contains(raw, ownerK8sUser) {
+	run := e.runAsync(at2, "offline harness")
+	e.tapUnless(t, next(), "Approve", run.peek)
+	if raw := runResult(t, run); !strings.Contains(raw, ownerK8sUser) {
 		t.Fatalf("run as the offline harness: %s", raw)
 	}
 
@@ -703,9 +707,9 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 	if at3 == "" {
 		t.Fatal("signing out the browser sessions ended the offline harness too")
 	}
-	ch, failed = e.runAsync(at3, "after the browser sessions ended")
-	e.tapUnless(t, next(), "Deny", failed)
-	if raw := runResult(t, ch, failed); !strings.Contains(raw, "denied") {
+	run = e.runAsync(at3, "after the browser sessions ended")
+	e.tapUnless(t, next(), "Deny", run.peek)
+	if raw := runResult(t, run); !strings.Contains(raw, "denied") {
 		t.Fatalf("offline harness after the browser sessions ended: %s", raw)
 	}
 
@@ -743,8 +747,9 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 // refresh token is Offline and still bound to the login's key, so a
 // refresh without a proof from that key is refused, and one with it keeps
 // cnf.jkt, the CLI agent's key (D8). It has no online session, and with
-// none left it still refreshes and a run reaches the approver. A CLI client without the offline_access scope (set
-// up before OD18) still signs in, session-bound, and says so.
+// none left it still refreshes and a run reaches the approver. A CLI
+// client without the offline_access scope (set up before OD18) still
+// signs in, session-bound, and says so.
 func (e *env) checkOfflineCLI(t *testing.T, next func() int) {
 	// The sign-out before this step refuses tokens issued in its second.
 	time.Sleep(1100 * time.Millisecond)
@@ -800,6 +805,9 @@ func (e *env) checkOfflineCLI(t *testing.T, next func() int) {
 	json.Unmarshal(raw, &online)
 	t.Logf("M9 OD18: online sessions after an offline CLI login: %s", raw)
 	sid := claims(lf["access_token"].(string))["sid"]
+	if sid == nil {
+		t.Fatal("the CLI's token has no sid")
+	}
 	for _, ss := range online {
 		if ss.ID == sid {
 			t.Fatalf("the offline CLI login's sid %v is an online session", sid)
@@ -810,9 +818,9 @@ func (e *env) checkOfflineCLI(t *testing.T, next func() int) {
 	if jkt(lf["access_token"].(string)) != jkt0 {
 		t.Fatalf("jkt changed after the online sessions ended")
 	}
-	ch := c.async(t, "run", "--reason", "with no online session", "this-cluster", "--", "get", "pods")
-	e.tap(t, next(), "Deny")
-	if r := get(t, ch, time.Minute); r.code != 77 || !strings.Contains(r.stderr, "nyyrikki: error: denied:") {
+	run := &pending[result]{ch: c.async(t, "run", "--reason", "with no online session", "this-cluster", "--", "get", "pods")}
+	e.tapUnless(t, next(), "Deny", run.peek)
+	if r := run.wait(t, time.Minute); r.code != 77 || !strings.Contains(r.stderr, "nyyrikki: error: denied:") {
 		t.Fatalf("run with no online session: %+v", r)
 	}
 
