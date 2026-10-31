@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/Tuhis/Nyyrikki/compare/v0.2.1...v0.3.0) (2026-10-30)
+
+
+### Features
+
+* **cli:** ask for offline_access in login --mcp where it is offered ([#29](https://github.com/Tuhis/Nyyrikki/issues/29)) ([2012369](https://github.com/Tuhis/Nyyrikki/commit/20123695e983be6a76adb03513600f2f3d2973be))
+* SSH hosts as a second target type (R10, docs/07 SH1–SH6) ([#30](https://github.com/Tuhis/Nyyrikki/issues/30)) ([2a2df53](https://github.com/Tuhis/Nyyrikki/commit/2a2df536abfe0826d64f20d9c196947af98a5663))
+
 ## [0.2.1](https://github.com/Tuhis/Nyyrikki/compare/v0.2.0...v0.2.1) (2026-10-29)
 
 
