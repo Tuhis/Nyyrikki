@@ -84,6 +84,22 @@ func noPrivate(t *testing.T, what, s string, secs ...*corev1.Secret) {
 // allowedFields checks D2's output rule: only apiVersion, kind,
 // metadata.name, metadata.namespace, type and data, plus D16's labels and
 // annotations when labelled.
+// allowedUpdateFields: a read-modify-write output keeps the read Secret's
+// labels, annotations and resourceVersion for kubectl replace, nothing else.
+func allowedUpdateFields(t *testing.T, m map[string]any) {
+	t.Helper()
+	for k := range m {
+		if !slices.Contains([]string{"apiVersion", "kind", "metadata", "type", "data"}, k) {
+			t.Errorf("output keeps %s", k)
+		}
+	}
+	for k := range m["metadata"].(map[string]any) {
+		if !slices.Contains([]string{"name", "namespace", "labels", "annotations", "resourceVersion"}, k) {
+			t.Errorf("output keeps metadata.%s", k)
+		}
+	}
+}
+
 func allowedFields(t *testing.T, m map[string]any, labelled bool) {
 	t.Helper()
 	for k := range m {
@@ -191,7 +207,7 @@ func TestSSHCACommandStagePromote(t *testing.T) {
 		t.Fatalf("stage: %d %s", r.code, r.stderr)
 	}
 	m, s1 := parse(t, r.stdout)
-	allowedFields(t, m, false)
+	allowedUpdateFields(t, m)
 	if !slices.Equal(dataKeys(s1), []string{"host-ca", "user-ca", "user-ca-next"}) ||
 		!bytes.Equal(s1.Data["user-ca"], s0.Data["user-ca"]) || !bytes.Equal(s1.Data["host-ca"], s0.Data["host-ca"]) {
 		t.Fatalf("stage changed more than user-ca-next: %v", dataKeys(s1))
@@ -213,7 +229,7 @@ func TestSSHCACommandStagePromote(t *testing.T) {
 		t.Fatalf("promote: %d %s", r.code, r.stderr)
 	}
 	m, s2 := parse(t, r.stdout)
-	allowedFields(t, m, false)
+	allowedUpdateFields(t, m)
 	if !slices.Equal(dataKeys(s2), []string{"host-ca", "user-ca"}) || !bytes.Equal(s2.Data["user-ca"], s1.Data["user-ca-next"]) ||
 		!bytes.Equal(s2.Data["host-ca"], s0.Data["host-ca"]) {
 		t.Fatalf("promote: %v", dataKeys(s2))
@@ -269,7 +285,7 @@ func TestSSHCACommandUnstageAddHostCA(t *testing.T) {
 	if r.code != 0 || !slices.Equal(dataKeys(s), []string{"host-ca", "user-ca"}) || !bytes.Equal(s.Data["user-ca"], s0.Data["user-ca"]) {
 		t.Fatalf("add-host-ca: %+v", r)
 	}
-	allowedFields(t, m, false)
+	allowedUpdateFields(t, m)
 	pub(t, s.Data["host-ca"])
 	noPrivate(t, "add-host-ca stderr", r.stderr, s)
 }
@@ -507,5 +523,47 @@ func TestSSHCACommandInCluster(t *testing.T) {
 	})
 	if r := runCmd(t, "", c3, "stage", "--in-cluster", "--name", "ca"); r.code == 0 {
 		t.Fatal("a conflicting update succeeded")
+	}
+}
+
+// The read-modify-write commands are piped into "kubectl replace -f -":
+// kubectl apply keeps data keys that aren't in its last-applied annotation,
+// so an unstage or promote would report success and leave user-ca-next
+// (review of #42). replace needs the labels the commands check, and the
+// resourceVersion read, so a concurrent change fails; the last-applied
+// annotation, which holds a copy of the private keys, is dropped.
+func TestSSHCACommandReplaceKeepsMetadata(t *testing.T) {
+	orig, _ := initSecret(t)
+	r := runCmd(t, orig, nil, "stage")
+	if r.code != 0 {
+		t.Fatalf("stage: %d %s", r.code, r.stderr)
+	}
+	in := strings.Replace(r.stdout, "metadata:\n", "metadata:\n  resourceVersion: \"7\"\n  uid: abc\n"+
+		"  labels:\n    nyyrikki.dev/component: ssh-ca\n    nyyrikki.dev/release: rel\n"+
+		"  annotations:\n    helm.sh/resource-policy: keep\n    kubectl.kubernetes.io/last-applied-configuration: '{\"data\":{\"user-ca\":\"c2VjcmV0\"}}'\n", 1)
+	for _, cmd := range []string{"unstage", "promote"} {
+		r := runCmd(t, in, nil, cmd)
+		if r.code != 0 {
+			t.Fatalf("%s: %d %s", cmd, r.code, r.stderr)
+		}
+		_, s := parse(t, r.stdout)
+		if s.ResourceVersion != "7" {
+			t.Errorf("%s: resourceVersion %q, want 7", cmd, s.ResourceVersion)
+		}
+		if s.UID != "" {
+			t.Errorf("%s: keeps uid", cmd)
+		}
+		if s.Labels[LabelComponent] != ComponentSSHCA || s.Labels[LabelRelease] != "rel" {
+			t.Errorf("%s: labels %v", cmd, s.Labels)
+		}
+		if _, ok := s.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok {
+			t.Errorf("%s: keeps the last-applied annotation", cmd)
+		}
+		if s.Annotations["helm.sh/resource-policy"] != "keep" {
+			t.Errorf("%s: annotations %v", cmd, s.Annotations)
+		}
+		if _, ok := s.Data["user-ca-next"]; ok {
+			t.Errorf("%s: user-ca-next left", cmd)
+		}
 	}
 }

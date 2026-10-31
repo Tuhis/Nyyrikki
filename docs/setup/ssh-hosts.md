@@ -368,7 +368,7 @@ every host after each step. With the chart's CronJobs (`ssh.caJobs`):
 
 `-unstage` removes a staged key, `-add-host-ca` adds a missing
 `host-ca`. Without the CronJobs, pipe the Secret through the same
-commands: `kubectl -n nyyrikki get secret nyyrikki-ssh-ca -o yaml | nyyrikkid ssh-ca stage | kubectl apply -f -`.
+commands: `kubectl -n nyyrikki get secret nyyrikki-ssh-ca -o yaml | nyyrikkid ssh-ca stage | kubectl replace -f -`.
 
 After a leak, revoke first, then rotate:
 

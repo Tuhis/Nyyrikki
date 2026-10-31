@@ -628,7 +628,7 @@ func TestChartSSHNotes(t *testing.T) {
 	}
 	// Without the hook or the CronJobs, the workstation commands.
 	out = notes(t, append(append([]string(nil), sshSet...), "--set", "ssh.generateCA=false")...)
-	for _, want := range []string{"nyyrikkid ssh-ca init --namespace default --name my-ca | kubectl create -f -", "| nyyrikkid ssh-ca add-host-ca | kubectl apply -f -"} {
+	for _, want := range []string{"nyyrikkid ssh-ca init --namespace default --name my-ca | kubectl create -f -", "| nyyrikkid ssh-ca add-host-ca | kubectl replace -f -"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("NOTES lack %q:\n%s", want, out)
 		}

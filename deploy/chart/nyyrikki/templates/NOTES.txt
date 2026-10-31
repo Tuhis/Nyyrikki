@@ -35,7 +35,7 @@ A Secret without host-ca keeps enrollment off; add one with
 {{- if eq (include "nyyrikki.caJobs" .) "true" }}
   kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ .Release.Name }}-ssh-ca-add-host-ca ssh-ca-add-host-ca-1
 {{- else }}
-  kubectl -n {{ .Release.Namespace }} get secret {{ .Values.secrets.sshCA.name }} -o yaml | nyyrikkid ssh-ca add-host-ca | kubectl apply -f -
+  kubectl -n {{ .Release.Namespace }} get secret {{ .Values.secrets.sshCA.name }} -o yaml | nyyrikkid ssh-ca add-host-ca | kubectl replace -f -
 {{- end }}
 {{- end }}
 

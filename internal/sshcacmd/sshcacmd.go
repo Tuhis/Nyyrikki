@@ -107,11 +107,12 @@ one on stdout; no Kubernetes client is used. Private keys pass only
 through that pipe, never through stderr. Use init and import with
 "kubectl create -f -", never apply, so an existing Secret is not
 overwritten; use the others with "kubectl get secret NAME -o yaml |" in
-front and "| kubectl apply -f -" after:
+front and "| kubectl replace -f -" after, never apply, which would keep a
+data key the command removed:
 
   nyyrikkid ssh-ca init --namespace nyyrikki | kubectl create -f -
   kubectl get secret nyyrikki-ssh-user-ca -o yaml | nyyrikkid ssh-ca import | kubectl create -f -
-  kubectl get secret nyyrikki-ssh-ca -o yaml | nyyrikkid ssh-ca stage | kubectl apply -f -
+  kubectl get secret nyyrikki-ssh-ca -o yaml | nyyrikkid ssh-ca stage | kubectl replace -f -
 
 Commands:
   init         print a new Secret with fresh user-ca and host-ca
@@ -347,7 +348,7 @@ func updateManifest(env Env, cmd string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeManifest(env.Stdout, s, false); err != nil {
+	if err := writeManifest(env.Stdout, s, true); err != nil {
 		return err
 	}
 	fmt.Fprint(env.Stderr, msg)
@@ -523,19 +524,39 @@ type manifest struct {
 }
 
 type manifestMeta struct {
-	Name        string            `json:"name"`
-	Namespace   string            `json:"namespace,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	Annotations map[string]string `json:"annotations,omitempty"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	// ResourceVersion is kept from the Secret read, so the
+	// "kubectl replace -f -" of a read-modify-write command fails on a
+	// concurrent change.
+	ResourceVersion string            `json:"resourceVersion,omitempty"`
+	Labels          map[string]string `json:"labels,omitempty"`
+	Annotations     map[string]string `json:"annotations,omitempty"`
 }
 
-// writeManifest prints s with the allowed fields only; labelled adds
-// D16's labels and annotations (init and import).
+// lastApplied is kubectl apply's annotation; on this Secret it holds a
+// copy of the private keys, so it is never printed.
+const lastApplied = "kubectl.kubernetes.io/last-applied-configuration"
+
+// writeManifest prints s with the allowed fields only: labels and
+// annotations (minus lastApplied) when labelled, and the resourceVersion
+// read, so the read-modify-write commands can be piped into
+// "kubectl replace -f -" (kubectl apply would keep a data key the command
+// dropped, review of #42).
 func writeManifest(w io.Writer, s *corev1.Secret, labelled bool) error {
 	m := manifest{APIVersion: "v1", Kind: "Secret", Type: corev1.SecretTypeOpaque, Data: s.Data,
-		Metadata: manifestMeta{Name: s.Name, Namespace: s.Namespace}}
+		Metadata: manifestMeta{Name: s.Name, Namespace: s.Namespace, ResourceVersion: s.ResourceVersion}}
 	if labelled {
-		m.Metadata.Labels, m.Metadata.Annotations = s.Labels, s.Annotations
+		m.Metadata.Labels = s.Labels
+		for k, v := range s.Annotations {
+			if k == lastApplied {
+				continue
+			}
+			if m.Metadata.Annotations == nil {
+				m.Metadata.Annotations = map[string]string{}
+			}
+			m.Metadata.Annotations[k] = v
+		}
 	}
 	b, err := yaml.Marshal(m)
 	if err != nil {
