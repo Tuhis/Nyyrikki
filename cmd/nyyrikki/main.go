@@ -44,7 +44,11 @@ const usage = `usage:
   On an SSH target, stdin is sent only with -i, and the approver sees only its
   size and hash: put a script the approver must read in the command (a heredoc).
   -t with no command opens a login shell.
-  nyyrikki elevate --reason TEXT [--for D] TARGET...
+  ssh is run on an SSH target only: with no command on a terminal it is
+  run -t SSH-TARGET (a login shell), otherwise run SSH-TARGET -- COMMAND...
+  elevate takes group names from targets too, and covers their members.
+  nyyrikki ssh [--reason TEXT] [--elevation HANDLE] [--timeout D] [-i] SSH-TARGET [-- COMMAND...]
+  nyyrikki elevate --reason TEXT [--for D] TARGET-OR-GROUP...
   nyyrikki mcp-headers
   nyyrikki version
 `
@@ -71,6 +75,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return c.targets(ctx, args[1:])
 	case "run":
 		return c.run(ctx, args[1:])
+	case "ssh":
+		return c.ssh(ctx, args[1:])
 	case "elevate":
 		return c.elevate(ctx, args[1:])
 	case "mcp-headers":
@@ -89,6 +95,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 type cli struct {
 	stdin          io.Reader
 	stdout, stderr io.Writer
+	// typeOf replaces the list_targets lookup of ssh (tests); nil means
+	// asking the server.
+	typeOf func(ctx context.Context, path, target string) (string, error)
+	// runCmd replaces c.run for ssh (tests); nil means c.run.
+	runCmd func(ctx context.Context, args []string) int
 }
 
 // fail prints Nyyrikki's own outcome as the last stderr line,
@@ -222,10 +233,120 @@ func (c *cli) targets(ctx context.Context, args []string) int {
 	if err := s.Call(ctx, api.ToolListTargets, api.ListTargetsIn{}, &out); err != nil {
 		return c.fail(err)
 	}
-	for _, t := range out.Targets {
-		fmt.Fprintf(c.stdout, "%s\t%s\t%s\n", t.Name, t.Type, t.Description)
-	}
+	printTargets(c.stdout, out.Targets)
 	return 0
+}
+
+// printTargets writes one line per target: name, type, sudo (yes or no
+// on an SSH target, - otherwise), its groups (comma-separated, or -),
+// and the description last, since it is free text (docs/08 D11).
+func printTargets(w io.Writer, targets []api.TargetInfo) {
+	for _, t := range targets {
+		sudo, groups := "-", "-"
+		if t.Sudo != nil {
+			sudo = "no"
+			if *t.Sudo {
+				sudo = "yes"
+			}
+		}
+		if len(t.Groups) > 0 {
+			groups = strings.Join(t.Groups, ",")
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", t.Name, t.Type, sudo, groups, t.Description)
+	}
+}
+
+// ssh is sugar over run for SSH targets (docs/08 D12): with no command
+// and a terminal on stdin it is exactly `run -t TARGET`, a login shell;
+// otherwise `run TARGET -- COMMAND...`. It refuses a target that
+// list_targets doesn't list as an SSH target before calling run, so a
+// command meant for a host is never sent to a Kubernetes target as
+// kubectl arguments. The server decides as for any run.
+func (c *cli) ssh(ctx context.Context, args []string) int {
+	fs := c.flags("ssh")
+	reason := fs.String("reason", "", "why; shown to the approver as the agent's claim")
+	elevation := fs.String("elevation", os.Getenv("NYYRIKKI_ELEVATION"), "elevation handle (env NYYRIKKI_ELEVATION)")
+	timeout := fs.String("timeout", "", "how long the command may run (Go duration)")
+	stdinFlag := fs.Bool("i", false, "send stdin to the command")
+	path := loginPath(fs, false)
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	runArgs, err := sshRunArgs(fs.Args(), c.stdinIsTerminal())
+	if err != nil {
+		fmt.Fprintf(c.stderr, "nyyrikki: %v\nusage: nyyrikki ssh [flags] SSH-TARGET [-- COMMAND...]\n", err)
+		return exitUsage
+	}
+	if *reason == "" {
+		fmt.Fprintln(c.stderr, "nyyrikki: --reason is required: the approver sees it")
+		return exitUsage
+	}
+	target := fs.Arg(0)
+	typeOf := c.typeOf
+	if typeOf == nil {
+		typeOf = c.lookupType
+	}
+	typ, err := typeOf(ctx, *path, target)
+	if err != nil {
+		return c.fail(err)
+	}
+	if typ != codes.TypeSSH {
+		// Unlisted reads as not SSH: the CLI can't tell "absent" from
+		// "not yours", and doesn't try (docs/02 D5).
+		fmt.Fprintf(c.stderr, "nyyrikki: %s is not an SSH target this agent may use (see nyyrikki targets)\n", target)
+		return exitUsage
+	}
+	flags := []string{"--login-file", *path}
+	if *reason != "" {
+		flags = append(flags, "--reason", *reason)
+	}
+	if *elevation != "" {
+		flags = append(flags, "--elevation", *elevation)
+	}
+	if *timeout != "" {
+		flags = append(flags, "--timeout", *timeout)
+	}
+	if *stdinFlag && runArgs[0] != "-t" {
+		flags = append(flags, "-i")
+	}
+	run := c.runCmd
+	if run == nil {
+		run = c.run
+	}
+	return run(ctx, append(flags, runArgs...))
+}
+
+// sshRunArgs maps ssh's arguments, TARGET [-- COMMAND...], to run's
+// positional arguments (docs/08 D12).
+func sshRunArgs(rest []string, terminal bool) ([]string, error) {
+	switch {
+	case len(rest) == 0:
+		return nil, errors.New("no target")
+	case len(rest) == 1 && terminal:
+		return []string{"-t", rest[0]}, nil
+	case len(rest) == 1:
+		return nil, errors.New("no command, and stdin is not a terminal for a login shell")
+	case rest[1] != "--":
+		return nil, errors.New("put the command after --")
+	case len(rest) == 2:
+		return nil, errors.New("no command after --")
+	}
+	return append([]string{rest[0], "--"}, rest[2:]...), nil
+}
+
+func (c *cli) stdinIsTerminal() bool {
+	f, ok := c.stdin.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+// lookupType asks list_targets for target's type over its own session.
+func (c *cli) lookupType(ctx context.Context, path, target string) (string, error) {
+	_, s, err := c.session(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	defer s.Close()
+	return c.targetType(ctx, s, target)
 }
 
 // readsStdin reports whether kubectl args take a manifest from stdin. The
@@ -382,7 +503,7 @@ func (c *cli) elevate(ctx context.Context, args []string) int {
 	dur := fs.String("for", "", "duration (Go syntax; default 15m, at most 30m)")
 	path := loginPath(fs, false)
 	if err := fs.Parse(args); err != nil || fs.NArg() == 0 || *reason == "" {
-		fmt.Fprintln(c.stderr, "usage: nyyrikki elevate --reason TEXT [--for D] TARGET...")
+		fmt.Fprintln(c.stderr, "usage: nyyrikki elevate --reason TEXT [--for D] TARGET-OR-GROUP...")
 		return exitUsage
 	}
 	_, s, err := c.session(ctx, *path)

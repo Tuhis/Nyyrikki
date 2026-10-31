@@ -59,6 +59,27 @@ type Options struct {
 // newSSHRunner builds the SSH runner from the ssh block and the SSH
 // targets (docs/07 §5.5); nil when there are none.
 func newSSHRunner(cfg *config.Config, aw audit.Appender, log *slog.Logger, o Options) (*sshtarget.Runner, error) {
+	parseKeys := func(keys []string) ([]ssh.PublicKey, error) {
+		var out []ssh.PublicKey
+		for _, k := range keys {
+			pk, err := config.ParsePublicKey(k)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, pk)
+		}
+		return out, nil
+	}
+	// docs/08 D9: the global host CAs are accepted for every target, and
+	// a revoked key for none.
+	globalCAs, err := parseKeys(cfg.SSH.HostCAs)
+	if err != nil {
+		return nil, fmt.Errorf("ssh.host_cas: %w", err)
+	}
+	revoked, err := parseKeys(cfg.SSH.RevokedHostKeys)
+	if err != nil {
+		return nil, fmt.Errorf("ssh.revoked_host_keys: %w", err)
+	}
 	targets := map[string]sshtarget.Target{}
 	for _, t := range cfg.Targets {
 		if t.SSH == nil {
@@ -69,20 +90,13 @@ func newSSHRunner(cfg *config.Config, aw audit.Appender, log *slog.Logger, o Opt
 			return nil, fmt.Errorf("target %s: %w", t.Name, err)
 		}
 		st := sshtarget.Target{Name: t.Name, Address: t.SSH.Address, Host: host}
-		for _, k := range t.SSH.HostKeys {
-			pk, err := config.ParsePublicKey(k)
-			if err != nil {
-				return nil, fmt.Errorf("target %s: %w", t.Name, err)
-			}
-			st.HostKeys = append(st.HostKeys, pk)
+		if st.HostKeys, err = parseKeys(t.SSH.HostKeys); err != nil {
+			return nil, fmt.Errorf("target %s: %w", t.Name, err)
 		}
-		for _, k := range t.SSH.HostCAs {
-			pk, err := config.ParsePublicKey(k)
-			if err != nil {
-				return nil, fmt.Errorf("target %s: %w", t.Name, err)
-			}
-			st.HostCAs = append(st.HostCAs, pk)
+		if st.HostCAs, err = parseKeys(t.SSH.HostCAs); err != nil {
+			return nil, fmt.Errorf("target %s: %w", t.Name, err)
 		}
+		st.HostCAs = append(st.HostCAs, globalCAs...)
 		targets[t.Name] = st
 	}
 	if len(targets) == 0 {
@@ -97,9 +111,10 @@ func newSSHRunner(cfg *config.Config, aw audit.Appender, log *slog.Logger, o Opt
 		pubs = append(pubs, pk)
 	}
 	return sshtarget.NewRunner(sshtarget.RunnerConfig{
-		Targets:        targets,
-		CA:             sshtarget.NewCA(cfg.SSH.UserCAKeyFile, pubs, cfg.SSH.SourceAddresses, o.Now),
-		ConnectTimeout: cfg.SSH.ConnectTimeout.D(),
+		Targets:         targets,
+		RevokedHostKeys: revoked,
+		CA:              sshtarget.NewCA(cfg.SSH.UserCAKeyFile, pubs, cfg.SSH.SourceAddresses, o.Now),
+		ConnectTimeout:  cfg.SSH.ConnectTimeout.D(),
 		Limits: sshtarget.Limits{
 			DefaultTimeout: cfg.Run.DefaultTimeout.D(),
 			MaxTimeout:     cfg.Run.MaxTimeout.D(),

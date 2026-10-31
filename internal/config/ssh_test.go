@@ -52,7 +52,8 @@ func TestSSHInvalid(t *testing.T) {
 		"RSA CA key":          {caKey, "    - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC7\n"},
 		"CA key with options": {caKey, "    - from=\"x\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y\n"},
 		"two CA keys in one":  {caKey, "    - \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y x\\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y\"\n"},
-		"no port":             {"address: db-1.example.com:22", "address: db-1.example.com"},
+		"no address":          {"address: db-1.example.com:22", "address: \"\""},
+		"empty port":          {"address: db-1.example.com:22", "address: \"db-1.example.com:\""},
 		"bad port":            {"address: db-1.example.com:22", "address: db-1.example.com:0"},
 		"bad host":            {"address: db-1.example.com:22", "address: \"db 1:22\""},
 		"bad host key":        {"        - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl", "        - not-a-key"},
@@ -89,5 +90,120 @@ func TestSSHBlockWithoutTargets(t *testing.T) {
 	j := strings.Index(src, "ssh:\n  user_ca_key_file")
 	if _, err := Parse([]byte(src[:i] + src[j:])); err == nil {
 		t.Fatal("accepted an ssh block with no SSH target")
+	}
+}
+
+const (
+	pinKey   = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+	otherKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y"
+)
+
+// sshConfig is the fixture with db-1's ssh block replaced by target and
+// lines appended to the shared ssh block.
+func sshConfig(t *testing.T, target, shared string) string {
+	t.Helper()
+	src := valid(t)
+	old := "      address: db-1.example.com:22\n      host_keys:\n        - " + pinKey + "\n      sudo: true\n      session_kill: true\n"
+	if !strings.Contains(src, old) {
+		t.Fatal("fixture changed")
+	}
+	src = strings.Replace(src, old, target, 1)
+	return strings.Replace(src, "  source_addresses: [203.0.113.10/32]\n", "  source_addresses: [203.0.113.10/32]\n"+shared, 1)
+}
+
+// TestConfigSSHDefaults covers docs/08 D11 (G10): the port defaults to
+// 22, resolved once at load; ssh.defaults.sudo applies only where a
+// target doesn't set sudo, in either direction.
+func TestConfigSSHDefaults(t *testing.T) {
+	for addr, want := range map[string]string{
+		"db-1.example.com":       "db-1.example.com:22",
+		"db-1.example.com:2222":  "db-1.example.com:2222",
+		"10.0.0.5":               "10.0.0.5:22",
+		"10.0.0.5:22":            "10.0.0.5:22",
+		"\"2001:db8::5\"":        "[2001:db8::5]:22",
+		"\"[2001:db8::5]\"":      "[2001:db8::5]:22",
+		"\"[2001:db8::5]:2200\"": "[2001:db8::5]:2200",
+	} {
+		c, err := Parse([]byte(sshConfig(t, "      address: "+addr+"\n", "")))
+		if err != nil {
+			t.Fatalf("%s: %v", addr, err)
+		}
+		db, _ := c.TargetByName("db-1")
+		if db.SSH.Address != want {
+			t.Errorf("%s: address %q, want %q", addr, db.SSH.Address, want)
+		}
+		if host, port, err := SplitAddress(db.SSH.Address); err != nil || port == 0 || host == "" {
+			t.Errorf("%s: the resolved address doesn't split: %v", addr, err)
+		}
+	}
+	for _, bad := range []string{"\"2001:db8::5:\"", "\"db-1:\"", "\"[db-1]\"", "\"db 1\""} {
+		if _, err := Parse([]byte(sshConfig(t, "      address: "+bad+"\n", ""))); err == nil {
+			t.Errorf("address %s accepted", bad)
+		}
+	}
+
+	cases := []struct {
+		target, shared string
+		want           bool
+	}{
+		{"", "", false},
+		{"", "  defaults: {sudo: false}\n", false},
+		{"", "  defaults: {sudo: true}\n", true},
+		{"      sudo: false\n", "  defaults: {sudo: true}\n", false},
+		{"      sudo: true\n", "  defaults: {sudo: false}\n", true},
+		{"      sudo: true\n", "", true},
+	}
+	for _, tc := range cases {
+		c, err := Parse([]byte(sshConfig(t, "      address: db-1.example.com\n"+tc.target, tc.shared)))
+		if err != nil {
+			t.Fatalf("%q %q: %v", tc.target, tc.shared, err)
+		}
+		db, _ := c.TargetByName("db-1")
+		if db.SSH.Sudo != tc.want {
+			t.Errorf("target %q, shared %q: sudo %v, want %v", tc.target, tc.shared, db.SSH.Sudo, tc.want)
+		}
+	}
+	if _, err := Parse([]byte(sshConfig(t, "      address: db-1.example.com\n", "  defaults: {sudo: true, session_kill: true}\n"))); err == nil {
+		t.Error("an unknown default was accepted")
+	}
+}
+
+// TestConfigHostCAsAndRevoked covers the config side of docs/08 D9:
+// global host_cas and revoked_host_keys parse as keys, not certificates,
+// and a pin that is also revoked is refused.
+func TestConfigHostCAsAndRevoked(t *testing.T) {
+	c, err := Parse([]byte(sshConfig(t, "      address: db-1\n",
+		"  host_cas: [\""+otherKey+" org-ca\"]\n  revoked_host_keys: [\""+pinKey+"\"]\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.SSH.HostCAs) != 1 || len(c.SSH.RevokedHostKeys) != 1 {
+		t.Fatalf("ssh %+v", c.SSH)
+	}
+	for name, shared := range map[string]string{
+		"bad host CA":         "  host_cas: [not-a-key]\n",
+		"bad revoked key":     "  revoked_host_keys: [not-a-key]\n",
+		"revoked with option": "  revoked_host_keys: [\"from=\\\"x\\\" " + pinKey + "\"]\n",
+	} {
+		if _, err := Parse([]byte(sshConfig(t, "      address: db-1\n", shared))); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// A pin listed as revoked is a contradiction (D9).
+	_, err = Parse([]byte(sshConfig(t, "      address: db-1\n      host_keys: [\""+pinKey+" db-1\"]\n",
+		"  revoked_host_keys: [\""+pinKey+" old\"]\n")))
+	if err == nil || !strings.Contains(err.Error(), "revoked_host_keys") {
+		t.Fatalf("a revoked pin: %v", err)
+	}
+	// These belong to the ssh block: without an SSH target they are a
+	// mistake, as the rest of the block is.
+	for _, shared := range []string{"host_cas: [\"" + otherKey + "\"]", "revoked_host_keys: [\"" + pinKey + "\"]", "defaults: {sudo: true}"} {
+		src := valid(t)
+		i := strings.Index(src, "  - name: db-1")
+		j := strings.Index(src, "ssh:\n  user_ca_key_file")
+		k := strings.Index(src, "telegram:")
+		if _, err := Parse([]byte(src[:i] + src[j:j+4] + "  " + shared + "\n" + src[k:])); err == nil {
+			t.Errorf("ssh.%s without an SSH target: accepted", shared)
+		}
 	}
 }

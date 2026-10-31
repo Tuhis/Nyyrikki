@@ -55,13 +55,23 @@ type RunPrompt struct {
 	ExpiresAt   time.Time
 }
 
+// TargetGroup is a group the agent named in elevate, with the members it
+// was expanded into (docs/08 D11).
+type TargetGroup struct {
+	Name    string
+	Targets []string
+}
+
 // ElevationPrompt asks for an elevation (docs/05 D7).
 // RunAs is the Kubernetes identity, for the targets SSH doesn't list;
-// SSH lists the SSH targets among Targets (docs/07 D12).
+// SSH lists the SSH targets among Targets (docs/07 D12). Targets is
+// every target the elevation covers, groups already expanded; Groups
+// says which of them came from which group the agent named.
 type ElevationPrompt struct {
 	ID         string
 	ApproverID int64
 	Targets    []string
+	Groups     []TargetGroup
 	Duration   time.Duration
 	RunAs      Identity
 	SSH        []SSHHost

@@ -42,7 +42,50 @@ func validateSSH(s *SSH) []error {
 	if d := s.ConnectTimeout.D(); d <= 0 || d > time.Minute {
 		bad("connect_timeout must be positive and at most 1m")
 	}
+	for i, k := range s.HostCAs {
+		if err := checkHostCA(k); err != nil {
+			bad("host_cas[%d]: %v", i, err)
+		}
+	}
+	for i, k := range s.RevokedHostKeys {
+		pk, err := ParsePublicKey(k)
+		if err != nil {
+			bad("revoked_host_keys[%d]: %v", i, err)
+		} else if _, isCert := pk.(*ssh.Certificate); isCert {
+			bad("revoked_host_keys[%d]: list the host's key or the CA's key, not a certificate", i)
+		}
+	}
 	return errs
+}
+
+// checkRevokedPins reports each pin of t that is listed in revoked
+// (docs/08 D9): a pinned key that is also revoked is a contradiction in
+// the config, not something to resolve at run time.
+func checkRevokedPins(t *SSHTarget, revoked []string) []error {
+	var errs []error
+	set := map[string]bool{}
+	for _, k := range revoked {
+		if pk, err := ParsePublicKey(k); err == nil {
+			set[string(pk.Marshal())] = true
+		}
+	}
+	for i, k := range t.HostKeys {
+		if pk, err := ParsePublicKey(k); err == nil && set[string(pk.Marshal())] {
+			errs = append(errs, fmt.Errorf("host_keys[%d] is listed in ssh.revoked_host_keys", i))
+		}
+	}
+	return errs
+}
+
+func checkHostCA(k string) error {
+	pk, err := ParsePublicKey(k)
+	if err != nil {
+		return err
+	}
+	if _, isCert := pk.(*ssh.Certificate); isCert {
+		return errors.New("must be a CA public key, not a certificate")
+	}
+	return nil
 }
 
 func validateSSHTarget(t *SSHTarget) []error {
@@ -60,14 +103,34 @@ func validateSSHTarget(t *SSHTarget) []error {
 		}
 	}
 	for i, k := range t.HostCAs {
-		pk, err := ParsePublicKey(k)
-		if err != nil {
+		if err := checkHostCA(k); err != nil {
 			bad("host_cas[%d]: %v", i, err)
-		} else if _, isCert := pk.(*ssh.Certificate); isCert {
-			bad("host_cas[%d]: must be a CA public key, not a certificate", i)
 		}
 	}
 	return errs
+}
+
+// DefaultSSHPort is the port of an SSH address that names none
+// (docs/08 D11).
+const DefaultSSHPort = "22"
+
+// withDefaultPort adds DefaultSSHPort to an address without a port: a
+// DNS name, an IPv4 address, or an IPv6 address, bare or in brackets.
+// Anything else is returned as is, for SplitAddress to judge.
+func withDefaultPort(a string) string {
+	if ip, err := netip.ParseAddr(a); err == nil && ip.Zone() == "" {
+		return net.JoinHostPort(a, DefaultSSHPort)
+	}
+	if strings.HasPrefix(a, "[") && strings.HasSuffix(a, "]") {
+		if ip, err := netip.ParseAddr(a[1 : len(a)-1]); err == nil && ip.Is6() && ip.Zone() == "" {
+			return net.JoinHostPort(ip.String(), DefaultSSHPort)
+		}
+		return a
+	}
+	if a != "" && !strings.Contains(a, ":") {
+		return net.JoinHostPort(a, DefaultSSHPort)
+	}
+	return a
 }
 
 var hostname = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)

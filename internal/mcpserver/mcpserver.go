@@ -90,6 +90,7 @@ func New(d Deps) *Server {
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: api.ToolElevate,
 		Description: "Ask for a time-boxed elevation on one or more targets (default 15m, at most 30m). Waits for the approver. " +
+			"'targets' may name groups from list_targets: each stands for its members, and the elevation covers the members it has now. " +
 			"Returns a secret handle: pass it as 'elevation' to run. Never write the handle anywhere other agents can read.",
 	}, s.elevate)
 	return s
@@ -180,9 +181,34 @@ func (s *Server) listTargets(ctx context.Context, req *mcp.CallToolRequest, _ ap
 	}
 	out := api.ListTargetsOut{Targets: []api.TargetInfo{}}
 	for _, t := range s.d.Point.VisibleTargets(p) {
-		out.Targets = append(out.Targets, api.TargetInfo{Name: t.Name, Description: t.Description, Type: t.Type()})
+		out.Targets = append(out.Targets, targetInfo(s.d.Config, p, &t))
 	}
 	return nil, out, nil
+}
+
+// targetInfo is what list_targets says about t (docs/02 §5.2, docs/08
+// D11): its groups, and for an SSH target whether its account has sudo.
+// A group is listed only when the agent may see every member, since
+// elevate refuses any other (decision.Point.Elevate).
+func targetInfo(cfg *config.Config, p *authn.Principal, t *config.Target) api.TargetInfo {
+	ti := api.TargetInfo{Name: t.Name, Description: t.Description, Type: t.Type()}
+	for _, name := range cfg.GroupsOf(t.Name) {
+		g, _ := cfg.GroupByName(name)
+		usable := true
+		for _, m := range g.Targets {
+			if mt, ok := cfg.TargetByName(m); !ok || !mt.Visible(p.Human, p.ClientID) {
+				usable = false
+			}
+		}
+		if usable {
+			ti.Groups = append(ti.Groups, name)
+		}
+	}
+	if t.SSH != nil {
+		sudo := t.SSH.Sudo
+		ti.Sudo = &sudo
+	}
+	return ti
 }
 
 func validateRun(in api.RunIn, ssh bool) (time.Duration, error) {

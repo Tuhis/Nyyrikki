@@ -6,9 +6,11 @@
 {{- range .Values.targets -}}
 {{- if .ssh -}}
 {{- /* An SSH target (docs/07 §5.5): its host keys come from the setup script's output. */ -}}
+{{- /* The address may omit the port (22), and sudo left unset takes ssh.defaults.sudo (docs/08 D11). */ -}}
 {{- $s := dict "address" (required (printf "targets[%s].ssh.address is required" .name) .ssh.address)
   "host_keys" (.ssh.hostKeys | default list) "host_cas" (.ssh.hostCAs | default list)
-  "sudo" (.ssh.sudo | default false) "session_kill" (.ssh.sessionKill | default false) -}}
+  "session_kill" (.ssh.sessionKill | default false) -}}
+{{- if and (hasKey .ssh "sudo") (not (kindIs "invalid" .ssh.sudo)) }}{{- $_ := set $s "sudo" .ssh.sudo -}}{{- end -}}
 {{- $t := dict "name" .name "description" (.description | default "") "humans" (list $.Values.human.id) "ssh" $s -}}
 {{- if .clients }}{{- $_ := set $t "clients" .clients -}}{{- end -}}
 {{- $targets = append $targets $t -}}
@@ -45,6 +47,7 @@
     "kubernetes" (dict "user" (required "human.kubernetes.user is required" .Values.human.kubernetes.user) "groups" .Values.human.kubernetes.groups)
     "telegram_user_id" (required "human.telegramUserID is required" .Values.human.telegramUserID | int64)))
   "targets" $targets
+  "groups" (.Values.groups | default list)
   "telegram" (dict "bot_token_file" "/etc/nyyrikki/telegram/bot-token" "api_url" .Values.telegram.apiURL)
 -}}
 {{- if eq (include "nyyrikki.hasSSH" .) "true" -}}
@@ -54,7 +57,10 @@
   "user_ca_key_file" "/etc/nyyrikki/ssh/user-ca"
   "user_ca_public_keys" .Values.ssh.userCAPublicKeys
   "source_addresses" .Values.ssh.sourceAddresses
-  "connect_timeout" .Values.ssh.connectTimeout) -}}
+  "connect_timeout" .Values.ssh.connectTimeout
+  "host_cas" (.Values.ssh.hostCAs | default list)
+  "revoked_host_keys" (.Values.ssh.revokedHostKeys | default list)
+  "defaults" (dict "sudo" (dig "defaults" "sudo" false .Values.ssh))) -}}
 {{- end -}}
 apiVersion: v1
 kind: ConfigMap

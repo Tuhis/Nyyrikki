@@ -27,6 +27,8 @@ type Config struct {
 	Run      Run      `yaml:"run"`
 	Humans   []Human  `yaml:"humans"`
 	Targets  []Target `yaml:"targets"`
+	// Groups name sets of targets for elevate (docs/08 D11).
+	Groups   []Group  `yaml:"groups"`
 	Telegram Telegram `yaml:"telegram"`
 	SSH      SSH      `yaml:"ssh"`
 }
@@ -106,9 +108,18 @@ const (
 	typeSSH        = "ssh"
 )
 
+// Group is a named set of targets of any type (docs/08 D11). It only
+// names the targets of an elevation: elevate expands it into its members
+// on the server, and the elevation covers that fixed list.
+type Group struct {
+	Name    string   `yaml:"name"`
+	Targets []string `yaml:"targets"`
+}
+
 // SSHTarget says how to reach an SSH host (docs/07 §5.5).
 type SSHTarget struct {
-	// Address is host:port.
+	// Address is host:port. The file may omit the port; Parse adds the
+	// default, 22, so every consumer sees host:port (docs/08 D11).
 	Address string `yaml:"address"`
 	// HostKeys are pinned host public keys, authorized_keys format
 	// (docs/07 D8).
@@ -117,8 +128,12 @@ type SSHTarget struct {
 	// accepted (docs/07 D8).
 	HostCAs []string `yaml:"host_cas"`
 	// Sudo states that the host gives the human's account passwordless
-	// sudo (docs/07 D7, D12).
-	Sudo bool `yaml:"sudo"`
+	// sudo (docs/07 D7, D12). It is the resolved value: SudoSet when the
+	// file sets it, else ssh.defaults.sudo (docs/08 D11). Parse fills it
+	// in; nothing reads SudoSet after that.
+	Sudo bool `yaml:"-"`
+	// SudoSet is sudo as the file wrote it; nil when unset.
+	SudoSet *bool `yaml:"sudo"`
 	// SessionKill states that the host ends a cut session's processes,
 	// as its setup reported (docs/07 D11, D12).
 	SessionKill bool `yaml:"session_kill"`
@@ -135,6 +150,22 @@ type SSH struct {
 	// SourceAddresses are Nyyrikki's egress CIDRs (docs/07 D4, D5).
 	SourceAddresses []string `yaml:"source_addresses"`
 	ConnectTimeout  Duration `yaml:"connect_timeout"`
+	// HostCAs are host CA public keys trusted for every SSH target, in
+	// addition to each target's own host_cas (docs/08 D9).
+	HostCAs []string `yaml:"host_cas"`
+	// RevokedHostKeys are host keys and host CA keys that are never
+	// trusted: a host presenting one, or a certificate of or by one, is
+	// refused (docs/08 D9).
+	RevokedHostKeys []string `yaml:"revoked_host_keys"`
+	// Defaults apply to SSH targets that don't set the value
+	// (docs/08 D11).
+	Defaults SSHDefaults `yaml:"defaults"`
+}
+
+// SSHDefaults are the values an SSH target takes when it doesn't set
+// them (docs/08 D11).
+type SSHDefaults struct {
+	Sudo bool `yaml:"sudo"`
 }
 
 // SSHAccount is the account of human on SSH hosts (docs/07 D3). It is
@@ -233,10 +264,30 @@ func Parse(b []byte) (*Config, error) {
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, errors.New("config: more than one YAML document")
 	}
+	c.resolve()
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// resolve applies the defaults that depend on other values, once, so
+// that every consumer sees the resolved form (docs/08 D11): an SSH
+// address without a port gets 22, and an SSH target that doesn't set
+// sudo takes ssh.defaults.sudo.
+func (c *Config) resolve() {
+	for i := range c.Targets {
+		s := c.Targets[i].SSH
+		if s == nil {
+			continue
+		}
+		s.Address = withDefaultPort(s.Address)
+		if s.SudoSet != nil {
+			s.Sudo = *s.SudoSet
+		} else {
+			s.Sudo = c.SSH.Defaults.Sudo
+		}
+	}
 }
 
 // Defaults returns a Config holding every default value.
@@ -338,6 +389,11 @@ func (c *Config) Validate() error {
 	if len(c.Targets) == 0 {
 		bad("targets must have at least one entry")
 	}
+	// Group and target names share one namespace (docs/08 D11).
+	names := map[string]bool{}
+	for _, t := range c.Targets {
+		names[t.Name] = true
+	}
 	targets := map[string]bool{}
 	for i, t := range c.Targets {
 		if !IsSlug(t.Name) {
@@ -367,6 +423,9 @@ func (c *Config) Validate() error {
 			for _, e := range validateSSHTarget(t.SSH) {
 				bad("targets[%d].ssh: %v", i, e)
 			}
+			for _, e := range checkRevokedPins(t.SSH, c.SSH.RevokedHostKeys) {
+				bad("targets[%d].ssh: %v", i, e)
+			}
 			continue
 		}
 		k := t.Kubernetes
@@ -381,6 +440,32 @@ func (c *Config) Validate() error {
 			if k.CAFile == "" || k.TokenFile == "" {
 				bad("targets[%d].kubernetes needs ca_file and token_file", i)
 			}
+		}
+	}
+	groups := map[string]bool{}
+	for i, g := range c.Groups {
+		if !IsSlug(g.Name) {
+			bad("groups[%d].name must be a slug", i)
+		}
+		if names[g.Name] {
+			bad("groups[%d].name %q is also the name of a target", i, g.Name)
+		}
+		if groups[g.Name] {
+			bad("groups[%d].name %q is duplicated", i, g.Name)
+		}
+		groups[g.Name] = true
+		if len(g.Targets) == 0 {
+			bad("groups[%d].targets is required", i)
+		}
+		members := map[string]bool{}
+		for _, m := range g.Targets {
+			if !names[m] {
+				bad("groups[%d].targets names unknown target %q", i, m)
+			}
+			if members[m] {
+				bad("groups[%d].targets names %q twice", i, m)
+			}
+			members[m] = true
 		}
 	}
 	if c.hasSSH() {
@@ -404,7 +489,8 @@ func (c *Config) hasSSH() bool {
 
 // reflectZeroSSH reports whether s holds only defaults.
 func reflectZeroSSH(s *SSH) bool {
-	return s.UserCAKeyFile == "" && len(s.UserCAPublicKeys) == 0 && len(s.SourceAddresses) == 0
+	return s.UserCAKeyFile == "" && len(s.UserCAPublicKeys) == 0 && len(s.SourceAddresses) == 0 &&
+		len(s.HostCAs) == 0 && len(s.RevokedHostKeys) == 0 && s.Defaults == (SSHDefaults{})
 }
 
 // MCPURL is the canonical URL of /mcp.
@@ -442,6 +528,28 @@ func (t *Target) Visible(human, client string) bool {
 		return false
 	}
 	return len(t.Clients) == 0 || contains(t.Clients, client)
+}
+
+// GroupByName returns the group named name.
+func (c *Config) GroupByName(name string) (*Group, bool) {
+	for i := range c.Groups {
+		if c.Groups[i].Name == name {
+			return &c.Groups[i], true
+		}
+	}
+	return nil, false
+}
+
+// GroupsOf returns the names of the groups that contain target, in
+// config order.
+func (c *Config) GroupsOf(target string) []string {
+	var out []string
+	for _, g := range c.Groups {
+		if contains(g.Targets, target) {
+			out = append(out, g.Name)
+		}
+	}
+	return out
 }
 
 // TargetByName returns the target named name.

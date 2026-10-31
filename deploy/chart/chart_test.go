@@ -343,3 +343,62 @@ func TestChartSSHNotes(t *testing.T) {
 		t.Fatalf("NOTES don't say runs wait for host keys:\n%s", out)
 	}
 }
+
+// TestChartSSHDefaultsAndGroups covers docs/08 D11 and D9's config
+// (G10): ssh.defaults.sudo, ssh.hostCAs, ssh.revokedHostKeys and groups
+// reach the binary's parsed config; a target's sudo, when set, false
+// included, wins over the default; an address without a port gets 22.
+func TestChartSSHDefaultsAndGroups(t *testing.T) {
+	const hostCA = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y org-ca"
+	const revoked = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA1pOqjN/QGjUaHqnHAzBVwdRxUIgpdl7Py1pOPRn1Ch old-host"
+	objs := render(t, append(sshSet,
+		"--set", "targets[2].ssh.sudo=null",
+		"--set", "targets[3].name=web-1", "--set", "targets[3].ssh.address=web-1.internal", "--set", "targets[3].ssh.sudo=false",
+		"--set", "targets[4].name=web-2", "--set", "targets[4].ssh.address=web-2.internal",
+		"--set", "ssh.defaults.sudo=true",
+		"--set", "ssh.hostCAs[0]="+hostCA, "--set", "ssh.revokedHostKeys[0]="+revoked,
+		"--set", "groups[0].name=web", "--set", "groups[0].targets={web-1,web-2}",
+		"--set", "groups[1].name=all", "--set", "groups[1].targets={this-cluster,db-1,web-1}")...)
+	src := kind(objs, "ConfigMap")[0]["data"].(map[string]any)["config.yaml"].(string)
+	c, err := config.Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("config refused: %v\n%s", err, src)
+	}
+	for name, want := range map[string]bool{"db-1": true, "web-1": false, "web-2": true} {
+		tg, ok := c.TargetByName(name)
+		if !ok || tg.SSH.Sudo != want {
+			t.Errorf("%s: sudo %v, want %v", name, tg.SSH.Sudo, want)
+		}
+	}
+	if w, _ := c.TargetByName("web-1"); w.SSH.Address != "web-1.internal:22" {
+		t.Errorf("web-1 address %q", w.SSH.Address)
+	}
+	if !c.SSH.Defaults.Sudo || len(c.SSH.HostCAs) != 1 || c.SSH.HostCAs[0] != hostCA || len(c.SSH.RevokedHostKeys) != 1 || c.SSH.RevokedHostKeys[0] != revoked {
+		t.Fatalf("ssh %+v", c.SSH)
+	}
+	web, ok := c.GroupByName("web")
+	all, ok2 := c.GroupByName("all")
+	if !ok || !ok2 || strings.Join(web.Targets, ",") != "web-1,web-2" || strings.Join(all.Targets, ",") != "this-cluster,db-1,web-1" {
+		t.Fatalf("groups %+v", c.Groups)
+	}
+
+	// Without the new values, nothing changes: the default is false.
+	objs = render(t, append(sshSet, "--set", "targets[2].ssh.sudo=null")...)
+	c, err = config.Parse([]byte(kind(objs, "ConfigMap")[0]["data"].(map[string]any)["config.yaml"].(string)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if db, _ := c.TargetByName("db-1"); db.SSH.Sudo || len(c.Groups) != 0 || len(c.SSH.HostCAs) != 0 {
+		t.Fatalf("defaults: sudo %v, groups %v", db.SSH.Sudo, c.Groups)
+	}
+}
+
+// TestChartGroupUnknownTarget: a group naming a target that doesn't
+// exist renders, and nyyrikkid refuses the config (docs/08 D11).
+func TestChartGroupUnknownTarget(t *testing.T) {
+	objs := render(t, "--set", "groups[0].name=g", "--set", "groups[0].targets={nope}")
+	src := kind(objs, "ConfigMap")[0]["data"].(map[string]any)["config.yaml"].(string)
+	if _, err := config.Parse([]byte(src)); err == nil || !strings.Contains(err.Error(), "unknown target") {
+		t.Fatalf("a group naming an unknown target: %v", err)
+	}
+}

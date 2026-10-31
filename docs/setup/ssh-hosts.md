@@ -50,13 +50,19 @@ NetworkPolicies that keep agent pods off the hosts' SSH port.
        description: Primary database host
        humans: [owner]
        ssh:
-         address: db-1.example.com:22
+         address: db-1.example.com   # port 22 unless given as host:port
          host_keys: []
          host_cas: []
-         sudo: true
+         sudo: true                  # unset: ssh.defaults.sudo (false)
    ```
 
-   Runs on the target are refused until its host keys are pinned.
+   Runs on the target are refused until its host keys are pinned, or
+   until it presents a host certificate from its `host_cas` or the
+   shared `ssh.host_cas`. A key listed in `ssh.revoked_host_keys` is
+   never trusted. To elevate on several hosts at once, name them in a
+   top-level `groups` entry (`- name: web`, `targets: [web-1, web-2]`);
+   an elevation asked for a group covers the members it has at that
+   moment.
 2. On the host, run the setup command (next section).
 3. Copy the `host_keys` and `session_kill` it prints into the target's
    `ssh` block and roll out again.

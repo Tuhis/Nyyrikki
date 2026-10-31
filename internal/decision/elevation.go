@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -89,15 +90,16 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 		}
 		return nil, p.deny(ctx, rec, err)
 	}
-	targets := slices.Clone(r.Targets)
-	slices.Sort(targets)
-	targets = slices.Compact(targets)
+	targets, groups, err := p.expandTargets(pr, r.Targets)
+	for _, g := range groups {
+		rec.TargetGroups = append(rec.TargetGroups, g.Name)
+	}
+	if err != nil {
+		return nil, p.deny(ctx, rec, err)
+	}
 	var hosts []approval.SSHHost
 	for _, name := range targets {
-		t, ok := p.cfg.TargetByName(name)
-		if !ok || !t.Visible(pr.Human, pr.ClientID) {
-			return nil, p.deny(ctx, rec, codes.New(codes.TargetNotAllowed, "no such target, or not available to this agent"))
-		}
+		t, _ := p.cfg.TargetByName(name) // expandTargets checked it
 		if hh := sshHost(t, RunAs(h, t).User); hh != nil {
 			hosts = append(hosts, *hh)
 		}
@@ -108,7 +110,7 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 	rec.ApprovalID = id
 	expires := p.now().Add(p.cfg.Approval.Timeout.D())
 	prompt := approval.ElevationPrompt{
-		ID: id, ApproverID: h.TelegramUserID, Targets: targets, Duration: dur,
+		ID: id, ApproverID: h.TelegramUserID, Targets: targets, Groups: groups, Duration: dur,
 		RunAs:  approval.Identity{User: h.Kubernetes.User, Groups: h.Kubernetes.Groups},
 		SSH:    hosts,
 		Agent:  approval.Agent{ClientName: pr.ClientID, KeyShort: p.audit.AgentHash(pr.AgentKey), SignedInAt: pr.SignedInAt},
@@ -129,6 +131,67 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 		return nil, p.deny(ctx, rec, stateError(state))
 	}
 	return p.deliverElevation(ctx, id, rec, targets)
+}
+
+// expandTargets turns the names an elevate asked for into the fixed,
+// sorted list of targets the elevation covers (docs/08 D11). A group
+// name is replaced by its members; the elevation stores only the
+// members, so a later change to the group can't widen it (INV-03). A
+// name that is neither a target nor a group, or a target this agent may
+// not see, is target_not_allowed, as before (docs/02 D5); so is a group
+// none of whose members it may see, which then answers as a name that
+// doesn't exist. A group only some of whose members it may see is
+// invalid_request: every target must be visible. More than MaxTargets
+// after expansion is invalid_request too. groups lists each group
+// named, once, by name, with its members sorted.
+func (p *Point) expandTargets(pr *authn.Principal, names []string) (targets []string, groups []approval.TargetGroup, err error) {
+	notAllowed := codes.New(codes.TargetNotAllowed, "no such target, or not available to this agent")
+	visible := func(name string) bool {
+		t, ok := p.cfg.TargetByName(name)
+		return ok && t.Visible(pr.Human, pr.ClientID)
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		g, isGroup := p.cfg.GroupByName(name)
+		if !isGroup {
+			if !visible(name) {
+				return nil, groups, notAllowed
+			}
+			targets = append(targets, name)
+			continue
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		n := 0
+		for _, m := range g.Targets {
+			if visible(m) {
+				n++
+			}
+		}
+		groups = append(groups, approval.TargetGroup{Name: g.Name, Targets: sortedUnique(g.Targets)})
+		switch {
+		case n == 0:
+			return nil, groups, notAllowed
+		case n < len(g.Targets):
+			return nil, groups, codes.New(codes.InvalidRequest,
+				"group %s includes targets not available to this agent; name the targets you need instead", g.Name)
+		}
+		targets = append(targets, g.Targets...)
+	}
+	targets = sortedUnique(targets)
+	if len(targets) > MaxTargets {
+		return nil, groups, codes.New(codes.InvalidRequest, "the targets and groups named come to %d targets; an elevation covers at most %d", len(targets), MaxTargets)
+	}
+	slices.SortFunc(groups, func(a, b approval.TargetGroup) int { return strings.Compare(a.Name, b.Name) })
+	return targets, groups, nil
+}
+
+func sortedUnique(xs []string) []string {
+	out := slices.Clone(xs)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // deliverElevation hands an approved elevation to the call that asked for

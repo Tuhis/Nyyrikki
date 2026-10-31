@@ -263,17 +263,20 @@ func renderSSHRun(p approval.RunPrompt) string {
 
 // renderElevation renders the elevation prompt of docs/05 D7. Each SSH
 // target gets its own line, saying whether the window is one of root
-// there (docs/07 D12).
+// there (docs/07 D12). Every target is listed, and each group the agent
+// named gets a line with its members (docs/08 D11): the approver sees
+// what the elevation covers, not just a group's name.
 func renderElevation(p approval.ElevationPrompt) string {
 	var sb strings.Builder
 	sb.WriteString("<b>Elevation request</b>\n<b>Targets:</b> ")
-	for i, t := range p.Targets {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-		sb.WriteString(code(t))
+	codeList(&sb, p.Targets)
+	sb.WriteString("\n")
+	for _, g := range p.Groups {
+		sb.WriteString("<b>Group</b> " + code(g.Name) + " = ")
+		codeList(&sb, g.Targets)
+		sb.WriteString("\n")
 	}
-	sb.WriteString("\n<b>Duration:</b> " + duration(p.Duration) + "\n")
+	sb.WriteString("<b>Duration:</b> " + duration(p.Duration) + "\n")
 	if len(p.SSH) < len(p.Targets) {
 		renderRunAs(&sb, p.RunAs)
 	}
@@ -292,6 +295,16 @@ func renderElevation(p approval.ElevationPrompt) string {
 	renderReason(&sb, p.Reason)
 	sb.WriteString("\n<b>Answer by:</b> " + clock(p.ExpiresAt) + " UTC")
 	return sb.String()
+}
+
+// codeList writes xs as a comma-separated list of <code> items.
+func codeList(sb *strings.Builder, xs []string) {
+	for i, x := range xs {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(code(x))
+	}
 }
 
 func duration(d time.Duration) string {
