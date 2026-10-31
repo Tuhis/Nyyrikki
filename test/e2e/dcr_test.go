@@ -748,8 +748,21 @@ func (e *env) checkOfflineCLI(t *testing.T) {
 		t.Fatalf("CLI offline refresh: jkt %v -> %v, refresh token %v", jkt0, jkt(at1), claims(lf["refresh_token"].(string))["typ"])
 	}
 
-	// Ending the owner's browser sessions leaves it working.
+	// Ending the owner's browser sessions leaves it working. The device
+	// grant's own browser session may not outlast the offline sign-in
+	// (logged for M9), so the owner signs in to a harness in a browser too.
 	users := "/admin/realms/" + realm + "/users/" + e.ownerID
+	t.Logf("M9 OD18: online sessions after an offline CLI login: %s", e.admin(t, "GET", users+"/sessions", nil))
+	code, out := e.register(t, map[string]any{
+		"client_name": "online harness", "redirect_uris": []string{loopback},
+		"grant_types": []string{"authorization_code", "refresh_token"}, "response_types": []string{"code"},
+		"token_endpoint_auth_method": "none", "scope": "nyyrikki",
+	})
+	if id, _ := out["client_id"].(string); code != http.StatusCreated || id == "" {
+		t.Fatalf("registering a harness: %d %v", code, redact(out))
+	} else {
+		e.newBrowser().signIn(t, id)
+	}
 	var online []struct{ ID string }
 	json.Unmarshal(e.admin(t, "GET", users+"/sessions", nil), &online)
 	if len(online) == 0 {
