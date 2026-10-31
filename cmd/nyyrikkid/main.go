@@ -13,6 +13,7 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/config"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl"
 	"github.com/Tuhis/Nyyrikki/internal/server"
+	"github.com/Tuhis/Nyyrikki/internal/sshcacmd"
 )
 
 // version is set at build time with -ldflags "-X main.version=…".
@@ -23,6 +24,12 @@ func main() {
 	// own process (docs/04 D6).
 	if len(os.Args) > 1 && os.Args[1] == "kubectl-child" {
 		os.Exit(kubectl.ChildMain(os.Args[2:]))
+	}
+	// The SSH CA helper (docs/08 D2), an administrator's tool, and the
+	// chart's CA hook and CronJobs (D16). Without a subcommand, the
+	// server runs.
+	if len(os.Args) > 1 && os.Args[1] == "ssh-ca" {
+		os.Exit(sshcacmd.Main(os.Args[2:], sshcacmd.Env{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Client: sshcacmd.InCluster}))
 	}
 	os.Exit(run())
 }
