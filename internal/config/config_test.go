@@ -106,3 +106,52 @@ func TestStrictnessGaps(t *testing.T) {
 		t.Error("a system: group was accepted")
 	}
 }
+
+func withGroups(t *testing.T, groups string) string {
+	t.Helper()
+	return strings.Replace(valid(t), "telegram:", groups+"telegram:", 1)
+}
+
+// TestGroupsValid covers docs/08 D11 (G10): groups name targets of any
+// type, and GroupsOf lists them per target.
+func TestGroupsValid(t *testing.T) {
+	c, err := Parse([]byte(withGroups(t, "groups:\n  - name: mixed\n    targets: [db-1, prod-k8s]\n  - name: dbs\n    targets: [db-1]\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, ok := c.GroupByName("mixed")
+	if !ok || len(g.Targets) != 2 {
+		t.Fatalf("group %+v", g)
+	}
+	if got := c.GroupsOf("db-1"); len(got) != 2 || got[0] != "mixed" || got[1] != "dbs" {
+		t.Fatalf("GroupsOf(db-1) = %v", got)
+	}
+	if got := c.GroupsOf("lab"); len(got) != 0 {
+		t.Fatalf("GroupsOf(lab) = %v", got)
+	}
+	if _, ok := c.GroupByName("db-1"); ok {
+		t.Fatal("a target found as a group")
+	}
+}
+
+// TestGroupsInvalid covers docs/08 D11 (G10): a name shared by a group
+// and a target, a duplicated group, a group naming an unknown target, an
+// empty group and a malformed name are refused.
+func TestGroupsInvalid(t *testing.T) {
+	for name, groups := range map[string]string{
+		"same name as a target": "groups:\n  - name: lab\n    targets: [db-1]\n",
+		"duplicated":            "groups:\n  - name: g\n    targets: [db-1]\n  - name: g\n    targets: [lab]\n",
+		"unknown target":        "groups:\n  - name: g\n    targets: [db-1, db-2]\n",
+		"group in a group":      "groups:\n  - name: a\n    targets: [db-1]\n  - name: b\n    targets: [a]\n",
+		"empty":                 "groups:\n  - name: g\n    targets: []\n",
+		"member twice":          "groups:\n  - name: g\n    targets: [db-1, db-1]\n",
+		"bad name":              "groups:\n  - name: Web_1\n    targets: [db-1]\n",
+		"unknown field":         "groups:\n  - name: g\n    targets: [db-1]\n    humans: [owner]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(withGroups(t, groups))); err == nil {
+				t.Fatal("accepted")
+			}
+		})
+	}
+}
