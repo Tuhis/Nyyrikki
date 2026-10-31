@@ -134,8 +134,10 @@ Commands:
 
   stage, promote, unstage and add-host-ca refuse a Secret without the label
   nyyrikki.dev/component=ssh-ca, or with data keys other than user-ca,
-  user-ca-next and host-ca. Their output keeps only apiVersion, kind,
-  metadata.name, metadata.namespace, type and data.
+  user-ca-next and host-ca. Their output keeps apiVersion, kind,
+  metadata.name, metadata.namespace, the labels, the annotations (minus
+  kubectl's last-applied one, which holds a copy of the keys), the
+  resourceVersion read, type and data: what "kubectl replace -f -" needs.
 
   --in-cluster (with --name, and --namespace defaulting to the pod's):
   read the Secret through the Kubernetes API, apply the command, and
@@ -272,7 +274,7 @@ func initManifest(env Env, name, namespace, release string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeManifest(env.Stdout, newSecret(name, namespace, release, data), true); err != nil {
+	if err := writeManifest(env.Stdout, newSecret(name, namespace, release, data)); err != nil {
 		return err
 	}
 	fmt.Fprint(env.Stderr, fps)
@@ -332,7 +334,7 @@ func importManifest(env Env, key, name, namespace, release string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeManifest(env.Stdout, newSecret(name, namespace, release, data), true); err != nil {
+	if err := writeManifest(env.Stdout, newSecret(name, namespace, release, data)); err != nil {
 		return err
 	}
 	fmt.Fprintf(env.Stderr, "imported %s: %s\n%s", sshca.KeyUserCA, ssh.FingerprintSHA256(s.PublicKey()), fps)
@@ -348,7 +350,7 @@ func updateManifest(env Env, cmd string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeManifest(env.Stdout, s, true); err != nil {
+	if err := writeManifest(env.Stdout, s); err != nil {
 		return err
 	}
 	fmt.Fprint(env.Stderr, msg)
@@ -538,25 +540,23 @@ type manifestMeta struct {
 // copy of the private keys, so it is never printed.
 const lastApplied = "kubectl.kubernetes.io/last-applied-configuration"
 
-// writeManifest prints s with the allowed fields only: labels and
-// annotations (minus lastApplied) when labelled, and the resourceVersion
+// writeManifest prints s with the allowed fields only: labels,
+// annotations (minus lastApplied), and the resourceVersion
 // read, so the read-modify-write commands can be piped into
 // "kubectl replace -f -" (kubectl apply would keep a data key the command
 // dropped, review of #42).
-func writeManifest(w io.Writer, s *corev1.Secret, labelled bool) error {
+func writeManifest(w io.Writer, s *corev1.Secret) error {
 	m := manifest{APIVersion: "v1", Kind: "Secret", Type: corev1.SecretTypeOpaque, Data: s.Data,
 		Metadata: manifestMeta{Name: s.Name, Namespace: s.Namespace, ResourceVersion: s.ResourceVersion}}
-	if labelled {
-		m.Metadata.Labels = s.Labels
-		for k, v := range s.Annotations {
-			if k == lastApplied {
-				continue
-			}
-			if m.Metadata.Annotations == nil {
-				m.Metadata.Annotations = map[string]string{}
-			}
-			m.Metadata.Annotations[k] = v
+	m.Metadata.Labels = s.Labels
+	for k, v := range s.Annotations {
+		if k == lastApplied {
+			continue
 		}
+		if m.Metadata.Annotations == nil {
+			m.Metadata.Annotations = map[string]string{}
+		}
+		m.Metadata.Annotations[k] = v
 	}
 	b, err := yaml.Marshal(m)
 	if err != nil {

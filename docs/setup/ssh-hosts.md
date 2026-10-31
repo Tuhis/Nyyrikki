@@ -43,6 +43,16 @@ Rendering the chart without Helm (`helm template | kubectl apply`,
 Kustomize's `helmCharts`) also needs `ssh.generateCA: false`: the hook
 would become a plain Job, and its namespace-wide grant would stay.
 
+The install hook's ServiceAccount may create any Secret in the namespace
+while the hook runs, and Helm deletes it afterwards. If an install was
+interrupted or timed out while the hook ran, or the release was
+uninstalled, check that nothing is left, and delete what is:
+
+```sh
+kubectl -n nyyrikki get serviceaccount,role,rolebinding <release>-ssh-ca-init
+kubectl -n nyyrikki delete serviceaccount,role,rolebinding <release>-ssh-ca-init
+```
+
 **Upgrading from an R10 release** that has `nyyrikki-ssh-user-ca`: set
 `secrets.sshUserCA.name: nyyrikki-ssh-user-ca` in the values (it no
 longer has a default), and migrate as `NOTES.txt` says, in this order
