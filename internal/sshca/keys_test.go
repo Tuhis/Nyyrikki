@@ -287,3 +287,33 @@ func TestCAKeysWarnDerivedExtra(t *testing.T) {
 func newEd25519() (ed25519.PublicKey, ed25519.PrivateKey, error) {
 	return ed25519.GenerateKey(rand.Reader)
 }
+
+// A staged user-ca-next that is revoked is dropped from Trusted and
+// Signers, and warned about once, so the operator sees it before a promote
+// makes every run user_ca_revoked (round 1 of #42).
+func TestCAKeysWarnRevokedNext(t *testing.T) {
+	dir := t.TempDir()
+	user := newKey(t, dir, KeyUserCA)
+	next := newKey(t, dir, KeyNextUserCA)
+	a := &recAudit{}
+	var logs bytes.Buffer
+	k := New(Options{Files: Files{UserCA: user.file, NextUserCA: next.file}, Revoked: []ssh.PublicKey{next.pub},
+		Audit: a, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	for range 2 {
+		s, err := k.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(s.Trusted()) != 1 || len(s.Signers()) != 1 {
+			t.Fatalf("revoked next still trusted: %d %d", len(s.Trusted()), len(s.Signers()))
+		}
+	}
+	fp := ssh.FingerprintSHA256(next.pub)
+	if len(a.recs) != 1 || a.recs[0].Kind != codes.KindSSHCAWarning || !strings.Contains(a.recs[0].Detail, fp) ||
+		!strings.Contains(a.recs[0].Detail, "revoked") {
+		t.Fatalf("audit %+v", a.recs)
+	}
+	if !strings.Contains(logs.String(), fp) {
+		t.Fatalf("not logged: %s", logs.String())
+	}
+}

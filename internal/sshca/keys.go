@@ -106,15 +106,7 @@ func (s *Set) Signers() []ssh.PublicKey { return append([]ssh.PublicKey(nil), s.
 // Load reads every key file. Any failure is a *codes.Error with
 // codes.Unavailable; nothing in it holds key material.
 func (k *Keys) Load() (*Set, error) {
-	user, err := readKey(k.o.Files.UserCA, false, "the SSH user CA key (user-ca) is unavailable")
-	if err != nil {
-		return nil, err
-	}
-	next, err := readKey(k.o.Files.NextUserCA, true, "the staged SSH user CA key (user-ca-next) is unavailable")
-	if err != nil {
-		return nil, err
-	}
-	host, err := readKey(k.o.Files.HostCA, true, "the SSH host CA key (host-ca) is unavailable")
+	user, next, host, err := k.readConsistent()
 	if err != nil {
 		return nil, err
 	}
@@ -132,6 +124,10 @@ func (k *Keys) Load() (*Set, error) {
 			s.signers = append(s.signers, p)
 		}
 	}
+	var warnings []string
+	if next != nil && contains(k.o.Revoked, next.PublicKey()) {
+		warnings = append(warnings, "the staged user-ca-next is listed in ssh.revoked_user_ca_keys: it is not trusted, and a promote would stop every SSH run (user_ca_revoked); unstage it: "+ssh.FingerprintSHA256(next.PublicKey()))
+	}
 	var dups []string
 	for _, p := range append(append([]ssh.PublicKey(nil), derived...), k.o.Extra...) {
 		if contains(k.o.Revoked, p) || contains(s.trusted, p) {
@@ -144,35 +140,82 @@ func (k *Keys) Load() (*Set, error) {
 			dups = append(dups, ssh.FingerprintSHA256(p))
 		}
 	}
-	k.warnDerived(dups)
+	if len(dups) > 0 {
+		warnings = append(warnings, "ssh.user_ca_public_keys lists a key derived from user-ca or user-ca-next; remove it, or it stays trusted after a promote: "+strings.Join(dups, ","))
+	}
+	k.warn(warnings)
 	return s, nil
 }
 
-// warnDerived logs and audits the warning of docs/08 D14 once per change:
-// an extra key equal to a derived one stays trusted after a promote.
-func (k *Keys) warnDerived(dups []string) {
-	key := strings.Join(dups, ",")
+// readConsistent reads the three key files. The kubelet swaps a mounted
+// Secret atomically, but three reads can straddle a swap (a promote
+// between them would pair the old user-ca with no user-ca-next), so
+// user-ca is read again at the end and the whole read retried if it
+// changed (round 1 of #42). Either outcome fails closed; this only keeps
+// one Load from mixing two versions.
+func (k *Keys) readConsistent() (user, next, host ssh.Signer, err error) {
+	for range 3 {
+		var before []byte
+		if before, err = os.ReadFile(k.o.Files.UserCA); err != nil {
+			before = nil
+		}
+		if user, err = readKey(k.o.Files.UserCA, false, "the SSH user CA key (user-ca) is unavailable"); err != nil {
+			clear(before)
+			return nil, nil, nil, err
+		}
+		if next, err = readKey(k.o.Files.NextUserCA, true, "the staged SSH user CA key (user-ca-next) is unavailable"); err != nil {
+			clear(before)
+			return nil, nil, nil, err
+		}
+		if host, err = readKey(k.o.Files.HostCA, true, "the SSH host CA key (host-ca) is unavailable"); err != nil {
+			clear(before)
+			return nil, nil, nil, err
+		}
+		after, _ := os.ReadFile(k.o.Files.UserCA)
+		same := before != nil && bytes.Equal(before, after)
+		clear(before)
+		clear(after)
+		if same {
+			return user, next, host, nil
+		}
+	}
+	return nil, nil, nil, codes.WithDetail(codes.Unavailable, DetailUnreadable, "the SSH CA keys changed while being read")
+}
+
+// warn logs and audits the warnings of docs/08 D14 (an extra key equal to
+// a derived one) and of a revoked staged key, once per change. The lock
+// covers only the comparison: the audit write, which may take seconds,
+// happens outside it, so SSH runs don't queue behind a slow audit sink
+// (round 1 of #42). Two concurrent loads may both write the same warning.
+func (k *Keys) warn(warnings []string) {
+	key := strings.Join(warnings, "\n")
 	k.mu.Lock()
-	defer k.mu.Unlock()
 	if key == k.warned {
+		k.mu.Unlock()
 		return
 	}
 	if key == "" {
 		k.warned = ""
+		k.mu.Unlock()
 		return
 	}
-	msg := "ssh.user_ca_public_keys lists a key derived from user-ca or user-ca-next; remove it, or it stays trusted after a promote: " + key
-	k.o.Logger.Warn(msg)
-	if k.o.Audit != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := k.o.Audit.Append(ctx, audit.Record{Kind: codes.KindSSHCAWarning, Detail: msg}); err != nil {
-			// A warning, not a decision: retry on the next load.
-			k.o.Logger.Error("audit write of the SSH CA warning failed", "err", err)
-			return
+	k.mu.Unlock()
+	for _, msg := range warnings {
+		k.o.Logger.Warn(msg)
+		if k.o.Audit != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := k.o.Audit.Append(ctx, audit.Record{Kind: codes.KindSSHCAWarning, Detail: msg})
+			cancel()
+			if err != nil {
+				// A warning, not a decision: retry on the next load.
+				k.o.Logger.Error("audit write of the SSH CA warning failed", "err", err)
+				return
+			}
 		}
 	}
+	k.mu.Lock()
 	k.warned = key
+	k.mu.Unlock()
 }
 
 // readKey reads one key file. An optional file that doesn't exist (or
