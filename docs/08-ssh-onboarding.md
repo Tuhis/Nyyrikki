@@ -1,9 +1,9 @@
 # R12 — SSH onboarding and upkeep, made simple (docs/08)
 
 **Status**: drafted 2026-10-31. Owner decisions OD1–OD9 taken the same
-day, in the conversation that asked for this doc. Waiting for approval,
-which is the merge of the PR that adds it. Status lives in
-[`ROADMAP.md`](../ROADMAP.md).
+day, in the conversation that asked for this doc. Approved 2026-10-31,
+when the PR that added it (#40) merged. SE1 implemented 2026-10-31
+(§10). Status lives in [`ROADMAP.md`](../ROADMAP.md).
 
 Chunks **SE1–SE6** (`SE` = SSH ease; unused).
 
@@ -429,9 +429,70 @@ for `host-ca`. SE6 needs SE3 and SE5 for the endpoints its script talks to.
   listed as two targets is enrolled for one and pinned (`host_keys`)
   for the other.
 
-## 10. How it was implemented (YYYY-MM-DD)
+## 10. How it was implemented (2026-10-31)
 
-<!-- Added during implementation. -->
+### SE1 (2026-10-31)
+
+Where SE1 departs from, or settles what §4 left open:
+
+- **An R10-looking release is refused, not guessed at.** `secrets.sshUserCA`
+  had a default name in R10, so an R10 release may never have set it in
+  its values; with the default now empty, such an upgrade would have
+  defaulted `generateCA` to true and switched to a fresh CA no host
+  trusts, the case round 1 of #40 meant to rule out (D14). Every R10
+  release lists its key in `ssh.userCAPublicKeys`, so while `generateCA`
+  is left unset, an SSH target with `userCAPublicKeys` and without
+  `sshUserCA` fails rendering, naming both ways out (set
+  `secrets.sshUserCA.name: nyyrikki-ssh-user-ca`, or set `generateCA`
+  explicitly). `generateCA: true` together with `sshUserCA` fails too.
+  Decided while implementing; the owner may revisit.
+- **The D14 warning** is the audit kind `ssh_ca_warning` (docs/03 §5.1),
+  with the fingerprints in `detail`, logged and audited once each time
+  the set of such keys changes, not on every read. A failed audit write
+  of it doesn't stop the load; it is tried again on the next one.
+  Nyyrikki also reads the keys once at start, only to log early what is
+  wrong.
+- **Errors**: a broken file keeps docs/07's detail `ca_key_unreadable`
+  (for all three files); docs/07's `ca_key_not_listed` is gone with the
+  check it named. `setup.sh` answers `503` with body
+  `unavailable: <detail>`. Config refuses two of the three key paths
+  being the same file.
+- **`ssh-ca` flags**: `--name` (default `nyyrikki-ssh-ca`),
+  `--namespace`, `--release` (the `nyyrikki.dev/release` label, default
+  `nyyrikki`) for `init` and `import`; `import --key`; `init --create`;
+  and `--in-cluster` for the four rotation commands, which gets the
+  Secret, applies the command and updates it with the `resourceVersion`
+  read, so a concurrent change fails the Job. `--create` and
+  `--in-cluster` default the namespace to the pod's. Status
+  (fingerprints, and for `promote` the old public key) goes to stderr in
+  every mode; stdout carries only the manifest. The rotation commands
+  also refuse `stringData`, a type other than `Opaque`, and a key that
+  doesn't parse as an unencrypted ed25519 key; `unstage` alone accepts a
+  broken `user-ca-next`, since removing it is the repair.
+- **Chart objects**: the hook's ServiceAccount, Role, RoleBinding and Job
+  are `<release>-ssh-ca-init`; the CronJobs' ServiceAccount, Role and
+  RoleBinding `<release>-ssh-ca-rotate`. Their pods carry
+  `app.kubernetes.io/name: nyyrikki-ssh-ca`, so the NetworkPolicy of
+  Nyyrikki's pod doesn't select them. The hook Job retries twice
+  (creating is idempotent); a CronJob's Job never retries. They render
+  whatever `rbac.create` says, since the hook can't work without its
+  grant. `ssh.caJobs: true` also renders the CronJobs while
+  `secrets.sshUserCA` is set, acting on `secrets.sshCA.name`. The chart
+  gate validates a second rendering with an SSH target
+  (`ci/ssh-values.yaml`), so the hook and the CronJobs pass kubeconform.
+- **`NOTES.txt`** says that `enroll-token` arrives with enrollment
+  (SE5) instead of printing a command that doesn't exist yet.
+- **G15 on kind** covers the hook creating the Secret with D16's labels
+  on install, the hook's RBAC gone after it, the upgrade, `--force` and
+  `uninstall` leaving it byte for byte. `helm upgrade --force` itself
+  fails on this chart, independently of docs/08: it can't replace the
+  bound PVC, whose spec is immutable. The e2e accepts exactly that
+  failure, which comes after the pre-upgrade hook ran, and checks the
+  Secret anyway. Not yet on kind: an upgrade from
+  an R10 release, a failed hook, a rotation through the CronJobs, and an
+  upgrade adding the first SSH target. Rendering and the commands cover
+  those (`deploy/chart` tests, `TestSSHCACommand*`); SE6 extends the
+  e2e.
 
 ### SE2 (2026-10-31)
 
