@@ -43,7 +43,7 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 | R9 | [Optional response redaction](#r9--optional-response-redaction) | ⏸️ deferred 2026-10-26 (owner decision: future, and optional) |
 | R10 | [SSH target](#r10--ssh-target) | 🔧 implemented 2026-10-30, [docs/07](docs/07-ssh-target.md) approved (#25): SH1–SH6, unit and in-process tests against a fake SSH host, `test/ssh-host` runs the setup script in Debian, Ubuntu and Rocky containers, e2e on kind against an OpenSSH container set up by the served script; open: G12 (a real command on a real host, approved on a real phone, set up with the script), and session kill measured only on Debian (§2 M18). Not in the first version |
 | R11 | [SSH CA hardening](#r11--ssh-ca-hardening) | 💡 proposed 2026-10-29, after R10; the pull of trust material is taken over by R12 (signed in the pod, docs/08 OD3), the external signer stays open |
-| R12 | [SSH onboarding and upkeep](#r12--ssh-onboarding-and-upkeep) | 📝 designing 2026-10-31, [docs/08](docs/08-ssh-onboarding.md) drafted with owner decisions OD1–OD8; waiting for approval |
+| R12 | [SSH onboarding and upkeep](#r12--ssh-onboarding-and-upkeep) | 📝 designing 2026-10-31, [docs/08](docs/08-ssh-onboarding.md) drafted with owner decisions OD1–OD9; waiting for approval |
 
 ## Milestones to the first version
 
@@ -402,7 +402,7 @@ copy.
 rollouts and facts copied back into the values, and every CA rotation,
 revocation or removed human means visiting every host again.
 
-**Scope**: CA keys made with one command and rotated without a rollout,
+**Scope**: CA keys made in the cluster by the chart and rotated without a rollout,
 public keys derived from them; enrollment with one command on the host
 and one tap on Telegram, after which Nyyrikki trusts the host by a
 host certificate it signed, so a target needs only its address; hosts

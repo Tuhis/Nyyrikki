@@ -1,11 +1,15 @@
 # R12 — SSH onboarding and upkeep, made simple (docs/08)
 
-**Status**: drafted 2026-10-31. Owner decisions OD1–OD8 taken the same
+**Status**: drafted 2026-10-31. Owner decisions OD1–OD9 taken the same
 day, in the conversation that asked for this doc. Waiting for approval,
 which is the merge of the PR that adds it. Status lives in
 [`ROADMAP.md`](../ROADMAP.md).
 
 Chunks **SE1–SE6** (`SE` = SSH ease; unused).
+
+*Revised 2026-10-31 (OD9, the same day)*: the chart makes the CA keys in the
+cluster with a one-off hook Job (D16); `nyyrikkid ssh-ca` on the
+administrator's machine stays as the alternative.
 
 **Relationship to earlier work**: builds on [docs/07](07-ssh-target.md)
 (R10) without changing its model. Requests, approvals, the per-run user
@@ -44,8 +48,8 @@ is a chance to stop or get something wrong:
 
 When this ships, a host is brought on board with one command that the
 administrator pastes on the host, and one tap on Telegram. A target in
-the values needs only its name and address. CA keys are made with one
-command, rotated without a rollout, and reach every host that has cron
+the values needs only its name and address. CA keys are made by the
+chart on install, rotated without a rollout, and reach every host that has cron
 on their own within 15 minutes. Anyone who keeps everything in Git can
 still do it all declaratively, and the manual steps stay documented.
 
@@ -85,6 +89,8 @@ and SE6 turn these into tests.
 | M4 | sshd reads `TrustedUserCAKeys`, `RevokedKeys` and the `AuthorizedPrincipalsFile` at each authentication. Replacing the CA file, extending the KRL with `ssh-keygen -k -u`, or changing a principals file takes effect on the next login **without reloading sshd** | Debian 13 (10.0p2): logins with certificates of two CAs before and after each change, sshd never reloaded | Confirmed. D5: the pull never reloads sshd |
 | M5 | OpenSSH 10's `PerSourcePenalties`, on by default, drops new connections from an address for a while after it fails authentication ("drop connection … penalty: failed authentication"). A failed login from Nyyrikki's address makes its next connections to that host fail too, until the penalty runs out | observed while measuring M4, Debian 13 (10.0p2) | Confirmed. D7: the probe tries once per account and stops at the first refusal |
 | M6 | BusyBox `wget` has no option to name a CA file (only `--no-check-certificate`) | `wget --help`, BusyBox 1.36.1 | Confirmed. D5: the pull requires `curl` |
+| M7 | A `pre-install` hook Job that creates a Secret the chart also templates breaks the first install: `INSTALLATION FAILED: secrets "ca" already exists`. Helm checks for existing objects before the hooks run, then creates its own. Once the Secret exists with `meta.helm.sh/release-name` and `-namespace` annotations and `app.kubernetes.io/managed-by: Helm`, later upgrades and reinstalls adopt it | a probe chart on kind (Kubernetes 1.35.0), Helm 3.20.2, 2026-10-31 | Confirmed. D16: the chart doesn't template the Secret |
+| M8 | The other way round, with the chart templating the Secret without `data` and a `post-install,post-upgrade` Job patching keys in (RBAC `get` and `patch` on that one name): the key survives two upgrades, and an uninstall plus reinstall with `helm.sh/resource-policy: keep`. **`helm upgrade --force` replaces the Secret, and the Job then made a new key**: a silent CA change | same probe | Confirmed. D16: rejected, see §4 |
 
 ## 3. Owner decisions
 
@@ -98,13 +104,14 @@ and SE6 turn these into tests.
 | OD6 | Should Nyyrikki contact the host before asking the approver, to read the facts its certificate carries and to fail early on a wrong or unreachable host? | **Yes: a handshake-only host check before every SSH approval and elevation message** (owner, 2026-10-31). It verifies the host key or certificate and disconnects without authenticating. Weighed against keeping `session_kill` as a value copied by hand. |
 | OD7 | How does this land? | **Design doc first, as its own PR. Code follows in chunk PRs once the doc is merged** (owner, 2026-10-31). |
 | OD8 | Config-management support on the host side? | **Documented cloud-init and Ansible snippets**, not a maintained role (owner, 2026-10-31). |
+| OD9 | Must the CA keys still be made outside the cluster? | **No: a one-off `pre-install,pre-upgrade` hook Job makes them in the cluster. The Secret it creates is not part of the Helm release; labels identify it** (owner, 2026-10-31, after M7 and M8). Weighed against the chart templating the Secret and a post-install Job filling it in, which Helm would track, but which `--force` turns into a silent CA change (M8). Helm can't track a Secret a pre-install hook creates (M7). |
 
 ## 4. Decisions
 
 | # | Decision | Why |
 |---|---|---|
 | D1 | **CA keys come from one Secret, mounted whole** at `/etc/nyyrikki/ssh/`, with up to three keys: `user-ca` (required as soon as one SSH target exists), `user-ca-next` (optional, a staged rotation), `host-ca` (optional; it turns on enrollment). Each is an ed25519 OpenSSH private key, read on each use as docs/07 D6 reads `user-ca` today. Their **public keys are derived from them on each use**. Hosts trust `pub(user-ca)`, then `pub(user-ca-next)`, then any keys still listed in `ssh.user_ca_public_keys`, minus any key in `ssh.revoked_user_ca_keys` (D3). `user_ca_public_keys` becomes optional: it holds only extra keys. An optional file that doesn't exist means that feature is absent. A file that exists but can't be read or parsed, or isn't ed25519, makes every SSH run and every `/hosts/` endpoint `unavailable` until it is fixed. | One fact in one place: the public half can't disagree with the private one. A missing optional key only means less is trusted. A broken one could be a half-written rotation, so nothing is served. Because the files are read on each use and the kubelet updates a mounted Secret on its own, a rotation needs no Helm rollout. |
-| D2 | **`nyyrikkid ssh-ca`**, a helper that runs on the administrator's machine, never in the cluster. It reads and writes a Secret manifest on stdin and stdout, and holds no Kubernetes client: `init` prints a new Secret with fresh `user-ca` and `host-ca`; `stage` reads the current Secret and adds a fresh `user-ca-next` (and refuses if one exists); `promote` moves `user-ca-next` to `user-ca`, drops the old key, and prints the old public key to stderr, for `revoked_user_ca_keys` after a leak. Its output keeps only `apiVersion`, `kind`, `metadata.name`, `metadata.namespace`, `type` and `data`. It is used as `docker run --rm -i <image> ssh-ca init \| kubectl apply -f -`, or with `go run ./cmd/nyyrikkid` from a checkout. | Replaces five shell lines, with a temporary directory to clean up, by one pipe. Private keys pass only through a pipe on the administrator's machine, never through a pod's log (docs/01 OD7) or a file. It sits in the server binary because it is an administrator's tool, not the agent's (`CLAUDE.md`, rejected: admin tools on the agent's machine). |
+| D2 | **`nyyrikkid ssh-ca`**, also a helper for the administrator's machine, for anyone who doesn't let the chart make the keys (D16). It reads and writes a Secret manifest on stdin and stdout, and holds no Kubernetes client: `init` prints a new Secret with fresh `user-ca` and `host-ca`; `stage` reads the current Secret and adds a fresh `user-ca-next` (and refuses if one exists); `promote` moves `user-ca-next` to `user-ca`, drops the old key, and prints the old public key to stderr, for `revoked_user_ca_keys` after a leak. Its output keeps only `apiVersion`, `kind`, `metadata.name`, `metadata.namespace`, `type` and `data`. It is used as `docker run --rm -i <image> ssh-ca init \| kubectl apply -f -`, or with `go run ./cmd/nyyrikkid` from a checkout. | Replaces five shell lines, with a temporary directory to clean up, by one pipe. Private keys pass only through a pipe on the administrator's machine, never through a pod's log (docs/01 OD7) or a file. It sits in the server binary because it is an administrator's tool, not the agent's (`CLAUDE.md`, rejected: admin tools on the agent's machine). The in-cluster Job and CronJobs of D16 run the same code. |
 | D3 | **`ssh.revoked_user_ca_keys`** in the values: public keys hosts must refuse. The setup writes them into the KRL, the trust bundle carries them (D4), and the pull adds them to the KRL (D5). If `user-ca` is itself listed, every SSH run is `unavailable` with detail `user_ca_revoked`. | The leak procedure becomes a values change that reaches every host on its own, instead of a visit to each. |
 | D4 | **The trust bundle**: `GET /hosts/<target>/trust` on `:8443`, without authentication, with docs/07 D16's rules (only `GET`; a query string is `400`; anything but an SSH target in the registry is the same `404`). The body is data lines in docs/07 D16's grammar: `TARGET`; one `CA_KEY` per trusted user CA key (D1); one `REVOKED_CA_KEY` per revoked key (D3); one `HUMAN` per human; `SUDO`; `ISSUED=<Unix seconds>`; `END=<count>`. Then the line `NYYRIKKI_SIGNATURE`, then an `SSHSIG` signature (M1) over every byte before that line, made with `user-ca` and namespace `nyyrikki-trust@v1`. Each fetch is audited (`host_trust_served`: target, client address, `ISSUED`, CA key fingerprints). | Hosts can check what they fetch with nothing but `ssh-keygen`, which they already have. A namespaced `SSHSIG` can't be mistaken for a certificate signature, so `user-ca` can sign both safely (OD3). The bundle holds nothing the setup script's data lines don't already hold. |
 | D5 | **The pull**, installed by the setup where it can be (OD2): the script writes `/etc/ssh/nyyrikki/pull.sh` (a fixed part of the setup body, so it is covered by the published checksum) and `/etc/ssh/nyyrikki/pull.conf` (`URL`, `TARGET`, and `CACERT` if `--cacert` was given; the CA file is copied to `/etc/ssh/nyyrikki/server-ca.pem`). It then installs a schedule: if `/etc/cron.d` exists and a `cron` or `crond` that is not BusyBox is installed, `/etc/cron.d/nyyrikki` (no dot in the name, M3; mode 0644) runs it every 15 minutes, at a minute offset taken from the target name; else, if `/etc/periodic/15min` exists and root's crontab runs it, an executable `/etc/periodic/15min/nyyrikki-pull` that calls it; else nothing, and the script reports `pull: none`. The pull needs `curl` (M6); without it, `pull: none`. **What a pull does**: fetch with `curl -fsS --max-time 30` (and `--cacert` if configured); split at `NYYRIKKI_SIGNATURE`; build an allowed-signers file from the CA keys the host trusts now, minus those in its KRL; `ssh-keygen -Y verify` (M1); check every data line as the setup does; require `TARGET` to be this host's and `ISSUED` to be later than the last bundle applied. Then it applies, taking access away first: each `REVOKED_CA_KEY` is added to the KRL (`ssh-keygen -k -u`) and dropped from the trusted keys; the principals file and sudoers file of each listed account that is no longer a `HUMAN` are removed; with `SUDO=false`, every Nyyrikki sudoers file is removed. Last, `user_ca.pub` is replaced by the bundle's `CA_KEY` set. Each file is written to a temporary path and renamed into place. sshd is never reloaded (M4). It **never** creates an account, writes a principals file for a new human, grants sudo, or changes `from=`. When the bundle asks for any of these, it logs "re-run the setup to add …". On any failure it changes nothing, logs through `logger -t nyyrikki` where that exists, and exits non-zero (cron mails root). It records the time and `ISSUED` of the last bundle applied in `/etc/ssh/nyyrikki/pull.state`, which `--status` prints. | Rotation, revocation and removal reach every host with cron within 15 minutes, with no visit (§5.4). Running fixed code that only reads data keeps root on the host out of the pod's reach: fetching and running the served script from cron would hand whoever controls the pod root on every host every 15 minutes, hosts without sudo included. sshd reads all three files at each login (M4), so a reload, and the chance of it failing, is never needed. |
@@ -116,7 +123,8 @@ and SE6 turn these into tests.
 | D11 | **Defaults and groups in config.** A target's `address` may omit the port (`22`). `ssh.defaults.sudo` (default `false`) applies to SSH targets that don't set `sudo`. A new top-level `groups` list, `[{name, targets: [...]}]`, names sets of targets of any type. Group names and target names share one namespace, and config validation refuses a name used twice or a group naming an unknown target. **`elevate` accepts group names** in `targets` and expands them on the server, before validation, into the targets they name. The elevation covers that fixed list, never the group: a later change to the group doesn't widen it (INV-03). `decision.MaxTargets` applies after expansion. Every target must be visible to the human, or the request is `invalid_request`. The elevation message lists every target, with the group's name next to its members. `run` takes target names only. **`list_targets`** returns, per target, `groups` and, for SSH targets, `sudo`. | Ten web hosts, one name. Expanding on the server, and showing what was expanded, keeps "an elevation covers exactly what the approver saw". `sudo` lets an agent pick the right host without trial and error. `session_kill` is the approver's concern and would cost a host check per listing (D10). |
 | D12 | **`nyyrikki ssh TARGET [-- ARGS...]`** in the CLI: exactly `nyyrikki run -t TARGET` when given no arguments and stdin is a terminal, and `nyyrikki run TARGET -- ARGS...` otherwise. It refuses a target whose type isn't `ssh` before calling `run`. The MCP tools don't change. | Reads like the `ssh` an agent already knows. It is sugar over the same `run` call, so the CLI offers nothing MCP doesn't (`CLAUDE.md`: thin clients of one API). |
 | D13 | **Setup script changes** (docs/07 §5.7): new data lines `URL` (the canonical URL; `https://` and the characters of a URL only) and `REVOKED_CA_KEY`. New options: `--cacert FILE` (stored for the pull), `--enroll TOKEN` (D7), `--status` (prints what is installed, the pull schedule and the last pull; changes nothing). Step 2 also adds each `REVOKED_CA_KEY` to an existing KRL. Step 3 writes the KRL with them included. A new step 8, after session kill, installs the pull (D5). Step 9 prints what it did, adding `pull: cron.d \| periodic \| none`. If `--enroll` was given, step 10 enrolls (D7). A failed enrollment doesn't roll back steps 2–9: the host is set up and fails closed without a certificate, as a host with empty pins does today. The script exits non-zero and says to run it again with a new token. `--uninstall` also removes the schedule, `pull.sh`, `pull.conf`, `pull.state`, `server-ca.pem`, the host certificate and its `HostCertificate` line. | Every rule of docs/07 §5.7 holds: refuse rather than guess, fail closed at every step, roll back what the run changed. Enrollment comes last because it waits on a person, and the host needs nothing from it to be safe. |
-| D14 | **Chart**: `secrets.sshCA.name` (default `nyyrikki-ssh-ca`) is mounted whole at `/etc/nyyrikki/ssh/`, and the config points at `user-ca`, `user-ca-next` and `host-ca` there. For one minor release, the old `secrets.sshUserCA.{name,key}`, when set, is mounted as `user-ca` instead, and `NOTES.txt` says to move to `secrets.sshCA`. New values map one to one onto D1, D3, D8, D9 and D11's config: `ssh.revokedUserCAKeys`, `ssh.hostCAs`, `ssh.revokedHostKeys`, `ssh.hostCertValidity`, `ssh.defaults.sudo`, `groups`. `NOTES.txt` prints, per SSH target, the `enroll-token` command when `host-ca` is in use, and otherwise the setup command as today. | Rotation edits the Secret, not the values (D1). The chart test checks that every value reaches the binary (docs/06). |
+| D14 | **Chart**: `secrets.sshCA.name` (default `nyyrikki-ssh-ca`) is mounted whole at `/etc/nyyrikki/ssh/`, and the config points at `user-ca`, `user-ca-next` and `host-ca` there. For one minor release, the old `secrets.sshUserCA.{name,key}`, when set, is mounted as `user-ca` instead, and `NOTES.txt` says to move to `secrets.sshCA`. New values map one to one onto D1, D3, D8, D9 and D11's config: `ssh.revokedUserCAKeys`, `ssh.hostCAs`, `ssh.revokedHostKeys`, `ssh.hostCertValidity`, `ssh.defaults.sudo`, `groups`, and `ssh.generateCA` for D16. `NOTES.txt` prints, per SSH target, the `enroll-token` command when `host-ca` is in use, and otherwise the setup command as today. | Rotation edits the Secret, not the values (D1). The chart test checks that every value reaches the binary (docs/06). |
+| D16 | **The chart makes the CA keys** (OD9), when `ssh.generateCA` is true, which is the default as soon as one SSH target exists. A hook Job (`helm.sh/hook: pre-install,pre-upgrade`, weight `-5`, delete policy `before-hook-creation,hook-succeeded`), running the Nyyrikki image as `nyyrikkid ssh-ca init --create`, creates the Secret `secrets.sshCA.name` with fresh `user-ca` and `host-ca` through the Kubernetes API, with labels `app.kubernetes.io/name: nyyrikki`, `app.kubernetes.io/instance: <release>`, `app.kubernetes.io/component: ssh-ca` and `app.kubernetes.io/managed-by: nyyrikki-ssh-ca` (deliberately not `Helm`). If the Secret already exists, the create's `AlreadyExists` is success and nothing is changed or read: the Job never overwrites or patches a Secret, and so needs no `get`. Its ServiceAccount, Role and RoleBinding are hooks too (weight `-10`, the same delete policy), and the Role grants only `create` on Secrets in the namespace, which Kubernetes can't restrict to one name. The Job prints the public keys' fingerprints and never a private key. A failed Job fails the install or upgrade. `pre-upgrade` lets an existing release add its first SSH target. **Rotation**: two suspended CronJobs, `<release>-ssh-ca-stage` and `-promote`, run `stage` and `promote` (D2) on the Secret in place when started with `kubectl create job --from=cronjob/…`. Their ServiceAccount's Role grants `get` and `update` on that one Secret by name. `promote` writes the old public key to its log, which is public data. The Secret is left alone by `helm uninstall`, `--force` and a broken release. The docs show how to delete it: `kubectl delete secret -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=ssh-ca`. With `ssh.generateCA: false`, the Secret comes from `ssh-ca` on a workstation, External Secrets, sealed secrets, or anything else that writes those keys. | No key is made outside the cluster, and none passes through a log, the Helm release Secret, or a terminal. A Secret Helm doesn't own can't be replaced by Helm: a CA every host trusts must never change by accident (M8). The broad `create` lasts only while the hook runs, and its ServiceAccount is deleted with it. |
 | D15 | **Setup docs** (`docs/setup/ssh-hosts.md`) are rewritten around three paths, quickest first: *enroll* (`ssh-ca init`, a target with an address, `enroll-token`, one command on the host, one tap); *declarative* (pins or an organisation's host CA in the values, the setup command from cloud-init or Ansible, with snippets, OD8); *manual* (the file listing, kept checked by docs/07 G9). | The simplest path comes first. The others stay complete. |
 
 ### Rejected alternatives
@@ -129,8 +137,9 @@ and SE6 turn these into tests.
 | The pull creating accounts or granting sudo | A root job turning fetched data into new access would widen what a compromised pod gets beyond what it already has. Adding access stays an administrator running the setup. |
 | A trust-root signing key kept off the pod | OD3. Safer against a leaked CA key, at the cost of one more key for the administrator to keep and use for every bundle. |
 | Short-lived host certificates renewed by the host | OD4: renewal needs a timer. |
+| The chart templating the CA Secret, with a Job filling in its keys (Helm-tracked) | M8: `helm upgrade --force`, and probably Argo CD's `Replace=true`, replace the Secret, and the Job then makes a new CA without anyone noticing. A `pre-install` Job with a templated Secret fails the first install (M7). |
 | Generating the CA keys in the chart (`genPrivateKey`) | The key would sit in the Helm release Secret, and keeping it stable needs `lookup`, which GitOps tools such as Flux's `helm-controller` dry runs and Argo CD don't support. |
-| Nyyrikki generating its own CA keys on first start | Its pod would need the right to write Secrets, and a key written by the pod can be read by the pod's next compromise just the same. `ssh-ca init` (D2) does it on the administrator's machine. |
+| Nyyrikki generating its own CA keys on first start | Its long-running pod would need the right to write Secrets. The hook Job (D16) holds that right only while it runs. |
 | Minting enrollment tokens through `/mcp` or the CLI | Within the agent's reach. A steered agent could start enrollments. |
 | Telegram bot commands (`/enroll db-1`) | A command parser on the approval channel is new attack surface on the one thing that must stay outside the agent's reach. `kubectl exec` reuses Kubernetes RBAC. |
 | Trusting the host key the enrollment sends, without approval | Trust on first use (docs/07 D8). |
@@ -142,10 +151,8 @@ and SE6 turn these into tests.
 
 ### 5.1 Onboarding, start to finish
 
-```sh
-# Once, on the administrator's machine (D2):
-docker run --rm -i ghcr.io/tuhis/nyyrikki:<version> ssh-ca init --namespace nyyrikki | kubectl apply -f -
-```
+The CA keys are made by the chart on the first install that has an
+SSH target (D16).
 
 ```yaml
 # values.yaml
@@ -219,17 +226,20 @@ then everything that reads `sudo`; `groups` → `elevate` and
 
 **Planned**, no rollout and no visit to hosts with a pull:
 
-1. `kubectl get secret nyyrikki-ssh-ca -o yaml | <ssh-ca> stage | kubectl apply -f -`.
+1. `kubectl create job --from=cronjob/nyyrikki-ssh-ca-stage ssh-ca-stage-1`
+   (D16), or, for keys kept outside the chart,
+   `kubectl get secret nyyrikki-ssh-ca -o yaml | <ssh-ca> stage | kubectl apply -f -`.
    Within a minute or two the pod sees `user-ca-next`, and the bundles
    trust both keys. Hosts with a pull trust both within 15 minutes.
    `host_trust_served` in the audit shows which targets have fetched.
    Re-run the setup by hand on hosts without a pull.
-2. `… | <ssh-ca> promote | kubectl apply -f -`. Nyyrikki signs runs and
+2. `kubectl create job --from=cronjob/nyyrikki-ssh-ca-promote ssh-ca-promote-1`,
+   or `… | <ssh-ca> promote | kubectl apply -f -`. Nyyrikki signs runs and
    bundles with the new key. The old key drops out of the bundles, and
    the pulls stop trusting it.
 
 **After a leak**: the same two steps, then add the old public key
-(printed by `promote`) to `ssh.revoked_user_ca_keys` and roll out. Hosts
+(printed by `promote`, in its log) to `ssh.revoked_user_ca_keys` and roll out. Hosts
 with a pull add it to their KRL within 15 minutes. A host that missed
 step 1, because it was offline, can't check bundles signed by the new
 key, and its pull fails loudly. Re-run its setup by hand. For an
@@ -281,6 +291,14 @@ works.
   flag. They are stopped by listing the host key in
   `revoked_host_keys`. The CA keys stay in the pod, as docs/07 D6
   decided; `host-ca` adds one more.
+- **Who can make or change the CA keys** (D16). The install hook's
+  ServiceAccount can create any Secret in the namespace, but only while
+  the hook runs; it can't read one. The rotation CronJobs' ServiceAccount
+  can read and update the CA Secret, so whoever can start a Job, or a
+  pod with that ServiceAccount, in Nyyrikki's namespace can read the CA
+  keys. That is an administrator's right, and the same person can read
+  the Secret directly. Agents' cluster-wide read (docs/01 OD7) covers
+  neither. Neither Job's log holds a private key.
 - **Blast radius.**
   - *`host-ca`* lets its holder make Nyyrikki trust any host for any
     target address. To use that, they also have to redirect Nyyrikki's
@@ -327,12 +345,13 @@ works.
 | G12 The chart mounts the whole Secret, maps every new value to the config, honours the old `sshUserCA` for one minor release with a note, and `NOTES.txt` prints the `enroll-token` command | `deploy/chart` tests |
 | G13 The setup script: new data lines and options are checked like the others. A failed enrollment leaves the host set up and fail-closed. A failed `sshd -t` after installing the certificate removes it again. The setup and the manual page still produce the same files (docs/07 G9), the pull files included | `test/ssh-host` |
 | G14 A real host enrolled with one command and one tap on a real phone, then a CA rotation reaching it by its pull, without a visit | manual, by the owner |
+| G15 The install hook creates the Secret with two fresh keys and D16's labels on the first install with an SSH target, and on the upgrade that adds the first one. It leaves an existing Secret byte for byte unchanged. Its Role grants only `create`. Its log holds no private key. `helm upgrade --force` and `helm uninstall` leave the Secret unchanged. The stage and promote CronJobs rotate as §5.4 says, with RBAC on that one Secret name. `generateCA: false` renders none of it | `deploy/chart` tests (rendering, RBAC); e2e on kind (install, upgrade, `--force`, uninstall, rotation) |
 
 ## 8. Chunks
 
 | Chunk | Scope | Done when |
 |---|---|---|
-| **SE1** | `internal/sshca` (D1, D3), the run minter moved onto it, `nyyrikkid ssh-ca` (D2), chart Secret mount (D14, first part) | G1, G2, G12 (Secret part) |
+| **SE1** | `internal/sshca` (D1, D3), the run minter moved onto it, `nyyrikkid ssh-ca` (D2) with `--create`, chart Secret mount (D14, first part), the install hook and rotation CronJobs (D16) | G1, G2, G12 (Secret part), G15 |
 | **SE2** | config defaults, global `host_cas`, `revoked_host_keys`, groups, `elevate` expansion, `list_targets` fields, `nyyrikki ssh` (D11, D12) | G10, G11 |
 | **SE3** | trust bundle endpoint and signer (D4) | G3 |
 | **SE4** | host verification (D9), host check before approval (D10), session_kill from certificates in messages | G8, G9 |
