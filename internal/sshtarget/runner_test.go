@@ -217,6 +217,79 @@ func TestHostKeyCertificate(t *testing.T) {
 	}
 }
 
+// TestHostKeyRevoked covers docs/08 D9 (G8, the revocation part): a key
+// in revoked_host_keys is refused before authentication, with detail
+// host_key_revoked, whether the host presents it plainly (a pin), as its
+// certificate's key, or as the key that signed its certificate. An
+// unrelated revoked key changes nothing.
+func TestHostKeyRevoked(t *testing.T) {
+	hostCA := newSigner(t)
+	now := time.Now()
+	certify := func(h *fakeHost) {
+		c := &ssh.Certificate{
+			Key: h.hostKey.PublicKey(), CertType: ssh.HostCert, KeyId: "db-1",
+			ValidPrincipals: []string{"db-1.example.com"},
+			ValidAfter:      uint64(now.Add(-time.Hour).Unix()), ValidBefore: uint64(now.Add(time.Hour).Unix()),
+		}
+		if err := c.SignCert(rand.Reader, hostCA); err != nil {
+			t.Fatal(err)
+		}
+		h.hostCert = c
+	}
+	viaCA := func(cfg *RunnerConfig) {
+		tg := cfg.Targets["db-1"]
+		tg.HostKeys = nil
+		tg.HostCAs = []ssh.PublicKey{hostCA.PublicKey()}
+		cfg.Targets["db-1"] = tg
+	}
+	cases := map[string]struct {
+		mod func(*RunnerConfig, *fakeHost)
+		ok  bool
+	}{
+		"pinned key revoked": {func(cfg *RunnerConfig, h *fakeHost) {
+			cfg.RevokedHostKeys = []ssh.PublicKey{h.hostKey.PublicKey()}
+		}, false},
+		"certificate's key revoked": {func(cfg *RunnerConfig, h *fakeHost) {
+			certify(h)
+			viaCA(cfg)
+			cfg.RevokedHostKeys = []ssh.PublicKey{h.hostKey.PublicKey()}
+		}, false},
+		"signing CA revoked": {func(cfg *RunnerConfig, h *fakeHost) {
+			certify(h)
+			viaCA(cfg)
+			cfg.RevokedHostKeys = []ssh.PublicKey{hostCA.PublicKey()}
+		}, false},
+		"other key revoked, pinned": {func(cfg *RunnerConfig, _ *fakeHost) {
+			cfg.RevokedHostKeys = []ssh.PublicKey{newSigner(t).PublicKey()}
+		}, true},
+		"other key revoked, certified": {func(cfg *RunnerConfig, h *fakeHost) {
+			certify(h)
+			viaCA(cfg)
+			cfg.RevokedHostKeys = []ssh.PublicKey{newSigner(t).PublicKey()}
+		}, true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, c.mod)
+			req := build(t, []string{"echo", "x"}, nil, false)
+			_, err := h.runner.Run(grantFor(t.Context(), req, nil), req, 0)
+			if c.ok {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			wantCode(t, err, codes.Unavailable, DetailHostKeyRevoked)
+			if h.host.loginCount() != 0 {
+				t.Fatal("authenticated to a revoked host")
+			}
+			if rec, ok := h.audit.last(codes.KindDependencyFailed); !ok || rec.Detail != DetailHostKeyRevoked {
+				t.Fatalf("audit %+v", rec)
+			}
+		})
+	}
+}
+
 // TestSSHRunRequests covers G5: no env request is ever sent; pty-req
 // only for an interactive run, with a checked TERM.
 func TestSSHRunRequests(t *testing.T) {

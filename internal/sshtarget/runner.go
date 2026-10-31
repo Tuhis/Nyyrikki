@@ -30,6 +30,7 @@ const (
 	DetailUnknownTarget       = "unknown_target"
 	DetailHostNotPinned       = "host_not_pinned"
 	DetailHostKeyMismatch     = "host_key_mismatch"
+	DetailHostKeyRevoked      = "host_key_revoked"
 	DetailUnreachable         = "target_unreachable"
 	DetailAuthRefused         = "auth_refused"
 	DetailSessionRefused      = "session_refused"
@@ -53,7 +54,8 @@ const DefaultTerm = "xterm-256color"
 
 var termPattern = regexp.MustCompile(`^[a-z0-9.+-]{1,32}$`)
 
-// Target is one SSH host (docs/07 §5.5).
+// Target is one SSH host (docs/07 §5.5). HostCAs are every host CA it
+// accepts: its own and the global ones (docs/08 D9).
 type Target struct {
 	Name     string
 	Address  string
@@ -72,12 +74,14 @@ type Limits struct {
 
 // RunnerConfig configures a Runner.
 type RunnerConfig struct {
-	Targets        map[string]Target
-	CA             *CA
-	ConnectTimeout time.Duration
-	Limits         Limits
-	Audit          audit.Appender
-	Logger         *slog.Logger
+	Targets map[string]Target
+	// RevokedHostKeys are never trusted, for any target (docs/08 D9).
+	RevokedHostKeys []ssh.PublicKey
+	CA              *CA
+	ConnectTimeout  time.Duration
+	Limits          Limits
+	Audit           audit.Appender
+	Logger          *slog.Logger
 	// Now is the clock of host certificate checks; time.Now when nil.
 	// Run deadlines use the real clock, as contexts do.
 	Now func() time.Time
@@ -88,6 +92,7 @@ type RunnerConfig struct {
 // Runner runs SSH requests covered by a Grant (docs/07 D9).
 type Runner struct {
 	targets        map[string]Target
+	revoked        []ssh.PublicKey
 	ca             *CA
 	connectTimeout time.Duration
 	limits         Limits
@@ -119,7 +124,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		}
 	}
 	r := &Runner{
-		targets: cfg.Targets, ca: cfg.CA, connectTimeout: cfg.ConnectTimeout, limits: l,
+		targets: cfg.Targets, revoked: cfg.RevokedHostKeys, ca: cfg.CA, connectTimeout: cfg.ConnectTimeout, limits: l,
 		audit: cfg.Audit, log: cfg.Logger, now: cfg.Now, dial: cfg.Dial, cutGrace: cutGrace,
 	}
 	if r.connectTimeout <= 0 {
@@ -342,13 +347,14 @@ func (r *Runner) connect(l *runLimits, g *decision.Grant, req *Request) (*conn, 
 	// the run's end closes the socket.
 	_ = nc.SetDeadline(time.Now().Add(r.connectTimeout))
 	stop := context.AfterFunc(dctx, func() { _ = nc.Close() })
-	hv := newHostVerifier(t.Host, t.HostKeys, t.HostCAs, r.now)
-	var hostRefused atomic.Bool
+	hv := newHostVerifier(t.Host, t.HostKeys, t.HostCAs, r.revoked, r.now)
+	var hostRefused, hostRevoked atomic.Bool
 	cfg := &ssh.ClientConfig{
 		User: g.RunAs().User,
 		Auth: []ssh.AuthMethod{ssh.PublicKeys(cert.signer)},
 		HostKeyCallback: func(h string, a net.Addr, k ssh.PublicKey) error {
 			if err := hv.callback(h, a, k); err != nil {
+				hostRevoked.Store(errors.Is(err, errHostKeyRevoked))
 				hostRefused.Store(true)
 				return err
 			}
@@ -361,6 +367,8 @@ func (r *Runner) connect(l *runLimits, g *decision.Grant, req *Request) (*conn, 
 	if !stop() || err != nil {
 		_ = nc.Close()
 		switch {
+		case hostRevoked.Load():
+			return fail(DetailHostKeyRevoked, "the host's key is listed in ssh.revoked_host_keys", err)
 		case hostRefused.Load():
 			return fail(DetailHostKeyMismatch, "the host's key matches no pin and no host CA", err)
 		case err != nil && isAuthError(err):

@@ -37,6 +37,13 @@ type sshHost struct {
 
 func startSSHHost(t *testing.T, ca ssh.PublicKey) *sshHost {
 	t.Helper()
+	return startSSHHostWith(t, ca, nil)
+}
+
+// startSSHHostWith is startSSHHost whose host key is presented as
+// present(key) returns it, e.g. with a certificate.
+func startSSHHostWith(t *testing.T, ca ssh.PublicKey, present func(ssh.Signer) ssh.Signer) *sshHost {
+	t.Helper()
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	hk, _ := ssh.NewSignerFromKey(priv)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -60,7 +67,11 @@ func startSSHHost(t *testing.T, ca ssh.PublicKey) *sshHost {
 		h.mu.Unlock()
 		return &ssh.Permissions{}, nil
 	}}
-	cfg.AddHostKey(hk)
+	if present != nil {
+		cfg.AddHostKey(present(hk))
+	} else {
+		cfg.AddHostKey(hk)
+	}
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -284,3 +295,64 @@ func TestSSHHiddenTargetLooksUnknown(t *testing.T) {
 		t.Fatalf("%d prompts for a hidden target", n)
 	}
 }
+
+// TestSSHGlobalHostCAs covers docs/08 D9 from the config file to the
+// runner: a target with no pins and no host CAs of its own is verified
+// by a certificate from the global ssh.host_cas, and a host whose key
+// is in ssh.revoked_host_keys is refused with host_key_revoked.
+func TestSSHGlobalHostCAs(t *testing.T) {
+	caPEM, caPub := newCA(t)
+	_, hcaPriv, _ := ed25519.GenerateKey(rand.Reader)
+	hostCA, _ := ssh.NewSignerFromKey(hcaPriv)
+	var hostKey ssh.PublicKey
+	host := startSSHHostWith(t, caPub, func(hk ssh.Signer) ssh.Signer {
+		hostKey = hk.PublicKey()
+		c := &ssh.Certificate{Key: hk.PublicKey(), CertType: ssh.HostCert, KeyId: "db-1",
+			ValidPrincipals: []string{"127.0.0.1"}, ValidBefore: ssh.CertTimeInfinity}
+		if err := c.SignCert(rand.Reader, hostCA); err != nil {
+			t.Fatal(err)
+		}
+		cs, err := ssh.NewCertSigner(c, hk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cs
+	})
+	authorized := func(k ssh.PublicKey) string { return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k))) }
+	global := func(revoked ...ssh.PublicKey) servertest.Option {
+		return func(c *config.Config) {
+			db := c.Targets[len(c.Targets)-1].SSH
+			db.HostKeys = nil
+			c.SSH.HostCAs = []string{authorized(hostCA.PublicKey())}
+			for _, k := range revoked {
+				c.SSH.RevokedHostKeys = append(c.SSH.RevokedHostKeys, authorized(k))
+			}
+		}
+	}
+	for name, tc := range map[string]struct {
+		revoked []ssh.PublicKey
+		detail  string
+	}{
+		"accepted":        {nil, ""},
+		"host revoked":    {[]ssh.PublicKey{hostKey}, "host_key_revoked"},
+		"host CA revoked": {[]ssh.PublicKey{hostCA.PublicKey()}, "host_key_revoked"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := servertest.Start(t, withSSH(t, host, caPEM, caPub), global(tc.revoked...))
+			cs := mcpAgent(t, e, "claude-code", "s1")
+			ch := runAsync(t, cs, api.RunIn{Target: "db-1", Args: []string{"echo", "hi"}, Reason: "check"})
+			e.Tap(t, 1, "Approve")
+			r := <-ch
+			if tc.detail == "" {
+				if r.eb != nil || r.out.Stdout != "hi|" {
+					t.Fatalf("run: %+v %+v", r.eb, r.out)
+				}
+				return
+			}
+			if r.eb == nil || r.eb.Code != codes.Unavailable || !strings.Contains(e.Audit.String(), tc.detail) {
+				t.Fatalf("run: %+v; audit lacks %s", r.eb, tc.detail)
+			}
+		})
+	}
+}
+
