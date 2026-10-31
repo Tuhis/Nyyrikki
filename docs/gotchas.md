@@ -221,6 +221,18 @@ the doc.
   Show every space but U+0020 escaped. Lookalike punctuation, such as
   U+FF03 for `#`, is not escaped: read a command with non-ASCII
   characters with care. ([docs/07](07-ssh-target.md) D2)
+- **Debian's cron ignores files in `/etc/cron.d` whose names contain a
+  dot**, so `nyyrikki.conf` never runs while cronie runs it. BusyBox
+  `crond` ignores `/etc/cron.d` entirely; on Alpine use
+  `/etc/periodic/15min`. Name cron files `[A-Za-z0-9_-]` only.
+  ([docs/08](08-ssh-onboarding.md) M3)
+- **OpenSSH 10 penalises an address after one failed login**
+  (`PerSourcePenalties`, on by default): its next connections are
+  dropped for a while, so a retry loop after a refusal looks like an
+  unreachable host. Try once, then stop. ([docs/08](08-ssh-onboarding.md) M5)
+- **BusyBox `wget` can't be given a CA file**: its only TLS option is
+  `--no-check-certificate`. Use `curl --cacert`.
+  ([docs/08](08-ssh-onboarding.md) M6)
 
 **Tooling and dependencies**
 
