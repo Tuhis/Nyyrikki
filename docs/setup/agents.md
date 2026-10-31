@@ -15,7 +15,14 @@ nyyrikki run --reason "restart the stuck pod" prod -- delete pod api-7f -n shop
 export NYYRIKKI_ELEVATION=$(nyyrikki elevate --reason "roll out 1.4" --for 20m prod)
 nyyrikki run --reason "check rollout" prod -- rollout status deploy/api -n shop
 nyyrikki run -t --reason "debug" prod -- exec -it api-7f -n shop -- sh
+nyyrikki ssh --reason "check disk" db-1 -- df -h   # SSH targets only
+nyyrikki ssh --reason "debug" db-1                  # a login shell, on a terminal
 ```
+
+`nyyrikki targets` prints one line per target: name, type, `sudo` (`yes`
+or `no` on an SSH target, `-` otherwise), the groups it is in, and its
+description. `nyyrikki elevate` takes group names too; the elevation
+covers the group's members, which the approver sees.
 
 Each `nyyrikki login` makes a new key, so it is a new agent (docs/01
 OD14). The login file (`~/.config/nyyrikki/login.json`) must be readable

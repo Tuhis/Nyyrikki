@@ -433,6 +433,43 @@ for `host-ca`. SE6 needs SE3 and SE5 for the endpoints its script talks to.
 
 <!-- Added during implementation. -->
 
+### SE2 (2026-10-31)
+
+Where SE2 differs from, or settles what D9, D11 and D12 leave open:
+
+- **Which refusal for which name** (D11). A name that is neither a
+  target nor a group, a target the agent may not see, and a group none of
+  whose members it may see are all `target_not_allowed`, with the same
+  message, as docs/02 D5 requires, so a group can't be used to probe for
+  hidden targets. Only a group *some* of whose members are hidden is
+  `invalid_request`, as D11 says. A group name in `run` is refused as an
+  unknown target. Each refusal is audited as a deny of the elevation.
+- **`list_targets` lists a group on a target only when the agent may see
+  every member**, so it offers no group `elevate` would refuse.
+- **Audit**: the decision records carry the expanded list in `targets`
+  and the group names asked for in a new field, `target_groups`;
+  `elevation_requested` keeps `targets` as the agent sent them.
+- **The message** lists every target on the `Targets:` line, then one
+  `Group <name> = <members>` line per group named.
+- **Config**: a group may not be empty, nor name a member twice; groups
+  can't contain groups (the names share one namespace). `sudo` is
+  resolved once at load, so every consumer, the setup endpoint included,
+  sees the resolved value; the file's own value is kept as `SudoSet`.
+  A host CA key listed in `revoked_host_keys` is not a config error (D9
+  names pins only): it disables that CA at run time.
+- **Verification** (D9, the parts that don't need `host-ca`): global
+  `ssh.host_cas` are appended to each target's `host_cas` when the runner
+  is built; a presented key, a certificate's key or its signing key in
+  `revoked_host_keys` fails with detail `host_key_revoked` before
+  authentication. The rest of D9 is SE4's.
+- **`nyyrikki ssh`** takes `run`'s `--reason`, `--elevation`,
+  `--timeout` and `-i`, and no `-t`: the terminal decides. With no
+  command and no terminal it is a usage error, as the `run` it maps to
+  would be. A target `list_targets` doesn't list counts as not SSH.
+- **`nyyrikki targets`** prints `name`, `type`, `sudo` (`yes`, `no`, or
+  `-` for a Kubernetes target), groups (comma-separated, or `-`) and the
+  description, tab-separated, description last.
+
 ## 11. Post-implementation review (YYYY-MM-DD)
 
 <!-- Added at close-out. -->
