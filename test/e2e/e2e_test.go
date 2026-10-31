@@ -357,8 +357,8 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	// After the sign-out above: it ends the owner's online sessions.
-	step(t, "OD18: an offline CLI login stays bound to its key and outlives the browser sessions", func(t *testing.T) {
-		e.checkOfflineCLI(t)
+	step(t, "OD18: an offline CLI login stays bound to its key and needs no browser session", func(t *testing.T) {
+		e.checkOfflineCLI(t, next)
 	})
 
 	// Last: it ends the owner's sessions, which would empty the step above.

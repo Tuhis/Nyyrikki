@@ -297,15 +297,58 @@ func (b *browser) signInScope(t *testing.T, clientID, scope string) (string, str
 // mcpSession connects to /mcp with a Bearer token, as a harness does.
 func (e *env) mcpSession(t *testing.T, tok string) *mcp.ClientSession {
 	t.Helper()
-	hc := e.httpClient()
-	hc.Transport = &bearer{tok: tok, base: hc.Transport}
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "e2e-harness", Version: "1"}, nil).Connect(context.Background(),
-		&mcp.StreamableClientTransport{Endpoint: e.canonical + "/mcp", HTTPClient: hc, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
+	cs, err := e.connect(tok)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cs.Close() })
 	return cs
+}
+
+func (e *env) connect(tok string) (*mcp.ClientSession, error) {
+	hc := e.httpClient()
+	hc.Transport = &bearer{tok: tok, base: hc.Transport}
+	return mcp.NewClient(&mcp.Implementation{Name: "e2e-harness", Version: "1"}, nil).Connect(context.Background(),
+		&mcp.StreamableClientTransport{Endpoint: e.canonical + "/mcp", HTTPClient: hc, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
+}
+
+// runAsync is runVia through a new session, in the background. It never
+// calls t.Fatal off the test's goroutine, which would only end that
+// goroutine: a failure goes on failed, for tapUnless to report.
+func (e *env) runAsync(tok, reason string) (done chan string, failed chan error) {
+	done, failed = make(chan string, 1), make(chan error, 1)
+	go func() {
+		cs, err := e.connect(tok)
+		if err != nil {
+			failed <- fmt.Errorf("connect: %w", err)
+			return
+		}
+		defer cs.Close()
+		r, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "run", Arguments: map[string]any{
+			"target": "this-cluster", "args": []string{"auth", "whoami", "-o", "jsonpath={.status.userInfo.username}"}, "reason": reason,
+		}})
+		if err != nil {
+			failed <- fmt.Errorf("run: %w", err)
+			return
+		}
+		raw, _ := json.Marshal(r.StructuredContent)
+		done <- string(raw)
+	}()
+	return done, failed
+}
+
+// runResult waits for runAsync's result.
+func runResult(t *testing.T, done chan string, failed chan error) string {
+	t.Helper()
+	select {
+	case raw := <-done:
+		return raw
+	case err := <-failed:
+		t.Fatalf("the request failed: %v", err)
+	case <-time.After(time.Minute):
+		t.Fatal("the request never finished")
+	}
+	return ""
 }
 
 // mcpStatus is the HTTP status /mcp answers a tools/list with tok.
@@ -639,10 +682,9 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 	}
 
 	// Nyyrikki takes it: a run reaches the approver and runs.
-	ch := make(chan string, 1)
-	go func() { _, raw := runVia(t, e.mcpSession(t, at2), "offline harness"); ch <- raw }()
-	e.tap(t, next(), "Approve")
-	if raw := <-ch; !strings.Contains(raw, ownerK8sUser) {
+	ch, failed := e.runAsync(at2, "offline harness")
+	e.tapUnless(t, next(), "Approve", failed)
+	if raw := runResult(t, ch, failed); !strings.Contains(raw, ownerK8sUser) {
 		t.Fatalf("run as the offline harness: %s", raw)
 	}
 
@@ -661,10 +703,9 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 	if at3 == "" {
 		t.Fatal("signing out the browser sessions ended the offline harness too")
 	}
-	ch = make(chan string, 1)
-	go func() { _, raw := runVia(t, e.mcpSession(t, at3), "after the browser sessions ended"); ch <- raw }()
-	e.tap(t, next(), "Deny")
-	if raw := <-ch; !strings.Contains(raw, "denied") {
+	ch, failed = e.runAsync(at3, "after the browser sessions ended")
+	e.tapUnless(t, next(), "Deny", failed)
+	if raw := runResult(t, ch, failed); !strings.Contains(raw, "denied") {
 		t.Fatalf("offline harness after the browser sessions ended: %s", raw)
 	}
 
@@ -701,10 +742,10 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 // checkOfflineCLI is the CLI's offline login (docs/01 OD18, M9): its
 // refresh token is Offline and still bound to the login's key, so a
 // refresh without a proof from that key is refused, and one with it keeps
-// cnf.jkt, the CLI agent's key (D8). Ending the owner's browser sessions
-// leaves it working. A CLI client without the offline_access scope (set
+// cnf.jkt, the CLI agent's key (D8). It has no online session, and with
+// none left it still refreshes and a run reaches the approver. A CLI client without the offline_access scope (set
 // up before OD18) still signs in, session-bound, and says so.
-func (e *env) checkOfflineCLI(t *testing.T) {
+func (e *env) checkOfflineCLI(t *testing.T, next func() int) {
 	// The sign-out before this step refuses tokens issued in its second.
 	time.Sleep(1100 * time.Millisecond)
 	c := e.newCLI(t)
@@ -748,39 +789,38 @@ func (e *env) checkOfflineCLI(t *testing.T) {
 		t.Fatalf("CLI offline refresh: jkt %v -> %v, refresh token %v", jkt0, jkt(at1), claims(lf["refresh_token"].(string))["typ"])
 	}
 
-	// Ending the owner's browser sessions leaves it working. The device
-	// grant's own browser session may not outlast the offline sign-in
-	// (logged for M9), so the owner signs in to a harness in a browser too.
+	// It doesn't hang on a browser session: the device sign-in leaves the
+	// owner none with its sid, and with every online session ended, it
+	// refreshes with its key and a run reaches the approver, which also
+	// shows the refreshed token introspects active (the positive control
+	// for session_inactive below).
 	users := "/admin/realms/" + realm + "/users/" + e.ownerID
-	t.Logf("M9 OD18: online sessions after an offline CLI login: %s", e.admin(t, "GET", users+"/sessions", nil))
-	code, out := e.register(t, map[string]any{
-		"client_name": "online harness", "redirect_uris": []string{loopback},
-		"grant_types": []string{"authorization_code", "refresh_token"}, "response_types": []string{"code"},
-		"token_endpoint_auth_method": "none", "scope": "nyyrikki",
-	})
-	if id, _ := out["client_id"].(string); code != http.StatusCreated || id == "" {
-		t.Fatalf("registering a harness: %d %v", code, redact(out))
-	} else {
-		e.newBrowser().signIn(t, id)
-	}
 	var online []struct{ ID string }
-	json.Unmarshal(e.admin(t, "GET", users+"/sessions", nil), &online)
-	if len(online) == 0 {
-		t.Fatal("the browser had no session to sign out, so this measures nothing")
-	}
+	raw := e.admin(t, "GET", users+"/sessions", nil)
+	json.Unmarshal(raw, &online)
+	t.Logf("M9 OD18: online sessions after an offline CLI login: %s", raw)
+	sid := claims(lf["access_token"].(string))["sid"]
 	for _, ss := range online {
+		if ss.ID == sid {
+			t.Fatalf("the offline CLI login's sid %v is an online session", sid)
+		}
 		e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+ss.ID, nil)
 	}
-	lf = refreshed("after the browser sessions ended")
+	lf = refreshed("after the online sessions ended")
 	if jkt(lf["access_token"].(string)) != jkt0 {
-		t.Fatalf("jkt changed after the browser sessions ended")
+		t.Fatalf("jkt changed after the online sessions ended")
+	}
+	ch := c.async(t, "run", "--reason", "with no online session", "this-cluster", "--", "get", "pods")
+	e.tap(t, next(), "Deny")
+	if r := get(t, ch, time.Minute); r.code != 77 || !strings.Contains(r.stderr, "nyyrikki: error: denied:") {
+		t.Fatalf("run with no online session: %+v", r)
 	}
 
 	// Ending that one offline session, whose ID is the token's sid, ends
 	// that login at once, with no prompt (docs/setup/keycloak.md,
 	// Revoking an agent). Revoking nyyrikki-cli's consent would end every
 	// CLI login of the owner instead.
-	sid := claims(lf["access_token"].(string))["sid"]
+	sid = claims(lf["access_token"].(string))["sid"]
 	e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+fmt.Sprint(sid)+"?isOffline=true", nil)
 	before := len(e.tg.Sent(t))
 	if r := c.run(t, "", "run", "--reason", "after its offline session ended", "this-cluster", "--", "get", "pods"); r.code != 77 || !strings.Contains(r.stderr, "session_inactive") {
@@ -809,4 +849,6 @@ func (e *env) checkOfflineCLI(t *testing.T) {
 	if typ := claims(loginFile(c2)["refresh_token"].(string))["typ"]; typ != "Refresh" || !strings.Contains(lines, "ends with your browser session") {
 		t.Fatalf("login with a CLI client lacking offline_access: refresh token %v, output:\n%s", typ, lines)
 	}
+	// Its online session would otherwise reach the OD17 step after this.
+	e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+fmt.Sprint(claims(loginFile(c2)["access_token"].(string))["sid"]), nil)
 }

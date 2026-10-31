@@ -176,8 +176,20 @@ func (e *env) tap(t *testing.T, n int, button string) telegramtest.Message {
 // server can't have acted on it before then.
 func (e *env) tapAt(t *testing.T, n int, button string) (telegramtest.Message, time.Time) {
 	t.Helper()
+	return e.tapUnless(t, n, button, nil)
+}
+
+// tapUnless is tapAt that stops waiting for the prompt as soon as the
+// request it waits for fails, and reports that failure instead.
+func (e *env) tapUnless(t *testing.T, n int, button string, failed <-chan error) (telegramtest.Message, time.Time) {
+	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
 	for len(e.tg.Sent(t)) < n {
+		select {
+		case err := <-failed:
+			t.Fatalf("waiting for prompt %d: the request failed: %v", n, err)
+		default:
+		}
 		if time.Now().After(deadline) {
 			t.Fatalf("prompt %d never arrived", n)
 		}
