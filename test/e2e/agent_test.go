@@ -96,8 +96,9 @@ func (c *cli) cmd(args ...string) *exec.Cmd {
 	return cmd
 }
 
-// login runs `nyyrikki login` and approves the device code it prints.
-func (c *cli) login(t *testing.T, extra ...string) {
+// login runs `nyyrikki login`, approves the device code it prints, and
+// returns what it printed.
+func (c *cli) login(t *testing.T, extra ...string) []string {
 	t.Helper()
 	cmd := c.cmd(append([]string{"login", "--server", c.e.canonical, "--ca-file", c.e.caFile}, extra...)...)
 	stderr, _ := cmd.StderrPipe()
@@ -119,6 +120,7 @@ func (c *cli) login(t *testing.T, extra ...string) {
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("login: %v\n%s", err, strings.Join(lines, "\n"))
 	}
+	return lines
 }
 
 type result struct {
@@ -174,8 +176,27 @@ func (e *env) tap(t *testing.T, n int, button string) telegramtest.Message {
 // server can't have acted on it before then.
 func (e *env) tapAt(t *testing.T, n int, button string) (telegramtest.Message, time.Time) {
 	t.Helper()
+	return e.tapUnless(t, n, button, nil)
+}
+
+// tapUnless is tapAt for a request running in the background: every
+// caller expects a prompt first, so a result that arrives before the tap
+// counted, a refusal or an error, fails the test with that result rather
+// than with "prompt n never arrived".
+func (e *env) tapUnless(t *testing.T, n int, button string, early func() (any, bool)) (telegramtest.Message, time.Time) {
+	t.Helper()
+	if early == nil {
+		early = func() (any, bool) { return nil, false }
+	}
+	finished := func() {
+		t.Helper()
+		if r, ok := early(); ok {
+			t.Fatalf("waiting to tap %q on prompt %d: the request finished first: %+v", button, n, r)
+		}
+	}
 	deadline := time.Now().Add(90 * time.Second)
 	for len(e.tg.Sent(t)) < n {
+		finished()
 		if time.Now().After(deadline) {
 			t.Fatalf("prompt %d never arrived", n)
 		}
@@ -183,6 +204,7 @@ func (e *env) tapAt(t *testing.T, n int, button string) (telegramtest.Message, t
 	}
 	m := e.tg.Sent(t)[n-1]
 	for try := 0; try < 20; try++ {
+		finished()
 		cur := e.tg.Message(t, m)
 		if _, ok := cur.Button(button); !ok {
 			time.Sleep(300 * time.Millisecond)
@@ -196,6 +218,40 @@ func (e *env) tapAt(t *testing.T, n int, button string) (telegramtest.Message, t
 	}
 	t.Fatalf("tap %q on prompt %d never counted", button, n)
 	return telegramtest.Message{}, time.Time{}
+}
+
+// pending is a request running in the background, sending its one result
+// on a channel buffered for it.
+type pending[T any] struct {
+	ch  chan T
+	got *T
+}
+
+// peek returns the result if it has arrived, without waiting.
+func (p *pending[T]) peek() (any, bool) {
+	if p.got == nil {
+		select {
+		case v := <-p.ch:
+			p.got = &v
+		default:
+			return nil, false
+		}
+	}
+	return *p.got, true
+}
+
+// wait waits for the result for at most d.
+func (p *pending[T]) wait(t *testing.T, d time.Duration) T {
+	t.Helper()
+	if p.got == nil {
+		select {
+		case v := <-p.ch:
+			p.got = &v
+		case <-time.After(d):
+			t.Fatalf("the request didn't finish within %v", d)
+		}
+	}
+	return *p.got
 }
 
 func get(t *testing.T, ch chan result, within time.Duration) result {

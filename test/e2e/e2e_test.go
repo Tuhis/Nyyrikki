@@ -34,9 +34,9 @@ func TestEndToEnd(t *testing.T) {
 		if cnf, _ := c["cnf"].(map[string]any); cnf == nil || cnf["jkt"] == nil || cnf["jkt"] == "" {
 			t.Fatalf("the CLI's token isn't DPoP-bound: cnf=%v", c["cnf"])
 		}
-		// The CLI's sign-in stays bound to the browser session (docs/01 OD17).
-		if rt, _ := lf["refresh_token"].(string); claims(rt)["typ"] != "Refresh" {
-			t.Fatalf("the CLI's login refresh token type %v, want Refresh", claims(rt)["typ"])
+		// The CLI's sign-in is an offline session (docs/01 OD18).
+		if rt, _ := lf["refresh_token"].(string); claims(rt)["typ"] != "Offline" {
+			t.Fatalf("the CLI's login refresh token type %v, want Offline", claims(rt)["typ"])
 		}
 		r := agent.run(t, "", "targets")
 		if r.code != 0 || !strings.Contains(r.stdout, "this-cluster") {
@@ -354,6 +354,11 @@ func TestEndToEnd(t *testing.T) {
 		if len(e.tg.Sent(t)) != before {
 			t.Fatal("a revoked session reached the approver")
 		}
+	})
+
+	// After the sign-out above: it ends the owner's online sessions.
+	step(t, "OD18: an offline CLI login stays bound to its key and needs no browser session", func(t *testing.T) {
+		e.checkOfflineCLI(t, next)
 	})
 
 	// Last: it ends the owner's sessions, which would empty the step above.

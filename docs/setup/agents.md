@@ -25,7 +25,9 @@ description. `nyyrikki elevate` takes group names too; the elevation
 covers the group's members, which the approver sees.
 
 Each `nyyrikki login` makes a new key, so it is a new agent (docs/01
-OD14). The login file (`~/.config/nyyrikki/login.json`) must be readable
+OD14). Where the CLI client has the `offline_access` scope, the login
+is an offline session and outlives the browser session it was made in
+(docs/01 OD18); revoke it as `docs/setup/keycloak.md` says. The login file (`~/.config/nyyrikki/login.json`) must be readable
 by that agent only. `NYYRIKKI_ELEVATION` must never be set anywhere
 another agent can read: not in a pod spec, not in a ConfigMap.
 

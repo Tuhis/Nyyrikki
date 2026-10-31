@@ -178,7 +178,14 @@ These kinds of issue are always in scope:
   attacker alone is being an agent: listing targets and asking the approver; every
   privileged request still needs a tap (INV-01). Revoke a harness by
   removing its client's access (docs/setup/keycloak.md, Revoking an
-  agent). The CLI's tokens stay bound to the browser session.
+  agent).
+- **A CLI login may stay signed in for as long as the offline session
+  cap too** (docs/01 OD18, owner decision 2026-10-31), on the same terms.
+  Its tokens stay DPoP-bound to the login's key, but the key is in the
+  same login file, so a stolen copy of the file keeps working until that
+  login's offline session is ended, the owner is signed out, or the cap
+  passes. Revoke one login by ending its offline session
+  (docs/setup/keycloak.md, Revoking an agent).
 - **Responses are unredacted.** The response to an approved request
   reaches the agent as the target sent it, including any secret
   material it returns. Optional redaction is deferred (`ROADMAP.md` R9).

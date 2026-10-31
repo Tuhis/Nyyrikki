@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -43,6 +44,11 @@ type Server struct {
 	// OfflineAccess makes the server advertise the offline_access scope
 	// in its metadata, as Keycloak does when the realm offers it.
 	OfflineAccess bool
+	// NoOfflineScope lists client IDs that don't have the offline_access
+	// client scope: a device request asking for it is answered
+	// invalid_scope, as Keycloak answers a scope the client lacks
+	// (docs/01 OD18; the e2e test checks Keycloak does).
+	NoOfflineScope map[string]bool
 	// RequirePKCE makes the device grant require PKCE with S256, as
 	// Keycloak does for a client whose PKCE method is set (it sets it on
 	// every registered client under a pkce-enforcer client policy).
@@ -307,6 +313,10 @@ func (s *Server) deviceAuth(w http.ResponseWriter, r *http.Request) {
 	challenge, method := r.FormValue("code_challenge"), r.FormValue("code_challenge_method")
 	if (s.RequirePKCE || challenge != "") && (challenge == "" || method != "S256") {
 		oauthError(w, "invalid_request", "Missing parameter: code_challenge_method")
+		return
+	}
+	if s.NoOfflineScope[r.FormValue("client_id")] && slices.Contains(strings.Fields(r.FormValue("scope")), "offline_access") {
+		oauthError(w, "invalid_scope", "Invalid scopes: "+r.FormValue("scope"))
 		return
 	}
 	code := randString()

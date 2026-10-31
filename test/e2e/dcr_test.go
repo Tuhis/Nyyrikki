@@ -297,15 +297,71 @@ func (b *browser) signInScope(t *testing.T, clientID, scope string) (string, str
 // mcpSession connects to /mcp with a Bearer token, as a harness does.
 func (e *env) mcpSession(t *testing.T, tok string) *mcp.ClientSession {
 	t.Helper()
-	hc := e.httpClient()
-	hc.Transport = &bearer{tok: tok, base: hc.Transport}
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "e2e-harness", Version: "1"}, nil).Connect(context.Background(),
-		&mcp.StreamableClientTransport{Endpoint: e.canonical + "/mcp", HTTPClient: hc, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
+	cs, err := e.connect(tok)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cs.Close() })
 	return cs
+}
+
+func (e *env) connect(tok string) (*mcp.ClientSession, error) {
+	hc := e.httpClient()
+	hc.Transport = &bearer{tok: tok, base: hc.Transport}
+	return mcp.NewClient(&mcp.Implementation{Name: "e2e-harness", Version: "1"}, nil).Connect(context.Background(),
+		&mcp.StreamableClientTransport{Endpoint: e.canonical + "/mcp", HTTPClient: hc, MaxRetries: -1, DisableStandaloneSSE: true}, nil)
+}
+
+// runOut is runAsync's result: the run's structured content as JSON, or
+// why there is none.
+type runOut struct {
+	raw string
+	err error
+}
+
+// String makes the error readable where a runOut is printed whole
+// (tapUnless): fmt prints an unexported error field as a pointer.
+func (o runOut) String() string {
+	if o.err != nil {
+		return "error: " + o.err.Error()
+	}
+	return o.raw
+}
+
+// runAsync is runVia through a new session, in the background. It never
+// calls t.Fatal off the test's goroutine, which would only end that
+// goroutine: a failure is its result, which tapUnless reports if it comes
+// before the prompt.
+func (e *env) runAsync(tok, reason string) *pending[runOut] {
+	p := &pending[runOut]{ch: make(chan runOut, 1)}
+	go func() {
+		cs, err := e.connect(tok)
+		if err != nil {
+			p.ch <- runOut{err: fmt.Errorf("connect: %w", err)}
+			return
+		}
+		defer cs.Close()
+		r, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "run", Arguments: map[string]any{
+			"target": "this-cluster", "args": []string{"auth", "whoami", "-o", "jsonpath={.status.userInfo.username}"}, "reason": reason,
+		}})
+		if err != nil {
+			p.ch <- runOut{err: fmt.Errorf("run: %w", err)}
+			return
+		}
+		raw, _ := json.Marshal(r.StructuredContent)
+		p.ch <- runOut{raw: string(raw)}
+	}()
+	return p
+}
+
+// runResult waits for runAsync's result.
+func runResult(t *testing.T, p *pending[runOut]) string {
+	t.Helper()
+	o := p.wait(t, time.Minute)
+	if o.err != nil {
+		t.Fatalf("the request failed: %v", o.err)
+	}
+	return o.raw
 }
 
 // mcpStatus is the HTTP status /mcp answers a tools/list with tok.
@@ -639,10 +695,9 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 	}
 
 	// Nyyrikki takes it: a run reaches the approver and runs.
-	ch := make(chan string, 1)
-	go func() { _, raw := runVia(t, e.mcpSession(t, at2), "offline harness"); ch <- raw }()
-	e.tap(t, next(), "Approve")
-	if raw := <-ch; !strings.Contains(raw, ownerK8sUser) {
+	run := e.runAsync(at2, "offline harness")
+	e.tapUnless(t, next(), "Approve", run.peek)
+	if raw := runResult(t, run); !strings.Contains(raw, ownerK8sUser) {
 		t.Fatalf("run as the offline harness: %s", raw)
 	}
 
@@ -661,10 +716,9 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 	if at3 == "" {
 		t.Fatal("signing out the browser sessions ended the offline harness too")
 	}
-	ch = make(chan string, 1)
-	go func() { _, raw := runVia(t, e.mcpSession(t, at3), "after the browser sessions ended"); ch <- raw }()
-	e.tap(t, next(), "Deny")
-	if raw := <-ch; !strings.Contains(raw, "denied") {
+	run = e.runAsync(at3, "after the browser sessions ended")
+	e.tapUnless(t, next(), "Deny", run.peek)
+	if raw := runResult(t, run); !strings.Contains(raw, "denied") {
 		t.Fatalf("offline harness after the browser sessions ended: %s", raw)
 	}
 
@@ -696,4 +750,122 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 	if len(e.tg.Sent(t)) != before {
 		t.Fatal("a revoked harness reached the approver")
 	}
+}
+
+// checkOfflineCLI is the CLI's offline login (docs/01 OD18, M9): its
+// refresh token is Offline and still bound to the login's key, so a
+// refresh without a proof from that key is refused, and one with it keeps
+// cnf.jkt, the CLI agent's key (D8). It has no online session, and with
+// none left it still refreshes and a run reaches the approver. A CLI
+// client without the offline_access scope (set up before OD18) still
+// signs in, session-bound, and says so.
+func (e *env) checkOfflineCLI(t *testing.T, next func() int) {
+	// The sign-out before this step refuses tokens issued in its second.
+	time.Sleep(1100 * time.Millisecond)
+	c := e.newCLI(t)
+	c.login(t)
+	lf := loginFile(c)
+	rt, _ := lf["refresh_token"].(string)
+	jkt := func(at string) any {
+		cnf, _ := claims(at)["cnf"].(map[string]any)
+		return cnf["jkt"]
+	}
+	jkt0 := jkt(lf["access_token"].(string))
+	if claims(rt)["typ"] != "Offline" || jkt0 == nil {
+		t.Fatalf("CLI login: refresh token %v, jkt %v", claims(rt)["typ"], jkt0)
+	}
+	if at, _ := e.refresh(t, "nyyrikki-cli", rt); at != "" {
+		t.Fatal("the CLI's offline refresh token refreshed without a DPoP proof")
+	}
+	// Expire its access token so the CLI refreshes, with its key.
+	refreshed := func(why string) map[string]any {
+		t.Helper()
+		lf := loginFile(c)
+		old := lf["access_token"]
+		lf["expires_at"] = time.Now().Add(-time.Minute).Format(time.RFC3339)
+		b, _ := json.Marshal(lf)
+		if err := os.WriteFile(filepath.Join(c.home, ".config", "nyyrikki", "login.json"), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if r := c.run(t, "", "targets"); r.code != 0 {
+			t.Fatalf("targets %s: %+v", why, r)
+		}
+		lf = loginFile(c)
+		if at, _ := lf["access_token"].(string); at == "" || at == old {
+			t.Fatalf("the CLI didn't refresh %s", why)
+		}
+		return lf
+	}
+	lf = refreshed("after a refresh with the key")
+	at1 := lf["access_token"].(string)
+	t.Logf("M9 OD18: CLI offline refresh: jkt %v -> %v, refresh token %v", jkt0, jkt(at1), claims(lf["refresh_token"].(string))["typ"])
+	if jkt(at1) != jkt0 || claims(lf["refresh_token"].(string))["typ"] != "Offline" {
+		t.Fatalf("CLI offline refresh: jkt %v -> %v, refresh token %v", jkt0, jkt(at1), claims(lf["refresh_token"].(string))["typ"])
+	}
+
+	// It doesn't hang on a browser session: the device sign-in leaves the
+	// owner none with its sid, and with every online session ended, it
+	// refreshes with its key and a run reaches the approver, which also
+	// shows the refreshed token introspects active (the positive control
+	// for session_inactive below).
+	users := "/admin/realms/" + realm + "/users/" + e.ownerID
+	var online []struct{ ID string }
+	raw := e.admin(t, "GET", users+"/sessions", nil)
+	json.Unmarshal(raw, &online)
+	t.Logf("M9 OD18: online sessions after an offline CLI login: %s", raw)
+	sid := claims(lf["access_token"].(string))["sid"]
+	if sid == nil {
+		t.Fatal("the CLI's token has no sid")
+	}
+	for _, ss := range online {
+		if ss.ID == sid {
+			t.Fatalf("the offline CLI login's sid %v is an online session", sid)
+		}
+		e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+ss.ID, nil)
+	}
+	lf = refreshed("after the online sessions ended")
+	if jkt(lf["access_token"].(string)) != jkt0 {
+		t.Fatalf("jkt changed after the online sessions ended")
+	}
+	run := &pending[result]{ch: c.async(t, "run", "--reason", "with no online session", "this-cluster", "--", "get", "pods")}
+	e.tapUnless(t, next(), "Deny", run.peek)
+	if r := run.wait(t, time.Minute); r.code != 77 || !strings.Contains(r.stderr, "nyyrikki: error: denied:") {
+		t.Fatalf("run with no online session: %+v", r)
+	}
+
+	// Ending that one offline session, whose ID is the token's sid, ends
+	// that login at once, with no prompt (docs/setup/keycloak.md,
+	// Revoking an agent). Revoking nyyrikki-cli's consent would end every
+	// CLI login of the owner instead.
+	sid = claims(lf["access_token"].(string))["sid"]
+	e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+fmt.Sprint(sid)+"?isOffline=true", nil)
+	before := len(e.tg.Sent(t))
+	if r := c.run(t, "", "run", "--reason", "after its offline session ended", "this-cluster", "--", "get", "pods"); r.code != 77 || !strings.Contains(r.stderr, "session_inactive") {
+		t.Fatalf("CLI login after its offline session ended: %+v", r)
+	}
+	if len(e.tg.Sent(t)) != before {
+		t.Fatal("a CLI login whose offline session ended reached the approver")
+	}
+
+	// A CLI client without the offline_access scope: invalid_scope, and
+	// the login falls back to a session-bound one.
+	cl := e.adminClient(t, "nyyrikki-cli")
+	var scopes []struct{ ID, Name string }
+	json.Unmarshal(e.admin(t, "GET", "/admin/realms/"+realm+"/client-scopes", nil), &scopes)
+	var offlineID string
+	for _, sc := range scopes {
+		if sc.Name == "offline_access" {
+			offlineID = sc.ID
+		}
+	}
+	opt := "/admin/realms/" + realm + "/clients/" + fmt.Sprint(cl["id"]) + "/optional-client-scopes/" + offlineID
+	e.admin(t, "DELETE", opt, nil)
+	defer e.admin(t, "PUT", opt, nil)
+	c2 := e.newCLI(t)
+	lines := strings.Join(c2.login(t), "\n")
+	if typ := claims(loginFile(c2)["refresh_token"].(string))["typ"]; typ != "Refresh" || !strings.Contains(lines, "ends with your browser session") {
+		t.Fatalf("login with a CLI client lacking offline_access: refresh token %v, output:\n%s", typ, lines)
+	}
+	// Its online session would otherwise reach the OD17 step after this.
+	e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+fmt.Sprint(claims(loginFile(c2)["access_token"].(string))["sid"]), nil)
 }
