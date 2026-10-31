@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -356,3 +357,79 @@ func TestSSHGlobalHostCAs(t *testing.T) {
 	}
 }
 
+// TestElevateGroupMCP covers docs/08 D11 (G10) through /mcp: list_targets
+// returns each target's usable groups and, for SSH targets, sudo; elevate
+// with a group name covers its members, which the message lists with the
+// group's name; a group in run is refused like an unknown name.
+func TestElevateGroupMCP(t *testing.T) {
+	caPEM, caPub := newCA(t)
+	host := startSSHHost(t, caPub)
+	e := servertest.Start(t, withSSH(t, host, caPEM, caPub), func(c *config.Config) {
+		c.Groups = []config.Group{
+			{Name: "fleet", Targets: []string{"prod", "db-1"}},
+			{Name: "claude", Targets: []string{"prod", "claude-only"}},
+		}
+	})
+	cs := mcpAgent(t, e, "codex", "s1")
+	var lt api.ListTargetsOut
+	call(t, cs, api.ToolListTargets, map[string]any{}, &lt)
+	info := map[string]api.TargetInfo{}
+	for _, tg := range lt.Targets {
+		info[tg.Name] = tg
+	}
+	// codex may not see claude-only, so "claude" is not offered on prod.
+	if g := info["prod"].Groups; len(g) != 1 || g[0] != "fleet" || info["prod"].Sudo != nil {
+		t.Fatalf("prod %+v", info["prod"])
+	}
+	if db := info["db-1"]; db.Sudo == nil || !*db.Sudo || len(db.Groups) != 1 || db.Groups[0] != "fleet" {
+		t.Fatalf("db-1 %+v", db)
+	}
+	if g := info["lab"].Groups; len(g) != 0 {
+		t.Fatalf("lab groups %v", g)
+	}
+
+	done := make(chan api.ElevateOut, 1)
+	go func() {
+		var out api.ElevateOut
+		if eb := call(t, cs, api.ToolElevate, api.ElevateIn{Targets: []string{"fleet"}, Duration: "5m", Reason: "rollout"}, &out); eb != nil {
+			t.Error(eb)
+		}
+		done <- out
+	}()
+	msg := e.Tap(t, 1, "Approve")
+	for _, want := range []string{"<b>Targets:</b> <code>db-1</code>, <code>prod</code>\n", "<b>Group</b> <code>fleet</code> = <code>db-1</code>, <code>prod</code>"} {
+		if !strings.Contains(msg.Text, want) {
+			t.Errorf("message lacks %q:\n%s", want, msg.Text)
+		}
+	}
+	el := <-done
+	if len(el.Targets) != 2 || el.Targets[0] != "db-1" || el.Targets[1] != "prod" {
+		t.Fatalf("elevation targets %v", el.Targets)
+	}
+	var out api.RunOut
+	if eb := call(t, cs, api.ToolRun, api.RunIn{Target: "db-1", Args: []string{"echo", "hi"}, Reason: "check", Elevation: el.Handle}, &out); eb != nil || out.CoveredBy != codes.CoveredElevation {
+		t.Fatalf("db-1 under the group's elevation: %+v %+v", eb, out)
+	}
+	// A group the agent can't fully see, and a group in run.
+	var eo api.ElevateOut
+	if eb := call(t, cs, api.ToolElevate, api.ElevateIn{Targets: []string{"claude"}, Reason: "x"}, &eo); eb == nil || eb.Code != codes.InvalidRequest {
+		t.Fatalf("group with a hidden member: %+v", eb)
+	}
+	grp := call(t, cs, api.ToolRun, api.RunIn{Target: "fleet", Args: []string{"get", "pods"}, Reason: "x"}, &out)
+	unk := call(t, cs, api.ToolRun, api.RunIn{Target: "no-such", Args: []string{"get", "pods"}, Reason: "x"}, &out)
+	if grp == nil || unk == nil || grp.Code != codes.TargetNotAllowed || grp.Message != unk.Message {
+		t.Fatalf("group in run %+v, unknown %+v", grp, unk)
+	}
+	if n := len(e.Telegram.Sent()); n != 1 {
+		t.Fatalf("%d prompts", n)
+	}
+	var rec map[string]any
+	for _, r := range e.Audit.Records() {
+		if r["kind"] == codes.KindDecision && r["decision"] == codes.Allow && r["elevation_id"] == el.ElevationID && r["run_id"] == nil {
+			rec = r
+		}
+	}
+	if rec == nil || fmt.Sprint(rec["targets"]) != "[db-1 prod]" || fmt.Sprint(rec["target_groups"]) != "[fleet]" {
+		t.Fatalf("audit %v", rec)
+	}
+}

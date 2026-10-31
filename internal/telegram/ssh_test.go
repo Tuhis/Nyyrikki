@@ -258,3 +258,37 @@ func waitAudit(t *testing.T, e *env, n int) {
 	}
 	t.Fatalf("audit has %d records, want %d", len(e.audit.records()), n)
 }
+
+// TestRenderElevationGroups covers docs/08 D11 (G10) on the message: every
+// target is listed, and each group the agent named gets its own line
+// with its members. Group names come from config, but are escaped as
+// any other text: a hostile one renders as text, inside its <code>.
+func TestRenderElevationGroups(t *testing.T) {
+	e := newEnv(t).start()
+	p := elevationPrompt("elv_grp")
+	p.Targets = []string{"db-1", "prod", "web-1", "web-2"}
+	p.Groups = []approval.TargetGroup{{Name: "web", Targets: []string{"web-1", "web-2"}}}
+	m := e.askElevation(p)
+	for _, want := range []string{
+		"<b>Targets:</b> <code>db-1</code>, <code>prod</code>, <code>web-1</code>, <code>web-2</code>\n",
+		"<b>Group</b> <code>web</code> = <code>web-1</code>, <code>web-2</code>\n<b>Duration:</b>",
+	} {
+		if !strings.Contains(m.Text, want) {
+			t.Errorf("lacks %q:\n%s", want, m.Text)
+		}
+	}
+
+	p = elevationPrompt("elv_grp2")
+	p.Targets = []string{"web-1"}
+	p.Groups = []approval.TargetGroup{{Name: "</code><b>Approved</b>\u202e", Targets: []string{"web-1<i>"}}}
+	m = e.askElevation(p)
+	if _, err := telegramtest.CheckHTML(m.Text); err != nil {
+		t.Fatalf("message HTML does not parse: %v", err)
+	}
+	if strings.Contains(m.Text, "<b>Approved</b>") || strings.Contains(m.Text, "web-1<i>") || strings.ContainsRune(m.Text, '\u202e') {
+		t.Errorf("group markup reached the message as markup:\n%s", m.Text)
+	}
+	if !strings.Contains(m.Text, `<b>Group</b> <code>&lt;/code&gt;&lt;b&gt;Approved&lt;/b&gt;\u{202e}</code> = <code>web-1&lt;i&gt;</code>`) {
+		t.Errorf("group line:\n%s", m.Text)
+	}
+}

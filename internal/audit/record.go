@@ -26,26 +26,29 @@ type RunAs struct {
 // hash before anything is stored (docs/03 D3), so callers pass the key as
 // they have it.
 type Record struct {
-	ID          string   `json:"id"`
-	Time        string   `json:"time"`
-	Kind        string   `json:"kind"`
-	Human       string   `json:"human,omitempty"`
-	Agent       string   `json:"agent,omitempty"`
-	ClientID    string   `json:"client_id,omitempty"`
-	Targets     []string `json:"targets,omitempty"`
-	RunID       string   `json:"run_id,omitempty"`
-	ElevationID string   `json:"elevation_id,omitempty"`
-	ApprovalID  string   `json:"approval_id,omitempty"`
-	Request     *Request `json:"request,omitempty"`
-	Reason      string   `json:"reason,omitempty"`
-	RunAs       *RunAs   `json:"run_as,omitempty"`
-	CoveredBy   string   `json:"covered_by,omitempty"`
-	Decision    string   `json:"decision,omitempty"`
-	Code        string   `json:"code,omitempty"`
-	Detail      string   `json:"detail,omitempty"`
-	ExitCode    *int     `json:"exit_code,omitempty"`
-	StdoutBytes int64    `json:"stdout_bytes,omitempty"`
-	StderrBytes int64    `json:"stderr_bytes,omitempty"`
+	ID       string   `json:"id"`
+	Time     string   `json:"time"`
+	Kind     string   `json:"kind"`
+	Human    string   `json:"human,omitempty"`
+	Agent    string   `json:"agent,omitempty"`
+	ClientID string   `json:"client_id,omitempty"`
+	Targets  []string `json:"targets,omitempty"`
+	// TargetGroups are the group names an elevate asked for; Targets
+	// then holds what they expanded into (docs/08 D11).
+	TargetGroups []string `json:"target_groups,omitempty"`
+	RunID        string   `json:"run_id,omitempty"`
+	ElevationID  string   `json:"elevation_id,omitempty"`
+	ApprovalID   string   `json:"approval_id,omitempty"`
+	Request      *Request `json:"request,omitempty"`
+	Reason       string   `json:"reason,omitempty"`
+	RunAs        *RunAs   `json:"run_as,omitempty"`
+	CoveredBy    string   `json:"covered_by,omitempty"`
+	Decision     string   `json:"decision,omitempty"`
+	Code         string   `json:"code,omitempty"`
+	Detail       string   `json:"detail,omitempty"`
+	ExitCode     *int     `json:"exit_code,omitempty"`
+	StdoutBytes  int64    `json:"stdout_bytes,omitempty"`
+	StderrBytes  int64    `json:"stderr_bytes,omitempty"`
 	// CertSerial is the serial of the SSH certificate a run was issued
 	// (docs/07 D5), in decimal; its key ID is "nyyrikki:" and the run ID.
 	CertSerial string `json:"cert_serial,omitempty"`

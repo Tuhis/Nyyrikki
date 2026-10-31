@@ -20,6 +20,12 @@ type TargetInfo struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Type        string `json:"type"`
+	// Groups are the names of the groups that contain the target, which
+	// elevate accepts in place of their members (docs/08 D11).
+	Groups []string `json:"groups,omitempty"`
+	// Sudo is set for SSH targets only: whether the human's account has
+	// passwordless sudo there (docs/08 D11).
+	Sudo *bool `json:"sudo,omitempty"`
 }
 
 // ListTargetsOut is list_targets' result.
@@ -61,7 +67,7 @@ type RunOut struct {
 
 // ElevateIn is elevate's input (docs/02 D8).
 type ElevateIn struct {
-	Targets  []string `json:"targets" jsonschema:"target names, 1 to 10"`
+	Targets  []string `json:"targets" jsonschema:"target or group names, 1 to 10; a group stands for its members, and the elevation covers at most 10 targets once groups are expanded"`
 	Duration string   `json:"duration,omitempty" jsonschema:"Go duration, default 15m, at most 30m"`
 	Reason   string   `json:"reason" jsonschema:"why you need it; shown to the approver as your claim"`
 }
