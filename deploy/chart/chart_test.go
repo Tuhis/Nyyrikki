@@ -21,6 +21,16 @@ import (
 
 type object = map[string]any
 
+// TestMain pins the release namespace. Without it, helm template takes the
+// namespace of the current kube context, which on CI's runners isn't
+// "default", and the tests that expect the rendered namespace fail.
+func TestMain(m *testing.M) {
+	if err := os.Setenv("HELM_NAMESPACE", "default"); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
 func render(t *testing.T, extra ...string) []object {
 	t.Helper()
 	if os.Getenv("NYYRIKKI_CHART_TESTS") != "1" {
