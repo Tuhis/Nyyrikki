@@ -319,6 +319,15 @@ type runOut struct {
 	err error
 }
 
+// String makes the error readable where a runOut is printed whole
+// (tapUnless): fmt prints an unexported error field as a pointer.
+func (o runOut) String() string {
+	if o.err != nil {
+		return "error: " + o.err.Error()
+	}
+	return o.raw
+}
+
 // runAsync is runVia through a new session, in the background. It never
 // calls t.Fatal off the test's goroutine, which would only end that
 // goroutine: a failure is its result, which tapUnless reports if it comes
