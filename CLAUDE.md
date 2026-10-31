@@ -77,9 +77,10 @@ Decisions and their reasons only. The detail, the owner decisions
 - **Nyyrikki is an OAuth resource server only.** Tokens come from an
   external authorization server, Keycloak as the reference, using its
   supported features only: DCR for MCP clients, the device grant for
-  the CLI with DPoP required, an audience scope, introspection, no
-  `offline_access` for the CLI; MCP harnesses may hold offline sessions,
-  capped (D6, D7, OD17, owner decision 2026-10-30).
+  the CLI with DPoP required, an audience scope, introspection; MCP
+  harnesses and CLI logins may hold offline sessions, capped, the CLI's
+  still DPoP-bound (D6, D7, OD17, OD18, owner decisions 2026-10-30 and
+  2026-10-31).
 - **Human = token `sub` from the configured issuer, looked up in the
   human registry. Agent = one sign-in: (issuer, `azp`, `cnf.jkt`) for
   the CLI, whose tokens are DPoP-bound to a key made per

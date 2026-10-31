@@ -14,14 +14,15 @@ Write `NYYRIKKI` for Nyyrikki's canonical URL, e.g.
 - **Sessions** (Realm settings → Sessions): SSO Session Max a working day
   or less (e.g. 10 h). Agents sign in again after it.
 - **Offline sessions** (Realm settings → Sessions), for MCP harnesses
-  that stay signed in (docs/01 OD17): turn **Offline Session Max Limited**
+  and CLI logins that stay signed in (docs/01 OD17, OD18): turn **Offline Session Max Limited**
   on and pick a cap (the owner's deployment uses a year, with Offline
   Session Idle at 30 days). Without the cap an offline session that is
   used lives forever. The human needs the realm role `offline_access`;
   a realm set up from an import may have given the user no roles at all
   (Keycloak then answers `Offline tokens not allowed for the user or
   client`). To keep every agent bound to the browser session instead,
-  don't offer `offline_access` to registered clients (below); harnesses
+  don't offer `offline_access` to registered clients or to the CLI
+  client (below); harnesses
   that ask for it at registration, as Claude Code does, then can't sign
   in, and neither can `nyyrikki login --mcp`, which asks for it whenever
   discovery lists it (not measured: expect `invalid_scope`). Without the
@@ -52,7 +53,9 @@ Clients → Create:
 - Advanced → **Require DPoP bound tokens: on**. Required: without it, CLI
   logins in one browser would be one agent (docs/01 OD14), and Nyyrikki
   refuses CLI tokens without `cnf.jkt`.
-- Client scopes: `nyyrikki` as optional; remove `offline_access`.
+- Client scopes: `nyyrikki` and `offline_access` as optional (docs/01
+  OD18). Without `offline_access`, `nyyrikki login` still signs in, but
+  its login ends with the browser session, and it says so.
 
 ## Dynamic Client Registration, for MCP harnesses
 
@@ -127,8 +130,12 @@ by the chart's `secrets.introspection`.
   the account console's Applications → **Remove access**. Signing out
   the owner's browser sessions (type *Regular SSO* under Sessions) does
   **not** end it: its session is an offline one.
-- **A CLI login** (no offline session): Users → the owner → Sessions →
-  sign its session out.
+- **One CLI login** (it may hold an offline session, docs/01 OD18):
+  Users → the owner → Sessions → sign out its *Offline* session for
+  `nyyrikki-cli`; the session's ID is the `sid` of the login's tokens.
+  Revoking `nyyrikki-cli` under Consents ends **every** CLI login of the
+  owner, since they share that client. A CLI login without an offline
+  session: sign its *Regular SSO* session out.
 - **Every agent at once**: Users → the owner → **Sign out**. It sets a
   not-before time for the user, so every token issued before it is
   refused, offline ones included. A sign-in completed in the same second
@@ -140,6 +147,8 @@ Nyyrikki introspects on every run and elevate, so the agent is cut off at
 once (docs/01 OD13). The e2e test measures, on Keycloak 26.8.1: revoking
 a harness's consent (through the admin API), signing out every one of
 the owner's sessions (through the admin API) without ending an offline
-harness, and signing the owner out. The account
-console's Remove access, a single CLI session's sign-out and Set to now
+harness, and signing the owner out; and for a CLI login, ending its
+offline session (through the admin API) and the browser sessions
+leaving it working. The account
+console's Remove access, a regular CLI session's sign-out and Set to now
 follow Keycloak's documentation and aren't measured.

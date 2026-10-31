@@ -697,3 +697,103 @@ func (e *env) checkOffline(t *testing.T, next func() int) {
 		t.Fatal("a revoked harness reached the approver")
 	}
 }
+
+// checkOfflineCLI is the CLI's offline login (docs/01 OD18, M9): its
+// refresh token is Offline and still bound to the login's key, so a
+// refresh without a proof from that key is refused, and one with it keeps
+// cnf.jkt, the CLI agent's key (D8). Ending the owner's browser sessions
+// leaves it working. A CLI client without the offline_access scope (set
+// up before OD18) still signs in, session-bound, and says so.
+func (e *env) checkOfflineCLI(t *testing.T) {
+	// The sign-out before this step refuses tokens issued in its second.
+	time.Sleep(1100 * time.Millisecond)
+	c := e.newCLI(t)
+	c.login(t)
+	lf := loginFile(c)
+	rt, _ := lf["refresh_token"].(string)
+	jkt := func(at string) any {
+		cnf, _ := claims(at)["cnf"].(map[string]any)
+		return cnf["jkt"]
+	}
+	jkt0 := jkt(lf["access_token"].(string))
+	if claims(rt)["typ"] != "Offline" || jkt0 == nil {
+		t.Fatalf("CLI login: refresh token %v, jkt %v", claims(rt)["typ"], jkt0)
+	}
+	if at, _ := e.refresh(t, "nyyrikki-cli", rt); at != "" {
+		t.Fatal("the CLI's offline refresh token refreshed without a DPoP proof")
+	}
+	// Expire its access token so the CLI refreshes, with its key.
+	refreshed := func(why string) map[string]any {
+		t.Helper()
+		lf := loginFile(c)
+		old := lf["access_token"]
+		lf["expires_at"] = time.Now().Add(-time.Minute).Format(time.RFC3339)
+		b, _ := json.Marshal(lf)
+		if err := os.WriteFile(filepath.Join(c.home, ".config", "nyyrikki", "login.json"), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if r := c.run(t, "", "targets"); r.code != 0 {
+			t.Fatalf("targets %s: %+v", why, r)
+		}
+		lf = loginFile(c)
+		if at, _ := lf["access_token"].(string); at == "" || at == old {
+			t.Fatalf("the CLI didn't refresh %s", why)
+		}
+		return lf
+	}
+	lf = refreshed("after a refresh with the key")
+	at1 := lf["access_token"].(string)
+	t.Logf("M9 OD18: CLI offline refresh: jkt %v -> %v, refresh token %v", jkt0, jkt(at1), claims(lf["refresh_token"].(string))["typ"])
+	if jkt(at1) != jkt0 || claims(lf["refresh_token"].(string))["typ"] != "Offline" {
+		t.Fatalf("CLI offline refresh: jkt %v -> %v, refresh token %v", jkt0, jkt(at1), claims(lf["refresh_token"].(string))["typ"])
+	}
+
+	// Ending the owner's browser sessions leaves it working.
+	users := "/admin/realms/" + realm + "/users/" + e.ownerID
+	var online []struct{ ID string }
+	json.Unmarshal(e.admin(t, "GET", users+"/sessions", nil), &online)
+	if len(online) == 0 {
+		t.Fatal("the browser had no session to sign out, so this measures nothing")
+	}
+	for _, ss := range online {
+		e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+ss.ID, nil)
+	}
+	lf = refreshed("after the browser sessions ended")
+	if jkt(lf["access_token"].(string)) != jkt0 {
+		t.Fatalf("jkt changed after the browser sessions ended")
+	}
+
+	// Ending that one offline session, whose ID is the token's sid, ends
+	// that login at once, with no prompt (docs/setup/keycloak.md,
+	// Revoking an agent). Revoking nyyrikki-cli's consent would end every
+	// CLI login of the owner instead.
+	sid := claims(lf["access_token"].(string))["sid"]
+	e.admin(t, "DELETE", "/admin/realms/"+realm+"/sessions/"+fmt.Sprint(sid)+"?isOffline=true", nil)
+	before := len(e.tg.Sent(t))
+	if r := c.run(t, "", "run", "--reason", "after its offline session ended", "this-cluster", "--", "get", "pods"); r.code != 77 || !strings.Contains(r.stderr, "session_inactive") {
+		t.Fatalf("CLI login after its offline session ended: %+v", r)
+	}
+	if len(e.tg.Sent(t)) != before {
+		t.Fatal("a CLI login whose offline session ended reached the approver")
+	}
+
+	// A CLI client without the offline_access scope: invalid_scope, and
+	// the login falls back to a session-bound one.
+	cl := e.adminClient(t, "nyyrikki-cli")
+	var scopes []struct{ ID, Name string }
+	json.Unmarshal(e.admin(t, "GET", "/admin/realms/"+realm+"/client-scopes", nil), &scopes)
+	var offlineID string
+	for _, sc := range scopes {
+		if sc.Name == "offline_access" {
+			offlineID = sc.ID
+		}
+	}
+	opt := "/admin/realms/" + realm + "/clients/" + fmt.Sprint(cl["id"]) + "/optional-client-scopes/" + offlineID
+	e.admin(t, "DELETE", opt, nil)
+	defer e.admin(t, "PUT", opt, nil)
+	c2 := e.newCLI(t)
+	lines := strings.Join(c2.login(t), "\n")
+	if typ := claims(loginFile(c2)["refresh_token"].(string))["typ"]; typ != "Refresh" || !strings.Contains(lines, "ends with your browser session") {
+		t.Fatalf("login with a CLI client lacking offline_access: refresh token %v, output:\n%s", typ, lines)
+	}
+}

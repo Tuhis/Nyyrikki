@@ -342,7 +342,10 @@ func (e *env) configureKeycloak(t *testing.T) {
 			"optionalClientScopes": []string{"nyyrikki"},
 		}
 	}
-	e.admin(t, "POST", r+"/clients", deviceClient("nyyrikki-cli", true))
+	cli := deviceClient("nyyrikki-cli", true)
+	// The CLI may hold an offline session (docs/01 OD18).
+	cli["optionalClientScopes"] = []string{"nyyrikki", "offline_access"}
+	e.admin(t, "POST", r+"/clients", cli)
 	// Stands in for an MCP harness's own registration (Bearer, keyed by sid).
 	e.admin(t, "POST", r+"/clients", deviceClient(mcpClientID, false))
 	// Named after Nyyrikki's audience: Keycloak introspects a token only

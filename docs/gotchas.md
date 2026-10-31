@@ -135,6 +135,11 @@ the doc.
   out the browser (online) sessions leaves alone. Revoke its consent, or sign the user out (that sets a
   not-before time offline tokens are checked against).
   ([docs/01](01-foundations.md) M9)
+- **Every CLI login shares the `nyyrikki-cli` client**, so revoking its
+  consent ends all of them. End one by its own offline session (ID = its
+  tokens' `sid`). A CLI client without the `offline_access` scope makes
+  Keycloak answer `invalid_scope`; `nyyrikki login` then falls back to a
+  session-bound login. ([docs/01](01-foundations.md) OD18)
 - **Keycloak requires PKCE in the device grant for a client with PKCE
   set**, which the pkce-enforcer client policy does for every registered
   client: without `code_challenge` the device authorization request fails

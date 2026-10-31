@@ -96,8 +96,9 @@ func (c *cli) cmd(args ...string) *exec.Cmd {
 	return cmd
 }
 
-// login runs `nyyrikki login` and approves the device code it prints.
-func (c *cli) login(t *testing.T, extra ...string) {
+// login runs `nyyrikki login`, approves the device code it prints, and
+// returns what it printed.
+func (c *cli) login(t *testing.T, extra ...string) []string {
 	t.Helper()
 	cmd := c.cmd(append([]string{"login", "--server", c.e.canonical, "--ca-file", c.e.caFile}, extra...)...)
 	stderr, _ := cmd.StderrPipe()
@@ -119,6 +120,7 @@ func (c *cli) login(t *testing.T, extra ...string) {
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("login: %v\n%s", err, strings.Join(lines, "\n"))
 	}
+	return lines
 }
 
 type result struct {

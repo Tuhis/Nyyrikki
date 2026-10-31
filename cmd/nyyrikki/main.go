@@ -164,6 +164,7 @@ func (c *cli) login(ctx context.Context, args []string) int {
 				fmt.Fprintf(c.stderr, "nyyrikki: or open %s\n", complete)
 			}
 		},
+		Notice: func(m string) { fmt.Fprintln(c.stderr, "nyyrikki: "+m) },
 	})
 	if err != nil {
 		return c.fail(err)

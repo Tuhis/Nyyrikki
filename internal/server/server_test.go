@@ -403,11 +403,11 @@ func TestDeviceGrantPKCE(t *testing.T) {
 	}
 }
 
-// TestMCPLoginAsksOffline: `login --mcp` asks for offline_access when the
-// authorization server offers it, so a harness's sign-in outlives the
-// browser session (docs/01 OD17). The CLI login never does, and neither
-// does `--mcp` where it isn't offered.
-func TestMCPLoginAsksOffline(t *testing.T) {
+// TestLoginAsksOffline: both logins ask for offline_access when the
+// authorization server offers it, so a sign-in outlives the browser
+// session: `login --mcp` since docs/01 OD17, the CLI's since OD18.
+// Neither does where it isn't offered.
+func TestLoginAsksOffline(t *testing.T) {
 	for _, offered := range []bool{true, false} {
 		e := servertest.Start(t)
 		e.AS.AutoApprove = true
@@ -419,11 +419,33 @@ func TestMCPLoginAsksOffline(t *testing.T) {
 				t.Fatal(err)
 			}
 			scope := strings.Fields(e.AS.DeviceScope(l.ClientID))
-			want := offered && mcp
-			if slices.Contains(scope, "offline_access") != want || !slices.Contains(scope, "nyyrikki") {
+			if slices.Contains(scope, "offline_access") != offered || !slices.Contains(scope, "nyyrikki") {
 				t.Errorf("offered=%v mcp=%v: asked for %q", offered, mcp, scope)
 			}
 		}
+	}
+}
+
+// TestLoginWithoutOfflineScope: a realm offers offline_access but the
+// CLI's client wasn't given it (set up before docs/01 OD18), so asking
+// for it is invalid_scope. The login signs in without it and says its
+// sign-in ends with the browser session, rather than failing.
+func TestLoginWithoutOfflineScope(t *testing.T) {
+	e := servertest.Start(t)
+	e.AS.AutoApprove = true
+	e.AS.OfflineAccess = true
+	e.AS.NoOfflineScope = map[string]bool{"nyyrikki-cli": true}
+	var notices []string
+	l, err := client.SignIn(context.Background(), client.LoginOptions{Server: e.URL(), CAFile: e.CAFile,
+		Path: filepath.Join(t.TempDir(), "login.json"), Notice: func(s string) { notices = append(notices, s) }})
+	if err != nil {
+		t.Fatalf("login with a client lacking offline_access: %v", err)
+	}
+	if scope := strings.Fields(e.AS.DeviceScope(l.ClientID)); slices.Contains(scope, "offline_access") || !slices.Contains(scope, "nyyrikki") {
+		t.Errorf("asked for %q", scope)
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "browser session") {
+		t.Errorf("notices %q", notices)
 	}
 }
 

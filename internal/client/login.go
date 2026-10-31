@@ -196,6 +196,9 @@ type LoginOptions struct {
 	ClientName string
 	// Prompt shows the device-code instructions to the human.
 	Prompt func(verificationURI, userCode, complete string)
+	// Notice tells the human something about the sign-in that isn't an
+	// error.
+	Notice func(string)
 	Now    func() time.Time
 }
 
@@ -296,9 +299,11 @@ func SignIn(ctx context.Context, o LoginOptions) (*Login, error) {
 	// client policy does for every registered client.
 	verifier, challenge := pkcePair()
 	scope := slices.Clone(rm.ScopesSupported)
-	// An MCP harness may hold an offline session, so its sign-in outlives
-	// the browser session (docs/01 OD17); the CLI's never does.
-	if o.MCP && slices.Contains(am.ScopesSupported, "offline_access") {
+	// Both logins may hold an offline session, so a sign-in outlives the
+	// browser session: an MCP harness's since docs/01 OD17, the CLI's
+	// since OD18. The CLI's stays DPoP-bound to this login's key.
+	offline := slices.Contains(am.ScopesSupported, "offline_access")
+	if offline {
 		scope = append(scope, "offline_access")
 	}
 	form := url.Values{"client_id": {l.ClientID}, "scope": {strings.Join(scope, " ")},
@@ -311,7 +316,19 @@ func SignIn(ctx context.Context, o LoginOptions) (*Login, error) {
 		ExpiresIn               int    `json:"expires_in"`
 		Interval                int    `json:"interval"`
 	}
-	if err := postForm(ctx, hc, am.DeviceAuthorizationEndpoint, form, nil, &da); err != nil {
+	err = postForm(ctx, hc, am.DeviceAuthorizationEndpoint, form, nil, &da)
+	// A realm may offer offline_access without giving it to this client
+	// (a CLI client set up before OD18): Keycloak answers invalid_scope.
+	// Sign in without it; the login then ends with the browser session.
+	var oe *oauthError
+	if offline && errors.As(err, &oe) && oe.Code == "invalid_scope" {
+		form.Set("scope", strings.Join(rm.ScopesSupported, " "))
+		err = postForm(ctx, hc, am.DeviceAuthorizationEndpoint, form, nil, &da)
+		if err == nil && o.Notice != nil {
+			o.Notice("the authorization server doesn't give this client offline_access, so this login ends with your browser session")
+		}
+	}
+	if err != nil {
 		return nil, fmt.Errorf("device authorization: %w", err)
 	}
 	if o.Prompt != nil {
