@@ -142,11 +142,19 @@ type SSHTarget struct {
 // SSH holds what all SSH targets share (docs/07 §5.5).
 type SSH struct {
 	// UserCAKeyFile is the user CA's private key, a mounted Secret
-	// (docs/07 D6).
+	// (docs/07 D6, docs/08 D1); required.
 	UserCAKeyFile string `yaml:"user_ca_key_file"`
-	// UserCAPublicKeys are the CA keys hosts trust; the key of
-	// UserCAKeyFile must be one of them.
+	// NextUserCAKeyFile is a staged next user CA key (docs/08 D1); a
+	// missing file means no rotation is staged.
+	NextUserCAKeyFile string `yaml:"next_user_ca_key_file"`
+	// HostCAKeyFile is the host CA key (docs/08 D1); a missing file
+	// means enrollment is off.
+	HostCAKeyFile string `yaml:"host_ca_key_file"`
+	// UserCAPublicKeys are extra CA keys hosts trust, beyond the ones
+	// derived from the key files (docs/08 D1); optional.
 	UserCAPublicKeys []string `yaml:"user_ca_public_keys"`
+	// RevokedUserCAKeys are user CA keys hosts must refuse (docs/08 D3).
+	RevokedUserCAKeys []string `yaml:"revoked_user_ca_keys"`
 	// SourceAddresses are Nyyrikki's egress CIDRs (docs/07 D4, D5).
 	SourceAddresses []string `yaml:"source_addresses"`
 	ConnectTimeout  Duration `yaml:"connect_timeout"`
@@ -489,7 +497,8 @@ func (c *Config) hasSSH() bool {
 
 // reflectZeroSSH reports whether s holds only defaults.
 func reflectZeroSSH(s *SSH) bool {
-	return s.UserCAKeyFile == "" && len(s.UserCAPublicKeys) == 0 && len(s.SourceAddresses) == 0 &&
+	return s.UserCAKeyFile == "" && s.NextUserCAKeyFile == "" && s.HostCAKeyFile == "" &&
+		len(s.UserCAPublicKeys) == 0 && len(s.RevokedUserCAKeys) == 0 && len(s.SourceAddresses) == 0 &&
 		len(s.HostCAs) == 0 && len(s.RevokedHostKeys) == 0 && s.Defaults == (SSHDefaults{})
 }
 

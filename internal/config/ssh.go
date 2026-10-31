@@ -13,7 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// validateSSH checks the shared ssh block (docs/07 §5.5). Each value
+// validateSSH checks the shared ssh block (docs/07 §5.5, docs/08 §5.3). Each value
 // that the setup endpoint serves is checked for the format the setup
 // script accepts too (docs/07 D16), so nothing the script would refuse,
 // or read as anything but data, is ever served.
@@ -23,12 +23,24 @@ func validateSSH(s *SSH) []error {
 	if s.UserCAKeyFile == "" {
 		bad("user_ca_key_file is required")
 	}
-	if len(s.UserCAPublicKeys) == 0 {
-		bad("user_ca_public_keys is required")
+	// docs/08 D1: three different files; one path for two keys would
+	// make a staged key the current one, or the host CA a user CA.
+	if s.NextUserCAKeyFile != "" && s.NextUserCAKeyFile == s.UserCAKeyFile {
+		bad("next_user_ca_key_file must differ from user_ca_key_file")
 	}
+	if s.HostCAKeyFile != "" && (s.HostCAKeyFile == s.UserCAKeyFile || s.HostCAKeyFile == s.NextUserCAKeyFile) {
+		bad("host_ca_key_file must differ from user_ca_key_file and next_user_ca_key_file")
+	}
+	// user_ca_public_keys holds only extra keys now; the CA keys' own
+	// public halves are derived from the key files (docs/08 D1).
 	for i, k := range s.UserCAPublicKeys {
 		if _, err := ParseUserCAKey(k); err != nil {
 			bad("user_ca_public_keys[%d]: %v", i, err)
+		}
+	}
+	for i, k := range s.RevokedUserCAKeys {
+		if _, err := ParseUserCAKey(k); err != nil {
+			bad("revoked_user_ca_keys[%d]: %v", i, err)
 		}
 	}
 	if len(s.SourceAddresses) == 0 {

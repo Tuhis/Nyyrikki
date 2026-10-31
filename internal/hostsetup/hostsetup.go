@@ -1,7 +1,8 @@
 // Package hostsetup serves GET /hosts/<target>/setup.sh (docs/07 D16,
 // OD3): the host setup script, byte for byte the file in the repo,
 // followed by data lines built from config. It needs no token, since a
-// host has none, and reads no secret.
+// host has none. It reads the CA key files only to derive the public
+// keys hosts trust (docs/08 D1), and serves nothing of a private key.
 package hostsetup
 
 import (
@@ -22,6 +23,7 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/audit"
 	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/config"
+	"github.com/Tuhis/Nyyrikki/internal/sshca"
 )
 
 // Prefix is the path the handler is mounted at.
@@ -54,8 +56,9 @@ func CheckBody(body []byte) error {
 
 // DataLines builds the data lines for target t (docs/07 D16): every
 // value from config, each in a format config validation already checked
-// and the script checks again. The last line counts the others.
-func DataLines(c *config.Config, t *config.Target) ([]byte, error) {
+// and the script checks again, and one CA_KEY per key of trusted, the
+// trusted set of docs/08 D1. The last line counts the others.
+func DataLines(c *config.Config, t *config.Target, trusted []ssh.PublicKey) ([]byte, error) {
 	if t == nil || t.SSH == nil {
 		return nil, errors.New("hostsetup: not an SSH target")
 	}
@@ -78,13 +81,17 @@ func DataLines(c *config.Config, t *config.Target) ([]byte, error) {
 			return nil, err
 		}
 	}
-	for _, k := range c.SSH.UserCAPublicKeys {
-		pk, err := config.ParseUserCAKey(k)
-		if err != nil {
+	if len(trusted) == 0 {
+		return nil, errors.New("hostsetup: no trusted user CA key")
+	}
+	for _, pk := range trusted {
+		// Type and base64 only, and the same format checks as a
+		// configured key: a key the script would refuse is never served.
+		line := sshca.AuthorizedKey(pk)
+		if _, err := config.ParseUserCAKey(line); err != nil {
 			return nil, err
 		}
-		// Type and base64 only: the comment is free text and stays out.
-		if err := add("CA_KEY", strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pk)))); err != nil {
+		if err := add("CA_KEY", line); err != nil {
 			return nil, err
 		}
 	}
@@ -109,20 +116,25 @@ func DataLines(c *config.Config, t *config.Target) ([]byte, error) {
 type Handler struct {
 	cfg   *config.Config
 	body  []byte
+	keys  *sshca.Keys
 	audit audit.Appender
 	log   *slog.Logger
 }
 
 // New returns the handler. body is the embedded script; it is checked
-// here, so a broken build never serves.
-func New(cfg *config.Config, body []byte, a audit.Appender, logger *slog.Logger) (*Handler, error) {
+// here, so a broken build never serves. keys are the CA keys the trusted
+// set is derived from, read on each fetch (docs/08 D1).
+func New(cfg *config.Config, body []byte, keys *sshca.Keys, a audit.Appender, logger *slog.Logger) (*Handler, error) {
 	if err := CheckBody(body); err != nil {
 		return nil, err
+	}
+	if keys == nil {
+		return nil, errors.New("hostsetup: no CA keys")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{cfg: cfg, body: bytes.Clone(body), audit: a, log: logger}, nil
+	return &Handler{cfg: cfg, body: bytes.Clone(body), keys: keys, audit: a, log: logger}, nil
 }
 
 var pathPattern = regexp.MustCompile(`^/hosts/([^/]+)/setup\.sh$`)
@@ -154,7 +166,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	data, err := DataLines(h.cfg, t)
+	// docs/08 D1, D3: a broken key file or a revoked user-ca serves
+	// nothing, so no host is set up to trust the wrong keys.
+	set, err := h.keys.Load()
+	if err != nil {
+		detail := codes.DetailOf(err)
+		if detail == "" {
+			detail = "unavailable"
+		}
+		h.log.Error("the SSH CA keys are unavailable; setup script not served", "target", t.Name, "detail", detail)
+		http.Error(w, "unavailable: "+detail, http.StatusServiceUnavailable)
+		return
+	}
+	data, err := DataLines(h.cfg, t, set.Trusted())
 	if err != nil {
 		h.log.Error("building the setup script's data lines failed", "target", t.Name, "err", err)
 		http.Error(w, "unavailable", http.StatusInternalServerError)

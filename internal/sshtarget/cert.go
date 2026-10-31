@@ -1,17 +1,16 @@
 package sshtarget
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/binary"
-	"os"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/Tuhis/Nyyrikki/internal/codes"
+	"github.com/Tuhis/Nyyrikki/internal/sshca"
 )
 
 // Certificate lifetime around now (docs/07 D5): sshd checks it only at
@@ -21,35 +20,23 @@ const (
 	certLifetime = 2 * time.Minute
 )
 
-// Detail values of the CA's failures.
-const (
-	DetailCAUnreadable = "ca_key_unreadable"
-	DetailCAMismatch   = "ca_key_not_listed"
-)
-
 // CA signs one certificate per run with the user CA key (docs/07 D5,
-// D6). The key file is read on each use, so a rotated Secret applies to
-// the next run, and the key is never kept between runs.
+// D6). The key is read through internal/sshca on each use (docs/08 D1),
+// so a rotated Secret applies to the next run, and the key is never kept
+// between runs.
 type CA struct {
-	keyFile string
-	// trusted are the marshalled user_ca_public_keys: the key in keyFile
-	// must be one of them (docs/07 §5.5).
-	trusted [][]byte
+	keys    *sshca.Keys
 	sources string
 	now     func() time.Time
 }
 
-// NewCA returns a CA. publicKeys are the parsed user_ca_public_keys,
-// sources the source addresses the certificate is restricted to.
-func NewCA(keyFile string, publicKeys []ssh.PublicKey, sources []string, now func() time.Time) *CA {
+// NewCA returns a CA that signs with the user CA of keys. sources are
+// the source addresses the certificate is restricted to.
+func NewCA(keys *sshca.Keys, sources []string, now func() time.Time) *CA {
 	if now == nil {
 		now = time.Now
 	}
-	ca := &CA{keyFile: keyFile, sources: strings.Join(sources, ","), now: now}
-	for _, k := range publicKeys {
-		ca.trusted = append(ca.trusted, k.Marshal())
-	}
-	return ca
+	return &CA{keys: keys, sources: strings.Join(sources, ","), now: now}
 }
 
 // Cert is one run's credential: a signer over a key pair made in memory
@@ -117,23 +104,12 @@ func (ca *CA) Mint(runID, human, target string, interactive bool) (*Cert, error)
 	return &Cert{signer: signer, Serial: cert.Serial, KeyID: cert.KeyId}, nil
 }
 
-// load reads the CA key and checks it against user_ca_public_keys
-// (docs/07 §5.5). The file's contents never reach an error.
+// load reads the CA keys (docs/08 D1): a broken key file or a revoked
+// user-ca is a *codes.Error with codes.Unavailable and no key material.
 func (ca *CA) load() (ssh.Signer, error) {
-	b, err := os.ReadFile(ca.keyFile)
+	set, err := ca.keys.Load()
 	if err != nil {
-		return nil, codes.WithDetail(codes.Unavailable, DetailCAUnreadable, "the SSH user CA key is unavailable")
+		return nil, err
 	}
-	s, err := ssh.ParsePrivateKey(b)
-	clear(b)
-	if err != nil || s.PublicKey().Type() != ssh.KeyAlgoED25519 {
-		return nil, codes.WithDetail(codes.Unavailable, DetailCAUnreadable, "the SSH user CA key is unavailable")
-	}
-	pub := s.PublicKey().Marshal()
-	for _, t := range ca.trusted {
-		if bytes.Equal(t, pub) {
-			return s, nil
-		}
-	}
-	return nil, codes.WithDetail(codes.Unavailable, DetailCAMismatch, "the SSH user CA key is not one of ssh.user_ca_public_keys")
+	return set.UserCA, nil
 }
