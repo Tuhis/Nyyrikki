@@ -236,6 +236,16 @@ the doc.
 
 **Tooling and dependencies**
 
+- **A `pre-install` hook can't create an object the chart also
+  templates**: Helm checks for conflicts before hooks run, then fails
+  the first install with "already exists". And a Helm-owned Secret
+  filled in by a hook is replaced by `helm upgrade --force`, so the hook
+  then makes new contents. Keep generated keys out of the release.
+  ([docs/08](08-ssh-onboarding.md) M7, M8)
+- **Argo CD's label tracking claims any object labelled
+  `app.kubernetes.io/instance: <app>`**, rendered or not, and auto-sync
+  with prune deletes the ones that aren't in the manifests. Don't put
+  that label on objects a hook creates. ([docs/08](08-ssh-onboarding.md) D16)
 - **`gopkg.in/yaml.v3` has been unmaintained since 2022.** Use
   `go.yaml.in/yaml/v3`. ([docs/01](https://github.com/Tuhis/Nyyrikki/blob/0ea8b56/docs/01-foundations.md) M4)
 - **Claude Code never reads `mcpServers` from `settings.json`.** Servers
