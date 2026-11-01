@@ -79,6 +79,12 @@ setup script.
 of extra `user_ca_public_keys` equal to a key derived from the CA Secret
 changes.
 
+*Extended 2026-11-01 by [docs/08](08-ssh-onboarding.md) D10 (SE4)*:
+`host_checked` (the target, with the run or approval it is part of),
+once per host check before an SSH approval prompt: `code` `unavailable`
+and the check's `detail` when it failed, otherwise `detail`
+`session_kill` or `no_session_kill`, what the approver is shown.
+
 ### 5.2 Schema
 
 ```sql
