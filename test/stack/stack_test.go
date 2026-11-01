@@ -131,3 +131,45 @@ exit 0`,
 		t.Errorf("with nothing left, Teardown took %v and said %q", took, logged)
 	}
 }
+
+// A step whose processes ignore SIGTERM still ends, all of it, once the
+// grace period is over: SIGKILL goes to the whole group, not only to the
+// direct child.
+func TestCancelKillsTheGroupAfterTheGrace(t *testing.T) {
+	g := stopGrace
+	stopGrace = 300 * time.Millisecond
+	t.Cleanup(func() { stopGrace = g })
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		// The shell and its child both ignore SIGTERM.
+		_, err := runEnv(ctx, nil, "sh", "-c", `trap "" TERM; sleep 300 & echo $! > `+pidFile+`; wait`)
+		done <- err
+	}()
+	var pid int
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if b, err := os.ReadFile(pidFile); err == nil && strings.TrimSpace(string(b)) != "" {
+			pid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the command never started its child")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a cancelled command didn't return")
+	}
+	for deadline := time.Now().Add(3 * time.Second); alive(pid); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the command's child %d, which ignores SIGTERM, outlived the grace period", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}

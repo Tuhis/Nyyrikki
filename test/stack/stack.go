@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -173,25 +174,60 @@ func Run(name string, args ...string) (string, error) {
 }
 
 // stopGrace is how long a cancelled step's processes have, after
-// SIGTERM, before they are killed.
-const stopGrace = 10 * time.Second
+// SIGTERM, before they are killed. A variable for the tests.
+var stopGrace = 10 * time.Second
 
 // command is a step's command. It runs in a process group of its own, and
 // when ctx ends the whole group gets SIGTERM, then SIGKILL after
 // stopGrace: a step's children (kind create cluster's docker run, a
-// docker build) end with it, before any cleanup runs. Being in its own
-// group, it doesn't get the terminal's Ctrl-C itself; the context brings
-// it. A context that never ends (Run's, the e2e's) changes nothing.
-func command(ctx context.Context, name string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, name, args...)
+// docker build) end with it, before any cleanup runs, even those that
+// ignore SIGTERM. Being in its own group, it doesn't get the terminal's
+// Ctrl-C itself; the context brings it. A context that never ends (Run's)
+// changes nothing.
+//
+// Call waited once the command has been waited for (Run, Output): it
+// stops the group's SIGKILL, so the group's number, free again once the
+// group is gone, can't be killed by mistake after its reuse.
+func command(ctx context.Context, name string, args ...string) (cmd *exec.Cmd, waited func()) {
+	cmd = exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
-	cmd.WaitDelay = stopGrace
-	return cmd
+	var (
+		mu   sync.Mutex
+		done bool
+		kill *time.Timer
+	)
+	grace := stopGrace
+	cmd.Cancel = func() error {
+		pgid := cmd.Process.Pid
+		mu.Lock()
+		if !done {
+			kill = time.AfterFunc(grace, func() {
+				mu.Lock()
+				defer mu.Unlock()
+				if !done {
+					syscall.Kill(-pgid, syscall.SIGKILL)
+				}
+			})
+		}
+		mu.Unlock()
+		return syscall.Kill(-pgid, syscall.SIGTERM)
+	}
+	// Go's own SIGKILL of the direct child comes a second after the
+	// group's, so the group's is never stopped by a Wait that it ended.
+	cmd.WaitDelay = grace + time.Second
+	return cmd, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		done = true
+		if kill != nil {
+			kill.Stop()
+		}
+	}
 }
 
 func runEnv(ctx context.Context, env []string, name string, args ...string) (string, error) {
-	cmd := command(ctx, name, args...)
+	cmd, waited := command(ctx, name, args...)
+	defer waited()
 	if env != nil {
 		cmd.Env = append(os.Environ(), env...)
 	}
@@ -488,7 +524,8 @@ func (s *Stack) LoadImage(image string) error {
 func (s *Stack) BuildCLI() error {
 	s.logf("building the CLI")
 	cli := filepath.Join(s.Dir, "nyyrikki")
-	build := command(s.ctx(), "go", "build", "-o", cli, "./cmd/nyyrikki")
+	build, waited := command(s.ctx(), "go", "build", "-o", cli, "./cmd/nyyrikki")
+	defer waited()
 	build.Dir = s.Root
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -566,7 +603,8 @@ spec:
 	if err != nil {
 		return err
 	}
-	cmd := command(s.ctx(), "kubectl", "--kubeconfig", s.Kubeconfig, "create", "-f", "-")
+	cmd, waited := command(s.ctx(), "kubectl", "--kubeconfig", s.Kubeconfig, "create", "-f", "-")
+	defer waited()
 	cmd.Stdin = bytes.NewReader(tg)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// kubectl's answer names the Secret, never its data.
