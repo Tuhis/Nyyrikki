@@ -52,16 +52,19 @@ targets:
   #   server: https://lab.example.com:6443
   #   secretName: nyyrikki-target-lab
   #   clients: []
-  # An SSH host (docs/07, docs/setup/ssh-hosts.md). Start with empty
-  # hostKeys, run the setup script on the host, then copy what it prints.
+  # An SSH host (docs/07, docs/08, docs/setup/ssh-hosts.md). An address is
+  # enough: enroll the host (nyyrikkid enroll-token, then the command it
+  # prints, on the host), and Nyyrikki verifies it by the certificate it
+  # issued. Or pin its keys, or trust a host CA, and run the setup command
+  # without enrolling; sessionKill then is what the script reported.
   # - name: db-1
   #   description: Primary database host
   #   ssh:
   #     address: db-1.example.com   # port 22 unless given, as host:port
-  #     hostKeys: []
+  #     hostKeys: []         # pins, as the setup script prints them
   #     hostCAs: []          # in addition to ssh.hostCAs
   #     sudo: false          # passwordless sudo; unset takes ssh.defaults.sudo
-  #     sessionKill: false   # as the setup script reported
+  #     sessionKill: false   # for a pinned host, as the setup script reported
   #   clients: []
 
 # Named sets of targets, of any type, for elevate (docs/08 D11): an

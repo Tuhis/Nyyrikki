@@ -39,19 +39,26 @@ A Secret without host-ca keeps enrollment off; add one with
 {{- end }}
 {{- end }}
 
-SSH targets: set up each host by running, as root on the host
-(docs/setup/ssh-hosts.md; check the script first with --dry-run):
+SSH targets (docs/setup/ssh-hosts.md). Enroll each host: make a token in
+Nyyrikki's pod (valid 15 minutes, for one host), then run the command it
+prints as root on the host, and approve on Telegram if the fingerprint
+matches what the host printed. Or, for a host verified by hostKeys or a
+host CA, run the setup command alone (check the script first with
+--dry-run):
 {{- range .Values.targets }}{{ if .ssh }}
 
-  curl -fsSL {{ trimSuffix "/" $.Values.canonicalURL }}/hosts/{{ .name }}/setup.sh | sudo sh
+  {{ .name }}:
+    kubectl -n {{ $.Release.Namespace }} exec deploy/{{ include "nyyrikki.name" $ }} -- nyyrikkid enroll-token {{ .name }}
+    curl -fsSL {{ trimSuffix "/" $.Values.canonicalURL }}/hosts/{{ .name }}/setup.sh | sudo sh
 {{- if not (or .ssh.hostKeys .ssh.hostCAs $.Values.ssh.hostCAs) }}
-  Runs on {{ .name }} are refused until targets[{{ .name }}].ssh.hostKeys holds
-  the keys the script prints.
+    Runs on {{ .name }} are refused until it is enrolled, or until
+    targets[{{ .name }}].ssh.hostKeys holds the keys the script prints.
 {{- end }}
 {{- end }}{{ end }}
 
-If Nyyrikki's certificate comes from a private CA, add --cacert with that CA.
-Never -k: a script fetched without checking the server can come from anyone.
-Enrollment with one command per host (nyyrikkid enroll-token) arrives in a
-later release (docs/08 D6, D7).
+enroll-token refuses while the CA Secret has no host-ca, and says how to
+add one. If Nyyrikki's certificate comes from a private CA, add --cacert
+with that CA to curl and to the script (sh -s -- --cacert FILE ...), which
+keeps it for the trust pull. Never -k: a script fetched without checking
+the server can come from anyone.
 {{- end }}
