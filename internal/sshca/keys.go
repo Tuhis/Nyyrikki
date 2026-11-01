@@ -97,6 +97,8 @@ type Set struct {
 	trusted    []ssh.PublicKey
 	signers    []ssh.PublicKey
 	revoked    []ssh.PublicKey
+	// hostSeed is host-ca's private key seed, for EnrollTokenKey only.
+	hostSeed []byte
 }
 
 // Trusted is the set of user CA keys hosts trust for logins, in order:
@@ -116,7 +118,7 @@ func (s *Set) Revoked() []ssh.PublicKey { return append([]ssh.PublicKey(nil), s.
 // Load reads every key file. Any failure is a *codes.Error with
 // codes.Unavailable; nothing in it holds key material.
 func (k *Keys) Load() (*Set, error) {
-	user, next, host, err := k.readConsistent()
+	user, next, host, hostSeed, err := k.readConsistent()
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +126,7 @@ func (k *Keys) Load() (*Set, error) {
 		return nil, codes.WithDetail(codes.Unavailable, DetailUserCARevoked,
 			"the SSH user CA key is listed in ssh.revoked_user_ca_keys")
 	}
-	s := &Set{UserCA: user, NextUserCA: next, HostCA: host, revoked: append([]ssh.PublicKey(nil), k.o.Revoked...)}
+	s := &Set{UserCA: user, NextUserCA: next, HostCA: host, revoked: append([]ssh.PublicKey(nil), k.o.Revoked...), hostSeed: hostSeed}
 	derived := []ssh.PublicKey{user.PublicKey()}
 	if next != nil {
 		derived = append(derived, next.PublicKey())
@@ -164,29 +166,40 @@ func (k *Keys) Load() (*Set, error) {
 // whole read retried if the two differ (rounds 1 and 2 of #42). Either
 // outcome fails closed; this only keeps one Load from mixing two
 // versions.
-func (k *Keys) readConsistent() (user, next, host ssh.Signer, err error) {
+func (k *Keys) readConsistent() (user, next, host ssh.Signer, hostSeed []byte, err error) {
 	for range 3 {
-		var raw []byte
-		if raw, user, err = k.readKey(k.o.Files.UserCA, false, "the SSH user CA key (user-ca) is unavailable"); err != nil {
-			return nil, nil, nil, err
+		var raw, hostRaw []byte
+		if raw, user, err = k.readKey(k.o.Files.UserCA, false, true, "the SSH user CA key (user-ca) is unavailable"); err != nil {
+			return nil, nil, nil, nil, err
 		}
-		if _, next, err = k.readKey(k.o.Files.NextUserCA, true, "the staged SSH user CA key (user-ca-next) is unavailable"); err != nil {
+		if _, next, err = k.readKey(k.o.Files.NextUserCA, true, false, "the staged SSH user CA key (user-ca-next) is unavailable"); err != nil {
 			clear(raw)
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
-		if _, host, err = k.readKey(k.o.Files.HostCA, true, "the SSH host CA key (host-ca) is unavailable"); err != nil {
+		if hostRaw, host, err = k.readKey(k.o.Files.HostCA, true, true, "the SSH host CA key (host-ca) is unavailable"); err != nil {
 			clear(raw)
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
+		}
+		hostSeed = nil
+		if host != nil {
+			// The enrollment token key is derived from it (docs/08 D6).
+			hostSeed, err = seedOf(hostRaw)
+			clear(hostRaw)
+			if err != nil {
+				clear(raw)
+				return nil, nil, nil, nil, codes.WithDetail(codes.Unavailable, DetailUnreadable, "the SSH host CA key (host-ca) is unavailable")
+			}
 		}
 		after, aerr := k.readFile(k.o.Files.UserCA)
 		same := aerr == nil && bytes.Equal(raw, after)
 		clear(raw)
 		clear(after)
 		if same {
-			return user, next, host, nil
+			return user, next, host, hostSeed, nil
 		}
+		clear(hostSeed)
 	}
-	return nil, nil, nil, codes.WithDetail(codes.Unavailable, DetailUnreadable, "the SSH CA keys changed while being read")
+	return nil, nil, nil, nil, codes.WithDetail(codes.Unavailable, DetailUnreadable, "the SSH CA keys changed while being read")
 }
 
 // warn logs and audits the warnings of docs/08 D14 (an extra key equal to
@@ -236,9 +249,9 @@ func (k *Keys) warn(warnings []string) {
 }
 
 // readKey reads and parses one key file, returning the bytes read (the
-// caller clears them) with the key. An optional file that doesn't exist
-// (or isn't configured) is absent: nil, nil, nil.
-func (k *Keys) readKey(path string, optional bool, msg string) ([]byte, ssh.Signer, error) {
+// caller clears them) with the key when keepRaw is set. An optional file
+// that doesn't exist (or isn't configured) is absent: nil, nil, nil.
+func (k *Keys) readKey(path string, optional, keepRaw bool, msg string) ([]byte, ssh.Signer, error) {
 	if path == "" && optional {
 		return nil, nil, nil
 	}
@@ -255,7 +268,7 @@ func (k *Keys) readKey(path string, optional bool, msg string) ([]byte, ssh.Sign
 		clear(b)
 		return nil, nil, codes.WithDetail(codes.Unavailable, DetailUnreadable, "%s", msg)
 	}
-	if optional {
+	if !keepRaw {
 		clear(b)
 		return nil, s, nil
 	}

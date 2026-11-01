@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/Tuhis/Nyyrikki/internal/decision"
+	"github.com/Tuhis/Nyyrikki/internal/sshca"
 )
 
 // errHostKey is what the host-key callback returns; the runner reports
@@ -19,15 +20,13 @@ var errHostKey = errors.New("sshtarget: host key not trusted")
 // (docs/08 D9); the runner reports it as host_key_revoked.
 var errHostKeyRevoked = errors.New("sshtarget: host key revoked")
 
-// SessionKillExtension is the host certificate extension by which a
-// certificate from Nyyrikki's own host CA states that the host finishes
-// cuts (docs/08 D8, D9). Its value is empty.
-const SessionKillExtension = "session-kill@nyyrikki"
+// SessionKillExtension is sshca's, which signs it (docs/08 D8, D9).
+const SessionKillExtension = sshca.SessionKillExtension
 
-// HostCertKeyID is the key ID a host certificate from Nyyrikki's own
-// host CA carries for target (docs/08 D8). The verifier accepts such a
-// certificate only for that target (D9).
-func HostCertKeyID(target string) string { return "nyyrikki-host:" + target }
+// HostCertKeyID is sshca's (docs/08 D8): the verifier accepts a
+// certificate from Nyyrikki's own host CA only for the target it names
+// (D9).
+func HostCertKeyID(target string) string { return sshca.HostCertKeyID(target) }
 
 // hostVerifier checks the host before Nyyrikki authenticates (docs/07
 // D8, revised by docs/08 D9): its key equals a pin, or it is a host
