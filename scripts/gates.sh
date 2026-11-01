@@ -27,6 +27,11 @@ gate() {
                    [[ $floor =~ ^[0-9]+$ ]] && [ "$floor" -ge 1 ] && [ "$floor" -le 100 ] \
                      || { echo "coverage: coverage-floor.txt must be a whole percent from 1 to 100, not '$floor'"; exit 1; }
                    prof=$(mktemp); trap 'rm -f "$prof"' EXIT
+                   # Build go tool covdata into the cache first: go test builds it on
+                   # first use while parallel test binaries exec it, and Linux can
+                   # refuse the exec of a file another process still holds open for
+                   # writing ("text file busy", golang/go#22315; CI, #54).
+                   go tool -n covdata >/dev/null
                    go test -count=1 -coverpkg=./... -coverprofile="$prof" ./...
                    [ "$(grep -vc '^mode:' "$prof")" -gt 0 ] || { echo "coverage: the profile has no blocks"; exit 1; }
                    total=$(go tool cover -func="$prof" | awk '$1 == "total:" { print $NF }')
