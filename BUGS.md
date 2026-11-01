@@ -21,9 +21,12 @@ reload sshd re-executes itself and briefly closes its listening socket,
 so nyyrikkid's dial for the check can land in that gap and report
 `host_unreachable`.
 
-**Impact**: fails closed. The setup warns that the check after
-enrollment failed, and the host isn't usable until the check passes or
-the setup is run again. No access is granted that shouldn't be.
+**Impact**: no access is granted that shouldn't be, and the host is
+enrolled: runs on it work once sshd is listening again (they do their
+own live host check). The cost is a false failure: the setup exits 1
+and warns that the check after enrollment failed and that runs fail,
+which can lead an operator to spend a new token re-enrolling a host
+that was already fine.
 
 **Where a fix would start**: after `ny_reload_sshd` in the enrollment
 path, wait (bounded, a few seconds) until sshd accepts a TCP connection
