@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,9 +11,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // The SSH host of docs/07 G7: an OpenSSH container on the e2e network,
@@ -70,6 +74,14 @@ type caSecret struct {
 
 func (e *env) getCASecret(t *testing.T) *caSecret {
 	t.Helper()
+	var c caSecret
+	e.kubectlJSON(t, &c, namespace, caSecretName)
+	return &c
+}
+
+// kubectlJSON reads the Secret ns/name into c.
+func (e *env) kubectlJSON(t *testing.T, c *caSecret, ns, name string) {
+	t.Helper()
 	var obj struct {
 		Metadata struct {
 			UID         string            `json:"uid"`
@@ -78,10 +90,10 @@ func (e *env) getCASecret(t *testing.T) *caSecret {
 		} `json:"metadata"`
 		Data map[string]string `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(e.kubectl(t, "-n", namespace, "get", "secret", caSecretName, "-o", "json")), &obj); err != nil {
+	if err := json.Unmarshal([]byte(e.kubectl(t, "-n", ns, "get", "secret", name, "-o", "json")), &obj); err != nil {
 		t.Fatal(err)
 	}
-	return &caSecret{UID: obj.Metadata.UID, Labels: obj.Metadata.Labels, Annotations: obj.Metadata.Annotations, Data: obj.Data}
+	*c = caSecret{UID: obj.Metadata.UID, Labels: obj.Metadata.Labels, Annotations: obj.Metadata.Annotations, Data: obj.Data}
 }
 
 // sameCASecret fails unless the CA Secret is the one recorded, byte for
@@ -129,10 +141,8 @@ func sshdLog(t *testing.T) string {
 	return string(out)
 }
 
-var hostKeyLine = regexp.MustCompile(`(?m)^\s*-?\s*"?(ssh-ed25519 [A-Za-z0-9+/=]+)`)
-
 // sshSteps are the SSH target's end-to-end checks (docs/07 G6 e2e, G7,
-// G11 e2e, G14 e2e for SSH).
+// G11 e2e, G14 e2e for SSH; docs/08 G7 e2e, and G15's rotation).
 func (e *env) sshSteps(t *testing.T, s *sshEnv, agent *cli, next func() int) {
 	step(t, "SE1: the install hook made the CA Secret, and its grant is gone", func(t *testing.T) {
 		c := e.getCASecret(t)
@@ -153,45 +163,83 @@ func (e *env) sshSteps(t *testing.T, s *sshEnv, agent *cli, next func() int) {
 			}
 		}
 	})
-	step(t, "SH6: the host is set up by the script Nyyrikki serves", func(t *testing.T) {
+	step(t, "SE6: a run on a host that isn't enrolled is refused before any prompt", func(t *testing.T) {
+		// docs/08 D9, D10: no pins, and host-ca exists, so the host must
+		// present Nyyrikki's certificate; the check before the prompt
+		// fails, and no approver is asked.
+		before := len(e.tg.Sent(t))
+		logins := strings.Count(sshdLog(t), "Accepted publickey")
+		r := agent.run(t, "", "run", "--reason", "before enrolling", sshTarget, "--", "id")
+		if r.code != 69 || !strings.Contains(r.stderr, "unavailable") {
+			t.Fatalf("a run on a host that isn't enrolled: %+v", r)
+		}
+		if len(e.tg.Sent(t)) != before {
+			t.Fatal("the approver was asked about a host that can't be verified")
+		}
+		if strings.Count(sshdLog(t), "Accepted publickey") != logins {
+			t.Fatal("a host that isn't enrolled was logged in to")
+		}
+	})
+	step(t, "SE6: the host is set up and enrolled by the served script, with one command and one tap", func(t *testing.T) {
 		// docs/07 §5.7: dry run first, then for real; both from the URL.
 		url := fmt.Sprintf("%s/hosts/%s/setup.sh", e.canonical, sshTarget)
-		if out, err := s.exec(t, "sh", "-c", "curl -fsSL --cacert /ca.crt "+url+" | sh -s -- --dry-run"); err != nil {
+		if out, err := s.exec(t, "sh", "-c", "curl -fsSL --cacert /ca.crt "+url+" | sh -s -- --dry-run --cacert /ca.crt"); err != nil {
 			t.Fatalf("dry run: %v\n%s", err, out)
 		}
 		if out, _ := s.exec(t, "id", "ny-owner"); !strings.Contains(out, "no such user") {
 			t.Fatalf("the dry run changed the host: %s", out)
 		}
-		out, err := s.exec(t, "sh", "-c", "curl -fsSL --cacert /ca.crt "+url+" | sh")
-		if err != nil {
-			t.Fatalf("setup: %v\n%s", err, out)
-		}
-		t.Logf("setup output:\n%s", out)
-		var keys []string
-		for _, m := range hostKeyLine.FindAllStringSubmatch(out, -1) {
-			keys = append(keys, m[1])
+		// docs/08 D6: the token from the pod, by kubectl exec.
+		tokOut := e.kubectl(t, "-n", namespace, "exec", "deploy/nyyrikki-nyyrikki", "--", "nyyrikkid", "enroll-token", sshTarget)
+		m := regexp.MustCompile(`curl -fsSL (\S+) \| sudo sh -s -- --enroll (nye1\.[A-Za-z0-9_-]+)`).FindStringSubmatch(tokOut)
+		if m == nil || m[1] != url {
+			t.Fatalf("enroll-token printed:\n%s", tokOut)
 		}
 		pub, _ := s.exec(t, "cat", "/etc/ssh/ssh_host_ed25519_key.pub")
-		want := strings.Join(strings.Fields(pub)[:2], " ")
-		if len(keys) == 0 || !contains(keys, want) {
-			t.Fatalf("the script printed host keys %v; the host's ed25519 key is %s", keys, want)
+		hk, _, _, _, err := ssh.ParseAuthorizedKey([]byte(pub))
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !strings.Contains(out, "session_kill: false") {
-			t.Errorf("a host without systemd reported session kill:\n%s", out)
+		fp := ssh.FingerprintSHA256(hk)
+		type res struct {
+			out string
+			err error
 		}
-		// Runs are refused until the host keys are pinned (docs/07 §5.5):
-		// approved, and still unavailable, without a connection.
-		logins := strings.Count(sshdLog(t), "Accepted publickey")
-		ch := agent.async(t, "run", "--reason", "before pinning", sshTarget, "--", "id")
-		e.tap(t, next(), "Approve")
-		if r := get(t, ch, time.Minute); r.code != 69 || !strings.Contains(r.stderr, "host keys are not configured") {
-			t.Fatalf("before pinning: %+v", r)
+		ch := make(chan res, 1)
+		go func() {
+			out, err := s.exec(t, "sh", "-c", "curl -fsSL --cacert /ca.crt "+url+" | sh -s -- --cacert /ca.crt --enroll "+m[2])
+			ch <- res{out, err}
+		}()
+		msg := e.tap(t, next(), "Approve")
+		for _, want := range []string{"Enroll SSH host", fp, s.ip + ":22", "root via sudo"} {
+			if !strings.Contains(msg.Text, want) {
+				t.Errorf("the enrollment prompt lacks %q:\n%s", want, msg.Text)
+			}
 		}
-		if strings.Count(sshdLog(t), "Accepted publickey") != logins {
-			t.Fatal("an unpinned host was logged in to")
+		var r res
+		select {
+		case r = <-ch:
+		case <-time.After(3 * time.Minute):
+			t.Fatal("the setup didn't finish after the approval")
 		}
-		e.upgradeSSH(t, s, []string{want})
-		// The pre-upgrade hook ran again, and left the Secret alone.
+		t.Logf("setup output:\n%s", r.out)
+		if r.err != nil {
+			t.Fatalf("setup with --enroll: %v", r.err)
+		}
+		for _, want := range []string{"ED25519 " + fp, "Approve on Telegram only if", "pull: none", "check: ny-owner: ok", "Enrolled"} {
+			if !strings.Contains(r.out, want) {
+				t.Errorf("setup output lacks %q", want)
+			}
+		}
+		if strings.Index(r.out, "ED25519 "+fp) > strings.Index(r.out, "installed /etc/ssh/nyyrikki/ssh_host_ed25519_key-cert.pub") {
+			t.Error("the fingerprint was printed after the certificate arrived")
+		}
+		if out, err := s.exec(t, "ssh-keygen", "-L", "-f", "/etc/ssh/nyyrikki/ssh_host_ed25519_key-cert.pub"); err != nil || !strings.Contains(out, "nyyrikki-host:"+sshTarget) {
+			t.Fatalf("the host certificate: %v\n%s", err, out)
+		}
+		// The pre-upgrade hook runs again on an upgrade, and leaves the
+		// Secret alone.
+		e.upgrade(t)
 		e.sameCASecret(t, s, "helm upgrade")
 	})
 
@@ -307,19 +355,140 @@ func (e *env) sshSteps(t *testing.T, s *sshEnv, agent *cli, next func() int) {
 	})
 }
 
-func contains(xs []string, x string) bool {
-	for _, v := range xs {
-		if v == x {
-			return true
-		}
-	}
-	return false
+// signerKeys are the SIGNER_KEY lines of the target's trust bundle, as
+// Nyyrikki serves it now.
+func (e *env) signerKeys(t *testing.T) []string {
+	t.Helper()
+	return e.dataLines(t, "trust", "SIGNER_KEY")
 }
 
-// upgradeSSH pins the host keys and waits for the new pod.
-func (e *env) upgradeSSH(t *testing.T, s *sshEnv, keys []string) {
+// dataLines are the values of the name lines of what Nyyrikki serves at
+// /hosts/<target>/<path>.
+func (e *env) dataLines(t *testing.T, path, name string) []string {
 	t.Helper()
-	e.values = strings.Replace(e.values, s.values(e.nodeIP, nil), s.values(e.nodeIP, keys), 1)
+	resp, err := e.httpClient().Get(e.canonical + "/hosts/" + sshTarget + "/" + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET %s: %d", path, resp.StatusCode)
+	}
+	var out []string
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		if v, ok := strings.CutPrefix(sc.Text(), name+"="); ok {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// waitSigners waits until the bundle has n signers other than not: the
+// kubelet updates a mounted Secret within a minute or two.
+func (e *env) waitSigners(t *testing.T, n int, not string) []string {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Minute)
+	for {
+		got := e.signerKeys(t)
+		if len(got) == n && (not == "" || !slices.Contains(got, not)) {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the bundle's signers are %v, not %d without %q", got, n, not)
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
+
+// hostKeys are the lines of a key file on the SSH host, without comments.
+func (s *sshEnv) hostKeys(t *testing.T, path string) []string {
+	t.Helper()
+	out, err := s.exec(t, "cat", path)
+	if err != nil {
+		t.Fatalf("%s: %v\n%s", path, err, out)
+	}
+	var keys []string
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		if f := strings.Fields(l); len(f) >= 2 {
+			keys = append(keys, f[0]+" "+f[1])
+		}
+	}
+	return keys
+}
+
+// rotation covers docs/08 §5.4 and G15's rotation on kind, with G14's
+// path automated: stage and promote through the chart's CronJobs, each
+// reaching the host by its pull (run by hand, as this host has no cron),
+// then a run signed by the new key.
+func (e *env) rotation(t *testing.T, s *sshEnv, agent *cli, next func() int) {
+	step(t, "SE6: a CA rotation through the CronJobs reaches the host by its pull", func(t *testing.T) {
+		old := e.signerKeys(t)
+		if len(old) != 1 {
+			t.Fatalf("signers before the stage: %v", old)
+		}
+		job := func(cronjob, name string) string {
+			t.Helper()
+			e.kubectl(t, "-n", namespace, "create", "job", "--from=cronjob/nyyrikki-ssh-ca-"+cronjob, name)
+			e.kubectl(t, "-n", namespace, "wait", "--for=condition=complete", "job/"+name, "--timeout=180s")
+			return e.kubectl(t, "-n", namespace, "logs", "job/"+name)
+		}
+		pull := func(want []string) {
+			t.Helper()
+			if out, err := s.exec(t, "/etc/ssh/nyyrikki/pull.sh"); err != nil {
+				t.Fatalf("the pull: %v\n%s", err, out)
+			}
+			if got := s.hostKeys(t, "/etc/ssh/nyyrikki/signers.pub"); !slices.Equal(got, want) {
+				t.Fatalf("the host's signers %v, want %v", got, want)
+			}
+		}
+		job("stage", "e2e-ssh-ca-stage")
+		staged := e.waitSigners(t, 2, "")
+		if staged[0] != old[0] {
+			t.Fatalf("after the stage, the signers are %v", staged)
+		}
+		pull(staged)
+		log := job("promote", "e2e-ssh-ca-promote")
+		if !strings.Contains(log, strings.Fields(old[0])[1]) {
+			t.Errorf("promote didn't print the old public key:\n%s", log)
+		}
+		promoted := e.waitSigners(t, 1, old[0])
+		if promoted[0] != staged[1] {
+			t.Fatalf("after the promote, the signers are %v, want the staged key", promoted)
+		}
+		pull(promoted)
+		if got := s.hostKeys(t, "/etc/ssh/nyyrikki/user_ca.pub"); !slices.Equal(got, promoted) {
+			t.Fatalf("the host trusts %v after the promote", got)
+		}
+		if slices.Contains(e.dataLines(t, "setup.sh", "CA_KEY"), old[0]) {
+			t.Fatal("the old key is still a CA_KEY after the promote")
+		}
+		// A run now carries a certificate of the new key, which the host
+		// trusts only through its pull.
+		ch := agent.async(t, "run", "--reason", "after the rotation", sshTarget, "--", "id", "-un")
+		e.tap(t, next(), "Approve")
+		if r := get(t, ch, time.Minute); r.code != 0 || r.stdout != "ny-owner\n" {
+			t.Fatalf("a run after the rotation: %+v", r)
+		}
+		s.caSecret = e.getCASecret(t)
+		if s.caSecret.Data["user-ca-next"] != "" || s.caSecret.Data["host-ca"] == "" {
+			t.Fatalf("the Secret after the promote has keys %v", keysOf(s.caSecret.Data))
+		}
+	})
+}
+
+func keysOf(m map[string]string) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// upgrade upgrades the release with its values and waits for the pod.
+func (e *env) upgrade(t *testing.T) {
+	t.Helper()
 	run(t, "helm", "--kubeconfig", e.kubeconfig, "upgrade", "nyyrikki", filepath.Join(e.root, "deploy/chart/nyyrikki"),
 		"-n", namespace, "-f", writeFile(t, e.dir, "values.yaml", []byte(e.values)), "--wait", "--timeout", "180s")
 	e.kubectl(t, "-n", namespace, "rollout", "status", "deploy/nyyrikki-nyyrikki", "--timeout=180s")

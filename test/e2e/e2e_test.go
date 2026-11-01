@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -343,11 +344,35 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	e.sshSteps(t, e.ssh, agent, next)
+	e.rotation(t, e.ssh, agent, next)
 
 	step(t, "a session ended in Keycloak is denied at once", func(t *testing.T) {
+		// A session-bound login of its own. The agent's login is an offline
+		// session (docs/01 OD18), which this sign-out doesn't end: its
+		// first token was the browser session's, so the step held only
+		// within that token's 5 minutes, which the steps above outlast
+		// since docs/08 SE6. Without offline_access, the login falls back
+		// to the browser session, as the OD18 step below checks.
+		cl := e.adminClient(t, "nyyrikki-cli")
+		var scopes []struct{ ID, Name string }
+		json.Unmarshal(e.admin(t, "GET", "/admin/realms/"+realm+"/client-scopes", nil), &scopes)
+		var offlineID string
+		for _, sc := range scopes {
+			if sc.Name == "offline_access" {
+				offlineID = sc.ID
+			}
+		}
+		opt := "/admin/realms/" + realm + "/clients/" + fmt.Sprint(cl["id"]) + "/optional-client-scopes/" + offlineID
+		e.admin(t, "DELETE", opt, nil)
+		fresh := e.newCLI(t)
+		fresh.login(t)
+		e.admin(t, "PUT", opt, nil)
+		if typ := claims(loginFile(fresh)["refresh_token"].(string))["typ"]; typ != "Refresh" {
+			t.Fatalf("a login without offline_access has a %v refresh token", typ)
+		}
 		e.admin(t, "POST", "/admin/realms/"+realm+"/users/"+e.ownerID+"/logout", nil)
 		before := len(e.tg.Sent(t))
-		r := agent.run(t, "", "run", "--reason", "after logout", "this-cluster", "--", "get", "pods")
+		r := fresh.run(t, "", "run", "--reason", "after logout", "this-cluster", "--", "get", "pods")
 		if r.code != 77 || !strings.Contains(r.stderr, "session_inactive") {
 			t.Fatalf("revoked session: %+v", r)
 		}
@@ -365,6 +390,9 @@ func TestEndToEnd(t *testing.T) {
 	step(t, "OD17: an offline MCP harness outlives the browser sessions and ends on revoke or sign-out", func(t *testing.T) {
 		e.checkOffline(t, next)
 	})
+
+	// A second release, for docs/08 G15's install and upgrade cases.
+	e.secondRelease(t)
 
 	// After everything else: it upgrades with --force and uninstalls.
 	e.caSecretSurvives(t, e.ssh)
