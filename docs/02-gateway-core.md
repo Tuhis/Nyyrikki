@@ -76,7 +76,7 @@ build.
 | D10 | **The stream endpoint** (OD3): `GET /stream` on `:8443`, a WebSocket (`github.com/coder/websocket`, `docs/measured.md` M6), behind the same middleware as `/mcp`. It does nothing on its own: it only attaches to an interactive run that the decision point has already allowed. `run` with `interactive: true` returns, instead of output, a **stream ticket**: `nyst_` plus 43 base64url characters, stored hashed, valid for 30 s, usable once, only by the same agent key, returned only to the call that asked (docs/01 D24). The client opens `/stream` with the ticket in the `Nyyrikki-Stream-Ticket` header. | A tool call can't carry a terminal. Attaching through a ticket means `/stream` adds no decision of its own (`CODE-REVIEW.md`: one decision point). |
 | D11 | **DPoP on `/stream`.** The proof's `htu` must equal the configured canonical stream URL (canonical base + `/stream`) and `htm` must be `GET`. Every other rule of docs/01 D9 applies unchanged, and `/stream` also introspects. *Revises docs/01 D9 (2026-10-26)*: the proof is checked against the canonical URL of the endpoint it was sent to, `/mcp` or `/stream`, never one built from the request. | DPoP binds method and URL; a proof for `/mcp` must not open a stream, nor the reverse. |
 | D12 | **The CLI** (`cmd/nyyrikki`) is an MCP client of `/mcp` (go-sdk client, Streamable HTTP) and nothing else, plus a WebSocket client of `/stream` for interactive runs. It writes the target's output to stdout and its own messages to stderr, prefixed `nyyrikki:`. Exit codes in §5.5. It blocks while an approval is pending, printing a waiting line on stderr. | `ROADMAP.md` R2; docs/01 D4. |
-| D13 | **Arguments are strict.** Tool inputs are decoded with unknown fields rejected and validated before anything else: target names are slugs, `args` is 1–256 strings of at most 8 KiB each, `stdin` at most 1 MiB, `reason` 1–1000 characters, `timeout` a Go duration. A violation is a tool error with code `invalid_request`, audited, and no approval is asked for. | The agent is untrusted; a request nobody could approve shouldn't reach the approver. *Revised 2026-10-30 by [docs/07](07-ssh-target.md) D13, for SSH targets only*: `args` may be empty for an interactive run on an SSH target, which opens a login shell; the command string is checked by docs/07 D1. |
+| D13 | **Arguments are strict.** Tool inputs are decoded with unknown fields rejected and validated before anything else: target names are slugs, `args` is 1–256 strings of at most 8 KiB each, `stdin` at most 1 MiB, `reason` 1–1000 characters, `timeout` a Go duration. A violation is a tool error with code `invalid_request`, audited, and no approval is asked for. | The agent is untrusted; a request nobody could approve shouldn't reach the approver. *Revised 2026-10-30 by [docs/07](07-ssh-target.md) D13, for SSH targets only*: `args` may be empty for an interactive run on an SSH target, which opens a login shell; the command string is checked by docs/07 D1. *Revised 2026-11-01 by [docs/08](08-ssh-onboarding.md) D11 (R12)*: `elevate`'s `targets` may also name groups (config `groups`), which the server expands into their members before validation; the elevation covers that fixed list, `decision.MaxTargets` counts it, and every member must be visible to the human. `run` takes target names only. |
 | D14 | **Error codes** are defined once in `internal/codes` and returned in the tool result's structured content (`{"error": {"code": …, "message": …}}`, with `isError: true`): `invalid_request`, `unauthenticated`, `target_not_allowed`, `handle_unknown`, `denied`, `expired`, `withdrawn`, `introspection_failed`, `session_inactive`, `unavailable`, `internal`. The CLI maps them to exit codes. Messages never contain a credential, a handle or a ticket. | `CODE-REVIEW.md`: shared constants have one definition; type your failure phases. |
 | D15 | **State** lives in SQLite (docs/01 D11) in `internal/store`: tables `approvals`, `elevations`, `meta`, `audit` (R3) and the Telegram package's own tables (R5). Stream tickets are kept in memory only: they live 30 s, and a restart ends the run they would attach to anyway. Every state change is a compare-and-set `UPDATE … WHERE id=? AND state=?` and acts only if exactly one row changed. On startup, every `pending` approval and elevation is moved to `expired`, since its waiter is gone, and every `live` elevation stays live only until its stored `expires_at`. | docs/01 D11, `docs/measured.md` (grant mechanics M1). A restart can't leave an approval without a waiter. |
 
@@ -120,6 +120,9 @@ SSH target the approver sees only stdin's size and hash; `RunOut` gains
 `detail` (for example `signal: TERM`).
 
 **`list_targets`** `{}` → `{"targets": [{"name", "description", "type": "kubernetes"}]}`.
+*Extended 2026-11-01 by [docs/08](08-ssh-onboarding.md) D11 (R12)*: each
+target also carries `groups` (the groups it is in whose every member the
+agent may see), and an SSH target `sudo`.
 
 **`run`** `{"target", "args": [...], "stdin"?, "reason", "elevation"?, "timeout"?, "interactive"?}`.
 `args` is the kubectl command line without the leading `kubectl`
@@ -131,6 +134,9 @@ SSH target the approver sees only stdin's size and hash; `RunOut` gains
 
 **`elevate`** `{"targets": [...], "duration"?, "reason"}` →
 `{"elevation_id", "handle", "targets", "expires_at"}`.
+*Extended 2026-11-01 by [docs/08](08-ssh-onboarding.md) D11*: `targets`
+may name groups; the result's `targets` is the expanded list the
+elevation covers.
 
 ### 5.3 The decision point
 

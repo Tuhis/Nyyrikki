@@ -2,8 +2,9 @@
 
 **Status**: drafted 2026-10-31. Owner decisions OD1–OD9 taken the same
 day, in the conversation that asked for this doc. Approved 2026-10-31,
-when the PR that added it (#40) merged. SE1 implemented 2026-10-31
-(§10). Status lives in [`ROADMAP.md`](../ROADMAP.md).
+when the PR that added it (#40) merged. SE1–SE6 implemented 2026-10-31
+to 2026-11-01 (§10); G14 is the owner's. Status lives in
+[`ROADMAP.md`](../ROADMAP.md).
 
 Chunks **SE1–SE6** (`SE` = SSH ease; unused).
 
@@ -724,6 +725,127 @@ Where SE5 differs from, or settles what D6, D7 and D8 leave open:
 - **Decided while implementing; the owner may revisit**: a check after
   the token's expiry is refused, and every copy of a settled enrollment
   names who settled it.
+
+### SE6 (2026-11-01)
+
+Where SE6 differs from, or settles what D5, D13, D14 and D15 leave open:
+
+- **The served data lines** are, in order, `TARGET`, `HUMAN`s,
+  `CA_KEY`s, `SIGNER_KEY`s, `REVOKED_CA_KEY`s, `SOURCE`s, `SUDO`,
+  `ISSUED`, `URL`, `END`; the script accepts them in any order.
+  `ISSUED` is 13 digits without a leading zero (Unix milliseconds,
+  2001–2286), so 64-bit shell arithmetic compares it exactly on dash,
+  bash and BusyBox ash. `URL` is the canonical URL's scheme and host,
+  without a slash: `https://`, a host name or a bracketed IPv6
+  address, an optional port, at most 200 characters, nothing else. Config
+  refuses a canonical URL outside that form when an SSH target exists
+  (`config.HostURL`), so `setup.sh` is never refused for it. The script
+  refuses a `SIGNER_KEY` that isn't a `CA_KEY` and a `REVOKED_CA_KEY` that
+  is one, and requires at least one `SIGNER_KEY`.
+- **Options** may each appear once. `--status` takes no other;
+  `--uninstall` only `--dry-run`; `--dry-run` refuses `--enroll`. A token
+  must be `nye1.` and base64url. `--cacert` must be a readable file of at
+  most 1 MiB holding a PEM certificate.
+- **`pull.state`** holds `ISSUED=`, `BY=setup` or `BY=pull`, and, from a
+  pull, `APPLIED=` (Unix seconds). The setup writes no time, so a re-run
+  of the same script changes nothing. A malformed `pull.state` is refused
+  unless `--reset-pull-state`. A mark more than 10 minutes ahead of the
+  host's clock is forgotten, as D13 says, and step 1 says so.
+- **Step 3's order**: the mark first, so from then on every bundle
+  issued before the script is refused; then `signers.pub`, `user_ca.pub`,
+  the revocation list and the drop-in. Each is journaled, so a rollback
+  restores them. Step 2's revocations are not: like the rest of step 2,
+  what the values no longer trust stays untrusted.
+- **One lock**, `/etc/ssh/.nyyrikki-lock`, a symbolic link naming the
+  holder's PID, made atomically: the setup (but not `--dry-run` or
+  `--status`) and the pull both take it, so a pull from cron never
+  interleaves with a setup. A lock whose process is gone (a kill, a
+  reboot) is taken over. A pull that finds a live lock fails and tries
+  again at its next run.
+- **Step 8** writes `pull.sh` and `pull.conf` whatever the schedule, so a
+  host with `pull: none` can run the pull by hand. A run without
+  `--cacert` removes an earlier `server-ca.pem`, and warns. A cron counts
+  if `cron` or `crond` is on the script's `PATH` and doesn't resolve to
+  BusyBox; root's crontab is read from `/etc/crontabs/root`,
+  `/var/spool/cron/crontabs/root` or `/var/spool/cron/root`, and needs a
+  non-comment `run-parts /etc/periodic/15min` line and `run-parts` on the
+  `PATH`. The minute is `cksum` of the target name modulo 15. The schedule
+  is written last, and moving between `cron.d` and `periodic` removes the
+  other.
+- **The pull** names each signer `signer-<n>` in its allowed-signers
+  file, with `namespaces="nyyrikki-trust@v1"`, and tries them in turn
+  with `ssh-keygen -Y verify -I`, so the identity that verifies names the
+  key. It requires `TARGET`, a `CA_KEY`, a `SIGNER_KEY`, a `HUMAN`, `SUDO`
+  and `ISSUED`; refuses a `SIGNER_KEY` that is also revoked; and drops a
+  `CA_KEY` that is revoked. A failure while applying leaves what was
+  already taken away (the order is D5's) and doesn't move the mark, so
+  the next pull applies the bundle again. Notices ("re-run the setup to
+  add …") go to `logger` only, so cron doesn't mail them every 15
+  minutes; a signer change also goes to stdout, which cron mails;
+  failures go to stderr. It compares key files as text, since a minimal
+  Rocky 9 has no `cmp`.
+- **Step 10** sends the token in a header file (`curl -H @file`), so no
+  process listing shows it, and waits up to 15 minutes for the approval
+  and 5 for the check. It installs the certificate only after
+  `ssh-keygen -L` shows a host certificate for the host's own key, and
+  checks the new drop-in with `sshd -t` and the same `sshd -T` checks as
+  step 3. A refused check exits non-zero and keeps the certificate, which
+  is valid; Ctrl-C while waiting ends the enrollment without a change.
+  `--enroll` needs `curl` and sshd using `/etc/ssh/ssh_host_ed25519_key`,
+  checked in step 1.
+- **`enroll-token`'s default `--config`** is now the chart's
+  `/etc/nyyrikki/config/config.yaml`, not the image's
+  `/etc/nyyrikki/config.yaml`, so the command D6 and `NOTES.txt` print
+  works as written in the chart's pod (`TestChartEnrollTokenConfig`).
+  Its usage text names the chart's Deployment, `deploy/<release>-nyyrikki`.
+- **`--status`** needs the data lines like every other run, takes no
+  lock and writes nothing outside its own temporary directory.
+- **`--uninstall`** removes the schedule first, then what it removed
+  before; `/etc/ssh/nyyrikki` goes with the pull, its state, the signers,
+  the CA file and the host certificate, and the drop-in with its
+  `HostCertificate` line.
+- **Alpine 3.22** needs no change to `sshd_config`: its first effective
+  line is the `Include`. It needs `shadow` for `useradd`; BusyBox `tr`
+  has no character classes, so the script's sanitizers use `' -~'`.
+- **`test/ssh-host`** runs every case on Debian 13, Ubuntu 24.04, Rocky 9
+  and Alpine 3.22, with `cron`/`cronie` and `curl` in the images. A fake
+  Nyyrikki (`test/ssh-host/fakeserver`) runs inside the container over
+  HTTPS with a test CA, serving bundles the test signs with
+  `sshca.SignSSHSIG` or takes from the real handler, and canned
+  enrollment answers. The shim calls a BusyBox applet by its name.
+  G4: `TestPull`; G5: `TestPullSchedule`; G13: `TestBadValuesRefused`,
+  `TestSetupIssued`, `TestPullSigners`, `TestEnroll`, `TestManualPage`,
+  and the new cases of `TestRollback` and `TestKilled`.
+- **e2e on kind** (`TestEndToEnd`). G7: the SSH target's values carry
+  no `hostKeys`; a run before enrollment is refused with no prompt (the
+  host check fails); `enroll-token`, run with `kubectl exec`, prints the
+  command, which the OpenSSH container runs with `--cacert` and
+  `--enroll`; the fake Bot API's prompt shows the host key's
+  fingerprint, and the tap approves; the script prints the fingerprint
+  before the certificate arrives and reports `check: ny-owner: ok`; the
+  existing SH6 steps then run on the host as verified by its
+  certificate. (On `main`, the e2e had failed since SE4 at the step that
+  pinned host keys after a run: with `host-ca`, an unpinned host is
+  checked before any prompt.) G15: a rotation through the `-stage` and
+  `-promote` CronJobs, each taken up by the host's `pull.sh` (run by
+  hand: the container has no cron), then a run signed by the new key,
+  and the old key in no `CA_KEY`; and a second release in its own
+  namespace: without an SSH target it makes no Secret; an upgrade whose
+  hook can't run (its image can't be pulled, so Helm times out) leaves
+  no hook ServiceAccount, Role or RoleBinding, measured with Helm 3.20.2
+  locally (CI pins 3.19.0); the upgrade that adds the first SSH target
+  makes the Secret with D16's labels; an R10 release (`sshUserCA` set),
+  installed and upgraded, renders no hook, makes no CA Secret, mounts
+  the R10 Secret and leaves it byte for byte. The step "a session ended
+  in Keycloak is denied at once" now uses a session-bound login of its
+  own: the agent's login is an offline session (docs/01 OD18), which an
+  admin sign-out doesn't end, and the step had held only while it ran
+  within the first access token's 5 minutes, which SE6's steps outlast.
+  The e2e's timeouts went from 40 and 45 minutes to 50 and 55.
+- **Decided while implementing; the owner may revisit**: the lock; the
+  removal of `server-ca.pem` by a run without `--cacert`; `pull.sh`
+  written without a schedule; a bundle without a `HUMAN` refused; and
+  `enroll-token`'s default config path.
 
 ## 11. Post-implementation review (YYYY-MM-DD)
 

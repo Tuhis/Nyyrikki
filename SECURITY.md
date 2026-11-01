@@ -255,13 +255,54 @@ These kinds of issue are always in scope:
 - **Whoever controls Nyyrikki's pod controls the SSH setup script and
   holds the SSH user CA key** (docs/07 OD3, D6): root on every host
   onboarded afterwards, and on every host already set up with sudo. The
-  script's body is checksummed per release; the CA is revoked by KRL
-  (docs/07 §5.6).
-- **The SSH setup script is served without authentication, and each
-  fetch writes an audit record** (docs/07 D16). Nothing limits the rate:
-  anyone who can reach `:8443` can fill the audit volume, after which
-  every request is refused (fail closed). Availability only; limit who
-  can reach the listener if that matters.
+  script's body, the trust pull included, is checksummed per release;
+  the CA is revoked by KRL (docs/07 §5.6, docs/08 §5.4).
+- **Whoever holds the SSH user CA key can add a CA of their own to every
+  host that pulls** (docs/08 OD3, owner decision 2026-10-31, as precised
+  in round 1 of #40). Hosts with the trust pull apply bundles signed in
+  the pod by `user-ca`, or by a staged `user-ca-next`, which is a signer
+  on every host from the stage on. A holder of either key, by a leak or
+  a compromise of the pod, can sign a bundle that adds their own CA and
+  signer, and every host with a pull takes it within 15 minutes, before
+  a revocation lands. D5's stage/promote rule keeps one bundle from
+  replacing the signers, but two bundles from the holder can. The added
+  CA still gets past only `from=` and the certificate's
+  `source-address`: it reaches `ny-*` accounts only from Nyyrikki's
+  source addresses, which a `user-ca` holder already can (docs/07 D4,
+  D5). To serve a bundle at all, they also need the pod or the TLS path
+  to the hosts. The pull never runs fetched code, creates an account or
+  grants sudo (docs/08 D5), so it gives the pod no root on a host it
+  didn't already have. Recovering from such a leak needs the setup
+  re-run on every host with `--reset-pull-state` (docs/08 §5.4,
+  docs/setup/ssh-hosts.md); revoking the key alone doesn't undo what it
+  signed. Extra keys in `ssh.userCAPublicKeys` can't sign bundles.
+- **The SSH host CA key sits in the pod too** (docs/08 §6). Its holder can
+  make Nyyrikki trust any host for any target address. To use that, they
+  also have to redirect Nyyrikki's connections to that address, and the
+  reward is the commands and stdin of approved runs. It is in the same
+  Secret as `user-ca`, which already reaches every host directly. A host
+  certificate lives five years by default; listing the host key in
+  `ssh.revokedHostKeys` stops it.
+- **An approver who taps an enrollment without comparing the fingerprint
+  trusts whatever host sent it** (docs/08 D7, §6). An enrollment token,
+  made with `kubectl exec` into Nyyrikki's pod, lets its holder put one
+  enrollment prompt in front of the approvers within 15 minutes; a
+  restart forgets which tokens were used, so one could be used again
+  within that time, each use asking again. Approving trusts the host key
+  the prompt shows for the target's address, for five years. The prompt
+  says to compare the fingerprint with what the host printed; the
+  approver should be the administrator at the host, or in touch with
+  them.
+- **The SSH setup script and the trust bundles are served without
+  authentication, the enrollment endpoints take a token instead of a
+  sign-in, and each use writes an audit record** (docs/07 D16, docs/08
+  D4, D6, D7): `GET /hosts/<target>/setup.sh` and `/trust`, and
+  `POST /hosts/<target>/enroll` and `/enroll/check`. Nothing limits the
+  rate: anyone who can reach `:8443` can fill the audit volume, after
+  which every request is refused (fail closed). A bad token is refused
+  before any prompt, so without one nobody can reach the approver
+  through them. Availability only; limit who can reach the listener if
+  that matters.
 - **The human approves their own agents' requests.** In the first
   version there is one human, who is also the approver (docs/01 OD1).
   The defence is a message that shows exactly what will run (R5).
