@@ -10,6 +10,8 @@ on:
   pull_request:
     paths:
       - "test/e2e/**"
+      # The stack setup it shares with the quickstart (docs/09 D6).
+      - "test/stack/**"
       - ".github/workflows/e2e.yml"
   schedule:
     - cron: "17 3 * * *"
