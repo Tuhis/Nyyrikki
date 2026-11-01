@@ -21,9 +21,13 @@ type Spec struct {
 	ElevationID string
 	NotAfter    time.Time
 	Interactive bool
-	Human       string
-	AgentKey    string
-	ClientID    string
+	// SessionKillShown is whether the approver was shown that the host
+	// finishes cuts (docs/08 D10). A run whose host no longer shows it
+	// is refused as host_changed.
+	SessionKillShown bool
+	Human            string
+	AgentKey         string
+	ClientID         string
 }
 
 // Grant is the decision point's permission to run exactly one canonical
@@ -81,6 +85,11 @@ func (g *Grant) ElevationID() string { return g.spec.ElevationID }
 // expiry); zero for a one-off grant, whose limit is the run's own.
 func (g *Grant) NotAfter() time.Time { return g.spec.NotAfter }
 func (g *Grant) Interactive() bool   { return g.spec.Interactive }
-func (g *Grant) Human() string       { return g.spec.Human }
-func (g *Grant) AgentKey() string    { return g.spec.AgentKey }
-func (g *Grant) ClientID() string    { return g.spec.ClientID }
+
+// SessionKillShown is whether the approver was shown that the target's
+// host finishes cuts (docs/08 D10); the SSH runner refuses a host that
+// now shows less.
+func (g *Grant) SessionKillShown() bool { return g.spec.SessionKillShown }
+func (g *Grant) Human() string          { return g.spec.Human }
+func (g *Grant) AgentKey() string       { return g.spec.AgentKey }
+func (g *Grant) ClientID() string       { return g.spec.ClientID }

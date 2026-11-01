@@ -56,10 +56,17 @@ func Principal(human, target string) string { return "nyyrikki:" + human + "@" +
 // a *codes.Error with codes.Unavailable; nothing in it holds key
 // material.
 func (ca *CA) Mint(runID, human, target string, interactive bool) (*Cert, error) {
-	caSigner, err := ca.load()
+	set, err := ca.load()
 	if err != nil {
 		return nil, err
 	}
+	return ca.mint(set, runID, human, target, interactive)
+}
+
+// mint is Mint with keys already loaded, so that a run reads the key
+// files once for its certificate and its host verification.
+func (ca *CA) mint(set *sshca.Set, runID, human, target string, interactive bool) (*Cert, error) {
+	caSigner := set.UserCA
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, codes.Wrap(codes.Unavailable, err, "could not make the run's key")
@@ -106,10 +113,13 @@ func (ca *CA) Mint(runID, human, target string, interactive bool) (*Cert, error)
 
 // load reads the CA keys (docs/08 D1): a broken key file or a revoked
 // user-ca is a *codes.Error with codes.Unavailable and no key material.
-func (ca *CA) load() (ssh.Signer, error) {
-	set, err := ca.keys.Load()
-	if err != nil {
-		return nil, err
+func (ca *CA) load() (*sshca.Set, error) { return ca.keys.Load() }
+
+// hostCA is pub(host-ca) from set, or nil when there is none (docs/08
+// D1, D9).
+func hostCA(set *sshca.Set) ssh.PublicKey {
+	if set.HostCA == nil {
+		return nil
 	}
-	return set.UserCA, nil
+	return set.HostCA.PublicKey()
 }

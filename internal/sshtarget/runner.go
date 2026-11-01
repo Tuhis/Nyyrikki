@@ -31,14 +31,20 @@ const (
 	DetailHostNotPinned       = "host_not_pinned"
 	DetailHostKeyMismatch     = "host_key_mismatch"
 	DetailHostKeyRevoked      = "host_key_revoked"
-	DetailUnreachable         = "target_unreachable"
-	DetailAuthRefused         = "auth_refused"
-	DetailSessionRefused      = "session_refused"
-	DetailConnectionLost      = "connection_lost"
-	DetailGrantEnded          = "grant_ended"
-	DetailGrantExpired        = "grant_expired"
-	DetailTimeout             = "run_timeout"
-	DetailClientGone          = "client_gone"
+	// DetailHostUnreachable is a host check's unreachable host (docs/08
+	// D10); a run's dial keeps DetailUnreachable.
+	DetailHostUnreachable = codes.DetailHostUnreachable
+	// DetailHostChanged: the host shows less than the approver was
+	// shown (docs/08 D10).
+	DetailHostChanged    = "host_changed"
+	DetailUnreachable    = "target_unreachable"
+	DetailAuthRefused    = "auth_refused"
+	DetailSessionRefused = "session_refused"
+	DetailConnectionLost = "connection_lost"
+	DetailGrantEnded     = "grant_ended"
+	DetailGrantExpired   = "grant_expired"
+	DetailTimeout        = "run_timeout"
+	DetailClientGone     = "client_gone"
 )
 
 // cutGrace is how long a cut waits after TERM before KILL (docs/07 D11);
@@ -55,13 +61,16 @@ const DefaultTerm = "xterm-256color"
 var termPattern = regexp.MustCompile(`^[a-z0-9.+-]{1,32}$`)
 
 // Target is one SSH host (docs/07 §5.5). HostCAs are every host CA it
-// accepts: its own and the global ones (docs/08 D9).
+// accepts: its own and the global ones (docs/08 D9); Nyyrikki's own
+// host CA is read from the CA keys on each use. SessionKill is the
+// config value, used unless the host's certificate is Nyyrikki's own.
 type Target struct {
-	Name     string
-	Address  string
-	Host     string
-	HostKeys []ssh.PublicKey
-	HostCAs  []ssh.PublicKey
+	Name        string
+	Address     string
+	Host        string
+	HostKeys    []ssh.PublicKey
+	HostCAs     []ssh.PublicKey
+	SessionKill bool
 }
 
 // Limits bound runs (docs/04 D7, unchanged for SSH: docs/07 D13).
@@ -313,11 +322,18 @@ func (r *Runner) connect(l *runLimits, g *decision.Grant, req *Request) (*conn, 
 	if !ok {
 		return nil, r.refuse(g, req, codes.KindDependencyFailed, "", codes.WithDetail(codes.Unavailable, DetailUnknownTarget, "the target is not configured"))
 	}
-	if len(t.HostKeys) == 0 && len(t.HostCAs) == 0 {
-		return nil, r.refuse(g, req, codes.KindDependencyFailed, "", codes.WithDetail(codes.Unavailable, DetailHostNotPinned,
-			"the target's host keys are not configured yet"))
+	// One reading of the key files for the certificate and for the
+	// host CA (docs/08 D1, D9); a broken file is a refusal.
+	set, err := r.ca.load()
+	if err != nil {
+		return nil, r.refuse(g, req, codes.KindDependencyFailed, "", err)
 	}
-	cert, err := r.ca.Mint(g.RunID(), g.Human(), g.Target(), req.Interactive())
+	hv := newHostVerifier(t, hostCA(set), r.revoked, r.now)
+	if !hv.anyTrust() {
+		return nil, r.refuse(g, req, codes.KindDependencyFailed, "", errNotPinned())
+	}
+	cert, err := r.ca.mint(set, g.RunID(), g.Human(), g.Target(), req.Interactive())
+	set = nil
 	if err != nil {
 		return nil, r.refuse(g, req, codes.KindDependencyFailed, "", err)
 	}
@@ -347,16 +363,23 @@ func (r *Runner) connect(l *runLimits, g *decision.Grant, req *Request) (*conn, 
 	// the run's end closes the socket.
 	_ = nc.SetDeadline(time.Now().Add(r.connectTimeout))
 	stop := context.AfterFunc(dctx, func() { _ = nc.Close() })
-	hv := newHostVerifier(t.Host, t.HostKeys, t.HostCAs, r.revoked, r.now)
-	var hostRefused, hostRevoked atomic.Bool
+	var hostRefused, hostRevoked, hostChanged atomic.Bool
 	cfg := &ssh.ClientConfig{
 		User: g.RunAs().User,
 		Auth: []ssh.AuthMethod{ssh.PublicKeys(cert.signer)},
-		HostKeyCallback: func(h string, a net.Addr, k ssh.PublicKey) error {
-			if err := hv.callback(h, a, k); err != nil {
+		HostKeyCallback: func(_ string, a net.Addr, k ssh.PublicKey) error {
+			facts, err := hv.verify(a, k)
+			if err != nil {
 				hostRevoked.Store(errors.Is(err, errHostKeyRevoked))
 				hostRefused.Store(true)
 				return err
+			}
+			// docs/08 D10: the approver was told the host finishes
+			// cuts, and it no longer says so. Refused before anything
+			// is authenticated or sent.
+			if g.SessionKillShown() && !facts.SessionKill {
+				hostChanged.Store(true)
+				return errHostChanged
 			}
 			return nil
 		},
@@ -367,6 +390,8 @@ func (r *Runner) connect(l *runLimits, g *decision.Grant, req *Request) (*conn, 
 	if !stop() || err != nil {
 		_ = nc.Close()
 		switch {
+		case hostChanged.Load():
+			return fail(DetailHostChanged, "the host no longer shows what the approver was shown: it doesn't say it finishes cuts", err)
 		case hostRevoked.Load():
 			return fail(DetailHostKeyRevoked, "the host's key is listed in ssh.revoked_host_keys", err)
 		case hostRefused.Load():
@@ -396,6 +421,17 @@ func (r *Runner) connect(l *runLimits, g *decision.Grant, req *Request) (*conn, 
 	c.mu.Unlock()
 	return c, nil
 }
+
+// errNotPinned is a target nothing could verify (docs/07 §5.5): no pin,
+// no host CA, and no host-ca of Nyyrikki's own.
+func errNotPinned() error {
+	return codes.WithDetail(codes.Unavailable, DetailHostNotPinned,
+		"the target's host keys are not configured yet, and there is no host CA to verify it")
+}
+
+// errHostChanged is what the host-key callback returns for a host that
+// shows less than the approver was shown.
+var errHostChanged = errors.New("sshtarget: host shows less than was approved")
 
 // cutBeforeStart records a run whose cover ended before its command was
 // sent: nothing ran.
