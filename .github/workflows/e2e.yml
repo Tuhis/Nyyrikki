@@ -53,7 +53,7 @@ jobs:
       - name: Quickstart builds
         run: |
           go vet -tags quickstart ./dev/quickstart/ ./test/stack/
-          go test -tags quickstart -count=1 ./dev/quickstart/
+          go test -tags quickstart -count=1 ./dev/quickstart/ ./test/stack/
       - name: End-to-end test
         env:
           # The test bind-mounts its temp files (Keycloak's certificate, the

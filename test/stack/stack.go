@@ -172,8 +172,26 @@ func Run(name string, args ...string) (string, error) {
 	return runEnv(context.Background(), nil, name, args...)
 }
 
-func runEnv(ctx context.Context, env []string, name string, args ...string) (string, error) {
+// stopGrace is how long a cancelled step's processes have, after
+// SIGTERM, before they are killed.
+const stopGrace = 10 * time.Second
+
+// command is a step's command. It runs in a process group of its own, and
+// when ctx ends the whole group gets SIGTERM, then SIGKILL after
+// stopGrace: a step's children (kind create cluster's docker run, a
+// docker build) end with it, before any cleanup runs. Being in its own
+// group, it doesn't get the terminal's Ctrl-C itself; the context brings
+// it. A context that never ends (Run's, the e2e's) changes nothing.
+func command(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	cmd.WaitDelay = stopGrace
+	return cmd
+}
+
+func runEnv(ctx context.Context, env []string, name string, args ...string) (string, error) {
+	cmd := command(ctx, name, args...)
 	if env != nil {
 		cmd.Env = append(os.Environ(), env...)
 	}
@@ -205,15 +223,71 @@ func WriteFile(dir, name string, b []byte, mode os.FileMode) (string, error) {
 	return p, os.Chmod(p, mode)
 }
 
+// teardownSettle is how long Teardown must see nothing of the stack
+// before it believes it: docker finishes a container whose creation was
+// under way when its client died. Measured 2026-11-01: kind create
+// cluster ended by SIGTERM within half a second, and its node container
+// appeared about four seconds later, never started.
+const teardownSettle = 12 * time.Second
+
 // Teardown removes everything a stack named cfg.Name makes, and nothing
 // else. It ignores what isn't there, and cfg.Context: it is what runs
-// after a Ctrl-C.
+// after a Ctrl-C. It repeats until nothing of the stack has been seen for
+// teardownSettle, for at most a minute and a half.
 func Teardown(cfg Config) {
-	// The stack's own kubeconfig: kind then leaves the user's
+	start := time.Now()
+	lastSeen := start
+	for {
+		if cfg.teardownOnce() {
+			lastSeen = time.Now()
+		}
+		if time.Since(lastSeen) >= teardownSettle {
+			return
+		}
+		if time.Since(start) > 90*time.Second {
+			cfg.logf("could not remove all of %s; see docker ps -a and docker network ls", cfg.Name)
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// teardownOnce removes what it finds of the stack, and reports whether it
+// found anything.
+func (c Config) teardownOnce() bool {
+	found := false
+	// kind's own view: the stack's kubeconfig, so kind leaves the user's
 	// (~/.kube/config, $KUBECONFIG) alone. A missing file is fine.
-	Detached("kind", "delete", "cluster", "--name", cfg.Cluster(), "--kubeconfig", filepath.Join(cfg.Dir, "kubeconfig")).Run()
-	Detached("docker", append([]string{"rm", "-f", cfg.KeycloakContainer()}, cfg.ExtraContainers...)...).Run()
-	Detached("docker", "network", "rm", cfg.Network()).Run()
+	if out, _ := Detached("kind", "get", "clusters").Output(); strings.Contains("\n"+string(out), "\n"+c.Cluster()+"\n") {
+		found = true
+		Detached("kind", "delete", "cluster", "--name", c.Cluster(), "--kubeconfig", filepath.Join(c.Dir, "kubeconfig")).Run()
+	}
+	if left := c.containers(); len(left) > 0 {
+		found = true
+		Detached("docker", append([]string{"rm", "-f"}, left...)...).Run()
+	}
+	if Detached("docker", "network", "inspect", c.Network()).Run() == nil {
+		found = true
+		Detached("docker", "network", "rm", c.Network()).Run()
+	}
+	return found
+}
+
+// containers lists the IDs of the stack's containers that exist: kind's
+// nodes (by kind's label), Keycloak and the caller's extra ones.
+func (c Config) containers() []string {
+	args := []string{"ps", "-aq", "--filter", "label=io.x-k8s.kind.cluster=" + c.Cluster()}
+	var ids []string
+	add := func(out []byte) {
+		ids = append(ids, strings.Fields(string(out))...)
+	}
+	out, _ := Detached("docker", args...).Output()
+	add(out)
+	for _, n := range append([]string{c.KeycloakContainer()}, c.ExtraContainers...) {
+		out, _ := Detached("docker", "ps", "-aq", "--filter", "name=^/"+n+"$").Output()
+		add(out)
+	}
+	return ids
 }
 
 // Detached is a command in a process group of its own, so that a Ctrl-C
@@ -344,7 +418,7 @@ func (s *Stack) LoadImage(image string) error {
 func (s *Stack) BuildCLI() error {
 	s.logf("building the CLI")
 	cli := filepath.Join(s.Dir, "nyyrikki")
-	build := exec.CommandContext(s.ctx(), "go", "build", "-o", cli, "./cmd/nyyrikki")
+	build := command(s.ctx(), "go", "build", "-o", cli, "./cmd/nyyrikki")
 	build.Dir = s.Root
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -417,7 +491,7 @@ spec:
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(s.ctx(), "kubectl", "--kubeconfig", s.Kubeconfig, "create", "-f", "-")
+	cmd := command(s.ctx(), "kubectl", "--kubeconfig", s.Kubeconfig, "create", "-f", "-")
 	cmd.Stdin = bytes.NewReader(tg)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// kubectl's answer names the Secret, never its data.
