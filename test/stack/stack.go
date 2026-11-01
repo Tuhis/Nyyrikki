@@ -84,6 +84,16 @@ type Config struct {
 	IntrospectionSecret string
 	// CertValidity is how long the CA and certificates are valid.
 	CertValidity time.Duration
+	// OwnerNamespaces are the only places the human has rights in the
+	// cluster, and so the only places a request approved one-off or
+	// covered by an elevation can change anything. PrepareCluster makes
+	// each, binds the human to the ClusterRole edit there, and labels it
+	// for restricted Pod Security, so no pod in it can be privileged or
+	// mount the node (root on the host, since kind's nodes are privileged
+	// containers). Nyyrikki's own namespace is refused: SECURITY.md
+	// (Accepted risks) and docs/06 §6 give the human no write and no
+	// Secret read there, and nothing cluster-wide.
+	OwnerNamespaces []string
 	// ExtraContainers are the caller's own containers on the network,
 	// removed by Teardown before the network.
 	ExtraContainers []string
@@ -287,8 +297,8 @@ func (s *Stack) BuildCLI() error {
 	return nil
 }
 
-// PrepareCluster makes nyyrikkid's namespace, the human's own rights,
-// nyyrikkid's Secrets, the CA ConfigMap and a NodePort for the canonical
+// PrepareCluster makes nyyrikkid's namespace, the human's own rights
+// (OwnerNamespaces), nyyrikkid's Secrets, the CA ConfigMap and a NodePort for the canonical
 // URL. The bot token goes to kubectl on its stdin: it is written to no
 // file and is in no command line.
 func (s *Stack) PrepareCluster(botToken []byte) error {
@@ -321,14 +331,23 @@ spec:
 	if err != nil {
 		return err
 	}
-	for _, args := range [][]string{
-		{"create", "namespace", Namespace},
-		{"create", "clusterrolebinding", "owner-edit", "--clusterrole=edit", "--user=" + OwnerK8sUser},
+	cmds := [][]string{{"create", "namespace", Namespace}}
+	for _, ns := range s.OwnerNamespaces {
+		if ns == Namespace || ns == "" {
+			return fmt.Errorf("the human gets no rights in namespace %q", ns)
+		}
+		cmds = append(cmds,
+			[]string{"create", "namespace", ns},
+			[]string{"label", "namespace", ns, "pod-security.kubernetes.io/enforce=restricted", "pod-security.kubernetes.io/enforce-version=latest"},
+			[]string{"-n", ns, "create", "rolebinding", "owner-edit", "--clusterrole=edit", "--user=" + OwnerK8sUser},
+		)
+	}
+	for _, args := range append(cmds, [][]string{
 		{"-n", Namespace, "create", "secret", "tls", "nyyrikki-tls", "--cert=" + tlsCrt, "--key=" + tlsKey},
 		{"-n", Namespace, "create", "secret", "generic", "nyyrikki-keycloak", "--from-file=client-secret=" + clientSecret},
 		{"-n", Namespace, "create", "configmap", CAConfigMap, "--from-file=ca.crt=" + s.CAFile},
 		{"apply", "-f", svcFile},
-	} {
+	}...) {
 		if _, err := s.Kubectl(args...); err != nil {
 			return err
 		}

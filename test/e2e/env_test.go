@@ -13,11 +13,13 @@ package e2e
 
 import (
 	"crypto/x509"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +49,29 @@ const (
 	introspectSec = "e2e-introspection-secret"
 	mcpClientID   = "nyyrikki-mcp-e2e"
 )
+
+// boxPod is the workload, in workNS: restricted Pod Security's demands
+// (non-root, no privilege escalation, no capabilities, a seccomp
+// profile) and nothing more.
+const boxPod = `apiVersion: v1
+kind: Pod
+metadata: {name: box, namespace: %s}
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: box
+      image: %s
+      imagePullPolicy: Never
+      command: [sleep, "3600"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+`
 
 // env is the running environment.
 type env struct {
@@ -100,6 +125,9 @@ func setup(t *testing.T) *env {
 	cfg := stack.Config{
 		Name: clusterName, Subnet: networkSubnet, Dir: dir, Root: root, ImageTag: "e2e",
 		OwnerPassword: ownerPassword, KeycloakAdminPassword: "admin", IntrospectionSecret: introspectSec,
+		// The human's rights: edit in the workload's namespace, and
+		// nowhere else (checkHumanRights).
+		OwnerNamespaces: []string{workNS},
 		ExtraContainers: []string{fakebotName},
 		Logf:            t.Logf,
 	}
@@ -161,12 +189,17 @@ func setup(t *testing.T) *env {
 	// The cluster side: Nyyrikki's namespace, Secrets and NodePort, the
 	// human's own rights, and a workload.
 	must(t, st.PrepareCluster([]byte(telegramtest.DefaultToken)))
-	e.kubectl(t, "create", "namespace", workNS)
 	// The namespace's default ServiceAccount is made by a controller after
 	// the namespace; a pod created before it is refused. On a busy runner
 	// that gap was long enough to fail the setup (2026-10-30).
 	e.kubectl(t, "-n", workNS, "wait", "--for=create", "serviceaccount/default", "--timeout=120s")
-	e.kubectl(t, "-n", workNS, "run", "box", "--image="+busyboxImage, "--image-pull-policy=Never", "--restart=Never", "--", "sleep", "3600")
+	// The workload, fit for the restricted Pod Security its namespace
+	// enforces: busybox runs as nobody.
+	box := exec.Command("kubectl", "--kubeconfig", e.kubeconfig, "apply", "-f", "-")
+	box.Stdin = strings.NewReader(fmt.Sprintf(boxPod, workNS, busyboxImage))
+	if out, err := box.CombinedOutput(); err != nil {
+		t.Fatalf("the workload pod: %v\n%s", err, out)
+	}
 
 	t.Cleanup(func() {
 		if t.Failed() {

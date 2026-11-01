@@ -96,7 +96,20 @@ At the end it prints what to do next, and keeps a copy in
 4. **Elevate.** In the agent's shell,
    `export NYYRIKKI_ELEVATION=$(nyyrikki elevate --reason "try it" --for 5m this-cluster)`,
    then approve. Runs that carry the handle go through without asking
-   until the window ends. [agents.md](agents.md) covers the rest of the
+   until the window ends:
+
+   ```sh
+   nyyrikki run --reason "a write" this-cluster -- create configmap hello -n quickstart --from-literal=greeting=hi
+   nyyrikki run --reason "read it back" this-cluster -- get configmap hello -n quickstart -o yaml
+   ```
+
+   The human, `owner@example.com`, may change things only in the
+   namespace `quickstart`, where Pod Security forbids privileged and
+   `hostPath` pods. Requests run as the human, so an elevation can do no
+   more than that. It can't read Nyyrikki's Secrets (the bot token among
+   them), change Nyyrikki, or become root on the kind node, which is your
+   machine. A real deployment needs the same narrow rights
+   ([SECURITY.md](../../SECURITY.md), Accepted risks). [agents.md](agents.md) covers the rest of the
    CLI and MCP harnesses.
 
 The agent's login lives in the pod's home directory, an `emptyDir`, so

@@ -25,6 +25,10 @@ func TestEndToEnd(t *testing.T) {
 	prompts := 0
 	next := func() int { prompts++; return prompts }
 
+	step(t, "the human's rights: edit in the workload's namespace only, under restricted Pod Security", func(t *testing.T) {
+		e.checkHumanRights(t, workNS)
+	})
+
 	agent := e.newCLI(t)
 	step(t, "M1: sign in, list targets, refuse the unauthenticated", func(t *testing.T) {
 		agent.login(t)

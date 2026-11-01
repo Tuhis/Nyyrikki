@@ -48,6 +48,9 @@ const (
 	name = "nyyrikki-quickstart"
 	// Not the e2e's 10.231.0.0/24: the two can run side by side.
 	subnet = "10.232.0.0/24"
+	// playNS is the one namespace where the human, and so an approved
+	// request or an elevation, may change anything (stack.OwnerNamespaces).
+	playNS = "quickstart"
 	// The agent's pod, its namespace and its image.
 	agentNS    = "nyyrikki-agent"
 	agentPod   = "nyyrikki-agent"
@@ -100,7 +103,7 @@ func paths() (root, state string, err error) {
 
 func config(root, state string) stack.Config {
 	return stack.Config{Name: name, Subnet: subnet, Dir: state, Root: root, ImageTag: "quickstart",
-		CertValidity: 30 * 24 * time.Hour, Logf: logf}
+		OwnerNamespaces: []string{playNS}, CertValidity: 30 * 24 * time.Hour, Logf: logf}
 }
 
 // tokenRE is the shape of a Bot API token: the bot's ID, a colon, a secret.
@@ -458,6 +461,12 @@ only the CLI and, once signed in, its own login.
    prints %s, the user it ran as on the cluster. Deny,
    and it exits with 77.
 
+   That user may change things only in the namespace %s, where
+   Pod Security forbids privileged pods: try
+     nyyrikki run --reason "a write" %s -- create configmap hello -n %s --from-literal=greeting=hi
+   Nyyrikki's own namespace and the rest of the cluster are out of its
+   reach, and so out of any request's or elevation's.
+
 To try an AI agent, run it in the agent's shell, or on another machine
 that holds nothing but its Nyyrikki login (docs/setup/agents.md).
 
@@ -474,6 +483,7 @@ Remove everything with dev/quickstart.sh down, then delete the bot.
 		stack.OwnerUser, s.OwnerPassword,
 		stack.Target,
 		stack.OwnerK8sUser,
+		playNS, stack.Target, playNS,
 		s.KeycloakBase(), rel(filepath.Join(s.Dir, "keycloak-admin-password")),
 		rel(filepath.Join(s.Dir, "info.txt")))
 }
