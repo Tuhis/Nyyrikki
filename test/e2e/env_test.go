@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -183,8 +184,21 @@ func setup(t *testing.T) *env {
 	// The image and the CLI, built from this checkout.
 	run(t, "docker", "build", "-q", "-t", image, root)
 	run(t, "kind", "load", "docker-image", image, "--name", clusterName)
-	// busybox is pulled by the node itself: kind load can't import
-	// multi-platform images.
+	// busybox is pulled here, for the node's platform, and imported as an
+	// archive: kind load docker-image can't import multi-platform images,
+	// and the node pulling it itself failed on CI runners whose network's
+	// DNS misbehaved ("lookup registry-1.docker.io on 10.231.0.1:53:
+	// server misbehaving", #50).
+	platform := "linux/" + runtime.GOARCH
+	run(t, "docker", "pull", "-q", "--platform", platform, busyboxImage)
+	bbTar := filepath.Join(e.dir, "busybox.tar")
+	if out, err := exec.Command("docker", "save", "--platform", platform, "-o", bbTar, busyboxImage).CombinedOutput(); err != nil {
+		// Older Docker has no save --platform; the pull above already
+		// chose the platform.
+		t.Logf("docker save --platform: %v %s; saving without it", err, out)
+		run(t, "docker", "save", "-o", bbTar, busyboxImage)
+	}
+	run(t, "kind", "load", "image-archive", bbTar, "--name", clusterName)
 	e.cli = filepath.Join(e.dir, "nyyrikki")
 	build := exec.Command("go", "build", "-o", e.cli, "./cmd/nyyrikki")
 	build.Dir = root
@@ -204,7 +218,7 @@ func setup(t *testing.T) *env {
 	// the namespace; a pod created before it is refused. On a busy runner
 	// that gap was long enough to fail the setup (2026-10-30).
 	e.kubectl(t, "-n", workNS, "wait", "--for=create", "serviceaccount/default", "--timeout=120s")
-	e.kubectl(t, "-n", workNS, "run", "box", "--image="+busyboxImage, "--image-pull-policy=IfNotPresent", "--restart=Never", "--", "sleep", "3600")
+	e.kubectl(t, "-n", workNS, "run", "box", "--image="+busyboxImage, "--image-pull-policy=Never", "--restart=Never", "--", "sleep", "3600")
 	sdir := filepath.Join(e.dir, "secrets")
 	os.MkdirAll(sdir, 0o700)
 	e.kubectl(t, "-n", namespace, "create", "secret", "tls", "nyyrikki-tls",
