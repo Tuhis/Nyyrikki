@@ -117,7 +117,7 @@ Answer by: 12:05:00 UTC
   `oci://ghcr.io/tuhis/charts/nyyrikki`, and CLI binaries for Linux and
   macOS are on the [releases page](https://github.com/Tuhis/Nyyrikki/releases).
 - **Build from source**: Go 1.26 or newer,
-  `CGO_ENABLED=0 go build ./cmd/nyyrikkid ./cmd/nyyrikki`.
+  `CGO_ENABLED=0 go build -o bin/ ./cmd/nyyrikkid ./cmd/nyyrikki`.
 
 ## Documentation
 
