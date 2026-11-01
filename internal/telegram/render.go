@@ -316,6 +316,49 @@ func renderElevation(p approval.ElevationPrompt) string {
 	return sb.String()
 }
 
+// Fixed texts of the enrollment prompt (docs/08 §5.2).
+const (
+	enrollCompare     = "Compare it with what the setup printed on the host. Approve only if they are the same."
+	enrollNoSudo      = "no root (no sudo)"
+	enrollKills       = "finishes cuts (as the host reports)"
+	enrollDoesntKill  = "doesn't finish cuts (as the host reports)"
+	enrollWhatItMeans = "Approving makes Nyyrikki trust this host key for this target's address."
+)
+
+// renderEnroll renders the enrollment prompt of docs/08 §5.2. Every value
+// is shown escaped and in <code>: the target and address come from
+// config, the fingerprint is Nyyrikki's own computation over the key the
+// host sent, and session_kill is a boolean the host reported, labelled
+// as its report.
+func renderEnroll(p approval.EnrollPrompt) string {
+	var sb strings.Builder
+	sb.WriteString("<b>Enroll SSH host:</b> " + code(p.Target) + "\n")
+	sb.WriteString("<b>Address:</b> " + code(p.Address) + "\n")
+	sb.WriteString("<b>Host key (as the host sent it):</b> " + code(p.HostKey) + "\n")
+	sb.WriteString("<b>" + enrollCompare + "</b>\n")
+	if p.Sudo {
+		sb.WriteString("<b>" + rootViaSudo + "</b>")
+	} else {
+		sb.WriteString(enrollNoSudo)
+	}
+	sb.WriteString(" · ")
+	if p.SessionKill {
+		sb.WriteString(enrollKills)
+	} else {
+		sb.WriteString("<b>" + enrollDoesntKill + "</b>")
+	}
+	sb.WriteString("\n")
+	sb.WriteString("Asked from " + code(p.ClientAddr) + ", token issued ")
+	if p.TokenIssued.IsZero() {
+		sb.WriteString("at an unknown time")
+	} else {
+		sb.WriteString(clock(p.TokenIssued) + " UTC")
+	}
+	sb.WriteString("\n" + enrollWhatItMeans + "\n")
+	sb.WriteString("\n<b>Answer by:</b> " + clock(p.ExpiresAt) + " UTC")
+	return sb.String()
+}
+
 // codeList writes xs as a comma-separated list of <code> items.
 func codeList(sb *strings.Builder, xs []string) {
 	for i, x := range xs {
@@ -373,6 +416,9 @@ func statusLine(o approval.Outcome, now time.Time) (string, error) {
 		s = "Approved; the session was never started"
 	default:
 		return "", fmt.Errorf("telegram: unknown outcome kind %d", o.Kind)
+	}
+	if o.By != "" {
+		s += " by " + show(cut(o.By, maxClientNameRunes), false)
 	}
 	return "<b>" + s + "</b>", nil
 }

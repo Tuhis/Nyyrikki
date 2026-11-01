@@ -52,6 +52,15 @@ type Record struct {
 	// CertSerial is the serial of the SSH certificate a run was issued
 	// (docs/07 D5), in decimal; its key ID is "nyyrikki:" and the run ID.
 	CertSerial string `json:"cert_serial,omitempty"`
+	// HostKey is the SHA256 fingerprint of an enrolled host's key
+	// (docs/08 D7).
+	HostKey string `json:"host_key,omitempty"`
+	// TokenSHA256 is the hex SHA-256 of an enrollment token's random
+	// part, never the token (docs/08 D6).
+	TokenSHA256 string `json:"token_sha256,omitempty"`
+	// ClientAddr is the address an unauthenticated /hosts/ request came
+	// from (docs/08 D7).
+	ClientAddr string `json:"client_addr,omitempty"`
 }
 
 // Appender appends records. An error means the record was not stored, and

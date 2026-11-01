@@ -83,6 +83,26 @@ type ElevationPrompt struct {
 	ExpiresAt  time.Time
 }
 
+// EnrollPrompt asks one human of an SSH target to approve enrolling a
+// host (docs/08 D7, §5.2). An enrollment sends one to every human of the
+// target, each with its own ID; the first valid tap settles them all.
+// Target, Address and Sudo come from config. HostKey is the
+// fingerprint, with its type, of the key the host sent, computed by
+// Nyyrikki; SessionKill is what the host reported. ClientAddr is the
+// address the request came from. None of it is HTML-escaped yet.
+type EnrollPrompt struct {
+	ID          string
+	ApproverID  int64
+	Target      string
+	Address     string
+	HostKey     string
+	Sudo        bool
+	SessionKill bool
+	ClientAddr  string
+	TokenIssued time.Time
+	ExpiresAt   time.Time
+}
+
 // OutcomeKind is what a prompt is edited to show (docs/05 D6, D7).
 type OutcomeKind int
 
@@ -107,11 +127,13 @@ const (
 )
 
 // Outcome is the final or current state of a prompt. Until is set for
-// ElevationLive.
+// ElevationLive. By, if set, is the human whose tap settled it, shown on
+// every copy of an enrollment prompt (docs/08 §5.2).
 type Outcome struct {
 	Kind  OutcomeKind
 	At    time.Time
 	Until time.Time
+	By    string
 }
 
 // Action is what a tap asks for.
@@ -132,6 +154,8 @@ type Asker interface {
 	AskRun(ctx context.Context, p RunPrompt) error
 	// AskElevation sends an elevation prompt, with the same contract.
 	AskElevation(ctx context.Context, p ElevationPrompt) error
+	// AskEnroll sends a host enrollment prompt, with the same contract.
+	AskEnroll(ctx context.Context, p EnrollPrompt) error
 	// Settle edits the prompt with the given ID to show the outcome.
 	Settle(ctx context.Context, id string, o Outcome) error
 	// Healthy reports whether prompts can be sent and answers received.

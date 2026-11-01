@@ -133,4 +133,14 @@ const (
 	// approval prompt (docs/08 D10), with the failure's code and detail,
 	// or detail session_kill / no_session_kill for what it read.
 	KindHostChecked = "host_checked"
+	// Host enrollment (docs/08 D7): an enrollment that passed its token
+	// and body checks and is about to ask; its approval; its refusal,
+	// denial, expiry, withdrawal or failure, with the code and detail
+	// saying which; the host certificate issued, with its serial and the
+	// host key's fingerprint; and the check after it.
+	KindHostEnrollRequested = "host_enroll_requested"
+	KindHostEnrollApproved  = "host_enroll_approved"
+	KindHostEnrollDenied    = "host_enroll_denied"
+	KindHostCertIssued      = "host_cert_issued"
+	KindHostEnrollChecked   = "host_enroll_checked"
 )

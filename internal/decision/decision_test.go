@@ -39,6 +39,10 @@ type fakeAsker struct {
 	sendErr  error
 	lastRun  approval.RunPrompt
 	lastElev approval.ElevationPrompt
+	enrolls  []approval.EnrollPrompt
+	// enrollErr, if set, fails AskEnroll for that approver only.
+	enrollErr map[int64]error
+	by        map[string]string
 }
 
 func newAsker() *fakeAsker {
@@ -64,9 +68,26 @@ func (a *fakeAsker) AskElevation(_ context.Context, p approval.ElevationPrompt) 
 	}
 	return err
 }
+func (a *fakeAsker) AskEnroll(_ context.Context, p approval.EnrollPrompt) error {
+	a.mu.Lock()
+	a.enrolls = append(a.enrolls, p)
+	err := a.sendErr
+	if e := a.enrollErr[p.ApproverID]; e != nil {
+		err = e
+	}
+	a.mu.Unlock()
+	if err == nil {
+		a.prompts <- p.ID
+	}
+	return err
+}
 func (a *fakeAsker) Settle(_ context.Context, id string, o approval.Outcome) error {
 	a.mu.Lock()
 	a.settled[id] = append(a.settled[id], o.Kind)
+	if a.by == nil {
+		a.by = map[string]string{}
+	}
+	a.by[id] = o.By
 	a.mu.Unlock()
 	return nil
 }
