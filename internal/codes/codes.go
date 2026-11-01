@@ -126,4 +126,8 @@ const (
 	// KindSSHCAWarning: an extra trusted key equals a derived one
 	// (docs/08 D14).
 	KindSSHCAWarning = "ssh_ca_warning"
+	// KindHostChecked: the host check of an SSH target before an
+	// approval prompt (docs/08 D10), with the failure's code and detail,
+	// or detail session_kill / no_session_kill for what it read.
+	KindHostChecked = "host_checked"
 )

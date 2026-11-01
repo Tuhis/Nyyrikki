@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS elevations (
   ended_ms INTEGER
 );
 
+-- What an elevation's approver was shown about its SSH hosts (docs/08
+-- D10): a JSON object, target name to session_kill shown.
+CREATE TABLE IF NOT EXISTS approval_host_facts (
+  approval_id TEXT PRIMARY KEY REFERENCES approvals(id),
+  facts TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   id TEXT NOT NULL UNIQUE,

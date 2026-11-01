@@ -97,17 +97,41 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 	if err != nil {
 		return nil, p.deny(ctx, rec, err)
 	}
-	var hosts []approval.SSHHost
-	for _, name := range targets {
-		t, _ := p.cfg.TargetByName(name) // expandTargets checked it
-		if hh := sshHost(t, RunAs(h, t).User); hh != nil {
-			hosts = append(hosts, *hh)
-		}
-	}
 	rec.Targets = targets
-
 	id := "apr_" + ulid.Make().String()
 	rec.ApprovalID = id
+
+	// docs/08 D10: every SSH host is checked before the prompt. A failed
+	// check doesn't block the elevation; its target is shown with the
+	// warning, as one that doesn't finish cuts, and so never trips
+	// host_changed.
+	var sshTargets []*config.Target
+	for _, name := range targets {
+		t, _ := p.cfg.TargetByName(name) // expandTargets checked it
+		if t.SSH != nil {
+			sshTargets = append(sshTargets, t)
+		}
+	}
+	checks, auditErr := p.checkHosts(ctx, rec, sshTargets)
+	if auditErr != nil {
+		return nil, auditErr
+	}
+	var hosts []approval.SSHHost
+	shown := map[string]bool{}
+	for i, t := range sshTargets {
+		hh := sshHost(t, RunAs(h, t).User, checks[i].facts)
+		if checks[i].err != nil {
+			hh.SessionKill = false
+			hh.CheckFailed = codes.DetailOf(checks[i].err)
+		}
+		shown[t.Name] = hh.SessionKill
+		hosts = append(hosts, *hh)
+	}
+	factsJSON := ""
+	if len(sshTargets) > 0 {
+		b, _ := json.Marshal(shown)
+		factsJSON = string(b)
+	}
 	expires := p.now().Add(p.cfg.Approval.Timeout.D())
 	prompt := approval.ElevationPrompt{
 		ID: id, ApproverID: h.TelegramUserID, Targets: targets, Groups: groups, Duration: dur,
@@ -117,7 +141,7 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 		Reason: r.Reason, ExpiresAt: expires,
 	}
 	tj, _ := json.Marshal(targets)
-	state, err := p.ask(ctx, rec, id, "elevation", h.TelegramUserID, pr, string(tj), nil, dur, expires,
+	state, err := p.ask(ctx, rec, id, "elevation", h.TelegramUserID, pr, string(tj), nil, dur, expires, factsJSON,
 		func(ctx context.Context) error { return p.asker.AskElevation(ctx, prompt) }, r.Progress)
 	if err != nil || state != stateApproved {
 		// A tap may still have approved it after ask gave up (its own

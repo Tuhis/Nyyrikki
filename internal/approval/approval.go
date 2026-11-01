@@ -24,14 +24,17 @@ type Agent struct {
 }
 
 // SSHHost is what the approver is shown about an SSH target (docs/07
-// D12): the account a run uses there, the host's address, and what its
-// config states about root and about cuts.
+// D12): the account a run uses there, the host's address, what its
+// config states about root, and what the host check read about cuts
+// (docs/08 D10). CheckFailed, set only in an elevation prompt, is the
+// detail of a failed host check; SessionKill is then false.
 type SSHHost struct {
 	Target      string
 	Account     string
 	Address     string
 	Sudo        bool
 	SessionKill bool
+	CheckFailed string
 }
 
 // RunPrompt asks for a one-off approval of one request (docs/05 D5).
