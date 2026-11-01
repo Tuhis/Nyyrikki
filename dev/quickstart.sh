@@ -6,14 +6,20 @@
 #   dev/quickstart.sh agent   a shell in the agent's pod
 #   dev/quickstart.sh down    remove everything up made
 #
-# The bot token is read without echo, or from NYYRIKKI_QUICKSTART_BOT_TOKEN,
-# and goes only into the cluster's Secret: it is written to no file on this
-# machine and never printed.
+# The bot token is read without echo, or, for a run without a terminal, from
+# NYYRIKKI_QUICKSTART_BOT_TOKEN (never export it in a profile). It goes only
+# into the cluster's Secret: it is written to no file on this machine and
+# never printed.
 #
 # This machine is the human's while the quickstart is up: it holds kind's
 # admin kubeconfig, which can read the bot token's Secret. Run no AI agent
 # on it; run agents in the agent's pod.
 set -euo pipefail
+
+# First of all, before any command runs: take the token out of the
+# environment, so no child process (docker, kind, go) inherits it.
+qs_token=${NYYRIKKI_QUICKSTART_BOT_TOKEN-}
+unset NYYRIKKI_QUICKSTART_BOT_TOKEN
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 state=$root/dev/.quickstart
@@ -67,8 +73,8 @@ needs a Telegram bot of your own (docs/setup/quickstart.md):
     pod (dev/quickstart.sh agent), which holds only their Nyyrikki login.
 
 EOF
-  local token=${NYYRIKKI_QUICKSTART_BOT_TOKEN:-} uid=${NYYRIKKI_QUICKSTART_TELEGRAM_USER:-}
-  unset NYYRIKKI_QUICKSTART_BOT_TOKEN
+  local token=$qs_token uid=${NYYRIKKI_QUICKSTART_TELEGRAM_USER:-}
+  qs_token=
   if [ -z "$token" ]; then
     [ -t 0 ] || die "no terminal to ask on: set NYYRIKKI_QUICKSTART_BOT_TOKEN"
     IFS= read -rsp "Bot token (not shown): " token

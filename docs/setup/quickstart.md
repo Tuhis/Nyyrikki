@@ -61,8 +61,11 @@ have written to the bot (from `getUpdates`, which leaves the updates in
 place for Nyyrikki) and asks you to confirm or pick yours. All of that
 happens before anything is built. The token then goes only into the
 cluster's Secret: it isn't written to any file on your machine, and it is
-never printed. Without a terminal, set `NYYRIKKI_QUICKSTART_BOT_TOKEN`
-and `NYYRIKKI_QUICKSTART_TELEGRAM_USER` (your user ID).
+never printed. For a run without a terminal, set
+`NYYRIKKI_QUICKSTART_BOT_TOKEN` and `NYYRIKKI_QUICKSTART_TELEGRAM_USER`
+(your user ID) for that one command. The script takes the token out of
+its environment before it runs anything else. Don't export the token in a
+shell profile, where every program you start would inherit it.
 
 At the end it prints what to do next, and keeps a copy in
 `dev/.quickstart/info.txt`. In short:
