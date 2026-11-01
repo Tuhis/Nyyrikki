@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // oldSchema is the approvals table and its dependants as they were
@@ -98,5 +99,46 @@ func TestStoreMigratesApprovals(t *testing.T) {
 			t.Fatalf("dependants: %q %v", facts, err)
 		}
 		db.Close()
+	}
+}
+
+// A transaction that reads, then writes, must not fail because another
+// connection wrote in between: in WAL mode a deferred transaction can't
+// upgrade its read snapshot to a write once someone else has committed
+// (SQLITE_BUSY_SNAPSHOT, "database is locked (517)"), and busy_timeout
+// doesn't help. Seen as a lost settle under load on #50, so transactions
+// begin immediate: the second writer waits instead.
+func TestStoreReadThenWriteUnderContention(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, "INSERT INTO meta (key, value) VALUES ('a', x'00'), ('b', x'00')"); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v []byte
+	if err := tx.QueryRowContext(ctx, "SELECT value FROM meta WHERE key = 'a'").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	other := make(chan error, 1)
+	go func() {
+		_, err := db.ExecContext(ctx, "UPDATE meta SET value = x'01' WHERE key = 'b'")
+		other <- err
+	}()
+	time.Sleep(200 * time.Millisecond) // let the other writer commit, if it can
+	if _, err := tx.ExecContext(ctx, "UPDATE meta SET value = x'02' WHERE key = 'a'"); err != nil {
+		t.Fatalf("write after read, with another writer: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-other; err != nil {
+		t.Fatalf("the other writer: %v", err)
 	}
 }
