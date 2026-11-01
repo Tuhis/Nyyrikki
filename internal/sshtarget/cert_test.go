@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/Tuhis/Nyyrikki/internal/codes"
+	"github.com/Tuhis/Nyyrikki/internal/sshca"
 )
 
 // TestMintCert covers docs/07 D5 (G3): exactly one principal, the run's
@@ -22,7 +23,7 @@ import (
 func TestMintCert(t *testing.T) {
 	ca := newTestCA(t)
 	now := time.Unix(1_800_000_000, 0)
-	c := NewCA(ca.file, []ssh.PublicKey{ca.signer.PublicKey()}, []string{"203.0.113.10/32", "2001:db8::/64"}, func() time.Time { return now })
+	c := NewCA(userCA(ca.file), []string{"203.0.113.10/32", "2001:db8::/64"}, func() time.Time { return now })
 	for _, interactive := range []bool{false, true} {
 		m, err := c.Mint("run_01ABC", "owner", "db-1", interactive)
 		if err != nil {
@@ -67,12 +68,11 @@ func TestMintCert(t *testing.T) {
 	}
 }
 
-// TestMintCertFailures covers docs/07 §6: a CA key that can't be read,
-// isn't ed25519, or isn't in user_ca_public_keys makes the run
+// TestMintCertFailures covers docs/07 §6 and docs/08 D1, D3: a CA key
+// that can't be read, isn't ed25519, or is revoked makes the run
 // unavailable, and the error never carries the key.
 func TestMintCertFailures(t *testing.T) {
 	ca := newTestCA(t)
-	pub := []ssh.PublicKey{ca.signer.PublicKey()}
 	other := newTestCA(t)
 	garbage := filepath.Join(t.TempDir(), "garbage")
 	os.WriteFile(garbage, []byte("not a key"), 0o600)
@@ -81,19 +81,20 @@ func TestMintCertFailures(t *testing.T) {
 	eblock, _ := ssh.MarshalPrivateKey(ek, "")
 	ecFile := filepath.Join(t.TempDir(), "ecdsa")
 	os.WriteFile(ecFile, pem.EncodeToMemory(eblock), 0o600)
-	ecSigner, _ := ssh.NewSignerFromKey(ek)
 	cases := map[string]struct {
-		ca     *CA
+		keys   *sshca.Keys
 		detail string
 	}{
-		"missing file": {NewCA(filepath.Join(t.TempDir(), "none"), pub, []string{"127.0.0.1/32"}, nil), DetailCAUnreadable},
-		"garbage":      {NewCA(garbage, pub, []string{"127.0.0.1/32"}, nil), DetailCAUnreadable},
-		"not listed":   {NewCA(other.file, pub, []string{"127.0.0.1/32"}, nil), DetailCAMismatch},
-		"ecdsa":        {NewCA(ecFile, []ssh.PublicKey{ecSigner.PublicKey()}, []string{"127.0.0.1/32"}, nil), DetailCAUnreadable},
+		"missing file": {userCA(filepath.Join(t.TempDir(), "none")), sshca.DetailUnreadable},
+		"garbage":      {userCA(garbage), sshca.DetailUnreadable},
+		"ecdsa":        {userCA(ecFile), sshca.DetailUnreadable},
+		// A broken optional key stops runs too (docs/08 D1).
+		"broken host CA": {sshca.New(sshca.Options{Files: sshca.Files{UserCA: ca.file, HostCA: garbage}}), sshca.DetailUnreadable},
+		"revoked":        {sshca.New(sshca.Options{Files: sshca.Files{UserCA: ca.file}, Revoked: []ssh.PublicKey{ca.signer.PublicKey()}}), sshca.DetailUserCARevoked},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := c.ca.Mint("run_x", "owner", "db-1", false)
+			_, err := NewCA(c.keys, []string{"127.0.0.1/32"}, nil).Mint("run_x", "owner", "db-1", false)
 			wantCode(t, err, codes.Unavailable, c.detail)
 			if leaks(err.Error(), other.pem, ca.pem) {
 				t.Fatal("the error carries key material")
@@ -101,16 +102,21 @@ func TestMintCertFailures(t *testing.T) {
 		})
 	}
 	// Read on each use: a rotated file applies to the next run (docs/07 D6).
-	both := NewCA(ca.file, []ssh.PublicKey{ca.signer.PublicKey(), other.signer.PublicKey()}, []string{"127.0.0.1/32"}, nil)
-	m, err := both.Mint("run_1", "owner", "db-1", false)
+	c := NewCA(userCA(ca.file), []string{"127.0.0.1/32"}, nil)
+	m, err := c.Mint("run_1", "owner", "db-1", false)
 	if err != nil || string(m.signer.PublicKey().(*ssh.Certificate).SignatureKey.Marshal()) != string(ca.signer.PublicKey().Marshal()) {
 		t.Fatalf("first key: %v", err)
 	}
 	os.WriteFile(ca.file, other.pem, 0o600)
-	m, err = both.Mint("run_2", "owner", "db-1", false)
+	m, err = c.Mint("run_2", "owner", "db-1", false)
 	if err != nil || string(m.signer.PublicKey().(*ssh.Certificate).SignatureKey.Marshal()) != string(other.signer.PublicKey().Marshal()) {
 		t.Fatalf("rotated key: %v", err)
 	}
+}
+
+// userCA is a loader with only the user CA key file.
+func userCA(file string) *sshca.Keys {
+	return sshca.New(sshca.Options{Files: sshca.Files{UserCA: file}})
 }
 
 // leaks reports whether s holds anything of the PEM files: their marker

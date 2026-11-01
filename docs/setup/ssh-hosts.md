@@ -11,22 +11,57 @@ Nyyrikki never configures a host itself. An administrator sets each one
 up, with the setup script or by hand. Both write the same files, listed
 under [Manual setup](#manual-setup).
 
-## The user CA
+## The CA keys
 
-Nyyrikki signs a certificate per run with a user CA key that you create
-once. Do it on a machine no agent runs on, in a temporary directory that
-is removed afterwards:
+Nyyrikki signs a certificate per run with a user CA key. It keeps its CA
+keys in one Secret, `nyyrikki-ssh-ca` (`secrets.sshCA.name`), mounted
+whole: `user-ca`, and optionally `user-ca-next` (a staged rotation) and
+`host-ca` (enrollment, in a later release). The public keys hosts trust
+are derived from them; `ssh.userCAPublicKeys` holds only extra keys, if
+any ([docs/08](../08-ssh-onboarding.md) D1).
+
+**The chart makes the Secret.** On the first install or upgrade with an
+SSH target, a hook Job creates it with fresh keys and prints only their
+fingerprints. It never overwrites a Secret that exists, and Helm doesn't
+own it, so `helm uninstall` and `--force` leave it (D16). To delete it:
 
 ```sh
-d=$(mktemp -d) && chmod 700 "$d"
-ssh-keygen -q -t ed25519 -N '' -C nyyrikki-user-ca -f "$d/user-ca"
-kubectl -n nyyrikki create secret generic nyyrikki-ssh-user-ca --from-file=user-ca="$d/user-ca"
-cat "$d/user-ca.pub"     # goes into ssh.user_ca_public_keys
-rm -rf "$d"
+kubectl -n nyyrikki delete secret -l nyyrikki.dev/release=nyyrikki,nyyrikki.dev/component=ssh-ca
 ```
 
-Not in a pod with `kubectl run -i`: what such a pod prints is kept as its
-container log, which the agents can read.
+**Or make it yourself**, with `ssh.generateCA: false`: on a machine no
+agent runs on, run `nyyrikkid ssh-ca` from the image (or
+`go run ./cmd/nyyrikkid` from a checkout). The keys pass only through
+the pipe. Use `create`, never `apply`, so an existing Secret is not
+overwritten:
+
+```sh
+docker run --rm -i ghcr.io/tuhis/nyyrikki:<version> ssh-ca init --namespace nyyrikki | kubectl create -f -
+```
+
+Rendering the chart without Helm (`helm template | kubectl apply`,
+Kustomize's `helmCharts`) also needs `ssh.generateCA: false`: the hook
+would become a plain Job, and its namespace-wide grant would stay.
+
+The install hook's ServiceAccount may create any Secret in the namespace
+while the hook runs, and Helm deletes it afterwards. If an install was
+interrupted or timed out while the hook ran, or the release was
+uninstalled, check that nothing is left, and delete what is:
+
+```sh
+kubectl -n nyyrikki get serviceaccount,role,rolebinding <release>-ssh-ca-init
+kubectl -n nyyrikki delete serviceaccount,role,rolebinding <release>-ssh-ca-init
+```
+
+**Upgrading from an R10 release** that has `nyyrikki-ssh-user-ca`: set
+`secrets.sshUserCA.name: nyyrikki-ssh-user-ca` in the values (it no
+longer has a default), and migrate as `NOTES.txt` says, in this order
+(D14):
+
+1. `kubectl -n nyyrikki get secret nyyrikki-ssh-user-ca -o yaml | nyyrikkid ssh-ca import | kubectl -n nyyrikki create -f -`
+2. remove that key from `ssh.userCAPublicKeys` and unset
+   `secrets.sshUserCA`, in one rollout;
+3. after it, delete `nyyrikki-ssh-user-ca`.
 
 The configuration also needs `ssh.source_addresses`: the address or
 addresses Nyyrikki's connections to the hosts come from. Hosts accept
@@ -102,8 +137,8 @@ NYYRIKKI_VALUES_END
 
 A file whose checksummed part differs, or that has anything other than
 data lines and the terminator after it, is not Nyyrikki's script. The
-script prints the fingerprint of each CA key; compare it with
-`ssh-keygen -lf` of your `user-ca.pub`.
+script prints the fingerprint of each CA key; compare it with the
+fingerprints the hook Job or `ssh-ca` printed.
 
 The host must trust Nyyrikki's TLS certificate. If it comes from a
 private CA, pass that CA with `--cacert`:
@@ -211,8 +246,10 @@ These are the files the script writes, for the sample values above
 root; directories are mode 0755. Write them in this order, so that every
 state on the way fails closed.
 
-The trusted CA keys, one `ssh-ed25519` line per key of
-`ssh.user_ca_public_keys`:
+The trusted CA keys, one `ssh-ed25519` line per trusted key: the CA
+Secret's `user-ca`, its `user-ca-next` if staged, then the extra keys of
+`ssh.user_ca_public_keys`, minus `ssh.revoked_user_ca_keys` (the
+`CA_KEY` data lines):
 
 <!-- file: /etc/ssh/nyyrikki/user_ca.pub 0644 -->
 ```
@@ -327,16 +364,21 @@ without the comment) into the target's `host_keys`, and set
 
 ## Rotating the CA
 
-Planned, in three rollouts:
+Rotation changes the Secret, never the values, and needs no rollout:
+Nyyrikki reads the keys on each use (docs/08 §5.4). Until hosts pull
+their trust on their own (a later release), re-run the setup command on
+every host after each step. With the chart's CronJobs (`ssh.caJobs`):
 
-1. Create a new key pair as above, but keep the private key aside, not
-   yet in the Secret. Add the new public key to `user_ca_public_keys`,
-   next to the old one, and roll out. Re-run the setup command on every
-   host: each now trusts both keys.
-2. Put the new private key into the Secret. Nyyrikki signs with it from
-   the next run on.
-3. Remove the old public key from `user_ca_public_keys`, roll out, and
-   re-run the setup command on every host.
+1. **Stage**: `kubectl -n nyyrikki create job --from=cronjob/nyyrikki-ssh-ca-stage ssh-ca-stage-1`.
+   Within a minute or two the setup command serves both keys; re-run it
+   on every host.
+2. **Promote**: `kubectl -n nyyrikki create job --from=cronjob/nyyrikki-ssh-ca-promote ssh-ca-promote-1`.
+   Nyyrikki signs with the new key; the Job's log shows the old public
+   key. Re-run the setup on every host, which drops the old key.
+
+`-unstage` removes a staged key, `-add-host-ca` adds a missing
+`host-ca`. Without the CronJobs, pipe the Secret through the same
+commands: `kubectl -n nyyrikki get secret nyyrikki-ssh-ca -o yaml | nyyrikkid ssh-ca stage | kubectl replace -f -`.
 
 After a leak, revoke first, then rotate:
 
@@ -350,8 +392,8 @@ After a leak, revoke first, then rotate:
 
    Every certificate it signed is refused at once, Nyyrikki's included:
    SSH runs fail until step 2.
-2. Create a new key pair, put it into the Secret and make it the only
-   key in `user_ca_public_keys`, roll out, and re-run the setup command
-   on every host. The script keeps an existing revocation list.
+2. Stage and promote as above, add the old public key to
+   `ssh.revokedUserCAKeys`, roll out, and re-run the setup command on
+   every host. The script keeps an existing revocation list.
 
 Both touch every host.

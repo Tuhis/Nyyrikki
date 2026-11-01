@@ -51,11 +51,14 @@
   "telegram" (dict "bot_token_file" "/etc/nyyrikki/telegram/bot-token" "api_url" .Values.telegram.apiURL)
 -}}
 {{- if eq (include "nyyrikki.hasSSH" .) "true" -}}
-{{- if not .Values.ssh.userCAPublicKeys }}{{ fail "ssh.userCAPublicKeys is required with an SSH target" }}{{ end -}}
 {{- if not .Values.ssh.sourceAddresses }}{{ fail "ssh.sourceAddresses is required with an SSH target" }}{{ end -}}
+{{- /* The CA Secret is mounted whole at /etc/nyyrikki/ssh (docs/08 D1, D14); a key it lacks is a missing file, which is that feature absent. */ -}}
 {{- $_ := set $cfg "ssh" (dict
   "user_ca_key_file" "/etc/nyyrikki/ssh/user-ca"
-  "user_ca_public_keys" .Values.ssh.userCAPublicKeys
+  "next_user_ca_key_file" "/etc/nyyrikki/ssh/user-ca-next"
+  "host_ca_key_file" "/etc/nyyrikki/ssh/host-ca"
+  "user_ca_public_keys" (.Values.ssh.userCAPublicKeys | default list)
+  "revoked_user_ca_keys" (.Values.ssh.revokedUserCAKeys | default list)
   "source_addresses" .Values.ssh.sourceAddresses
   "connect_timeout" .Values.ssh.connectTimeout
   "host_cas" (.Values.ssh.hostCAs | default list)

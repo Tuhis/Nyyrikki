@@ -401,7 +401,7 @@ func newHarness(t *testing.T, mod func(*RunnerConfig, *fakeHost)) *harness {
 	cfg := RunnerConfig{
 		Targets: map[string]Target{"db-1": {Name: "db-1", Address: host.addr(), Host: "db-1.example.com",
 			HostKeys: []ssh.PublicKey{host.hostKey.PublicKey()}}},
-		CA:             NewCA(ca.file, []ssh.PublicKey{ca.signer.PublicKey()}, []string{"127.0.0.1/32"}, nil),
+		CA:             NewCA(userCA(ca.file), []string{"127.0.0.1/32"}, nil),
 		ConnectTimeout: 5 * time.Second,
 		Limits:         Limits{DefaultTimeout: 10 * time.Second, MaxTimeout: time.Minute, MaxInteractive: time.Minute, MaxOutput: 1 << 20},
 		Audit:          a,

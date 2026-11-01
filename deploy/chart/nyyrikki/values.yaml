@@ -71,11 +71,18 @@ groups: []
 #  - name: web
 #    targets: [web-1, web-2]
 
-# Shared by every SSH target (docs/07 §5.5); required as soon as one exists.
+# Shared by every SSH target (docs/07 §5.5, docs/08 §5.3).
 ssh:
-  # What hosts trust; must include the public key of secrets.sshUserCA.
+  # Optional extra user CA public keys hosts trust. The CA keys' own
+  # public keys are derived from the CA Secret (secrets.sshCA), so they
+  # never go here (docs/08 D1).
   userCAPublicKeys: []
-  # Nyyrikki's egress addresses as CIDRs, ideally its own (docs/07 §6).
+  # User CA public keys hosts must refuse, e.g. the old key `promote`
+  # printed after a leak (docs/08 D3). Listing the current user-ca stops
+  # every SSH run (user_ca_revoked).
+  revokedUserCAKeys: []
+  # Nyyrikki's egress addresses as CIDRs, ideally its own (docs/07 §6);
+  # required as soon as one SSH target exists.
   sourceAddresses: []
   connectTimeout: 10s
   # Host CA public keys trusted for every SSH target, besides each
@@ -86,6 +93,21 @@ ssh:
   revokedHostKeys: []
   defaults:
     sudo: false            # for SSH targets that don't set sudo (docs/08 D11)
+  # Make the CA Secret (secrets.sshCA.name) with fresh user-ca and host-ca
+  # keys in a pre-install/pre-upgrade hook Job, which never overwrites an
+  # existing Secret (docs/08 D16). Empty means true as soon as one SSH
+  # target exists and secrets.sshUserCA is not set. Set false when the
+  # Secret comes from elsewhere (`nyyrikkid ssh-ca` on a workstation,
+  # External Secrets, ...) and whenever the chart is rendered without Helm
+  # (helm template | kubectl apply, Kustomize helmCharts): hooks would turn
+  # into plain objects there, leaving the hook's namespace-wide `create`
+  # grant in place.
+  generateCA: null
+  # Render the four suspended rotation CronJobs <release>-ssh-ca-stage,
+  # -promote, -unstage and -add-host-ca, started with
+  # `kubectl create job --from=cronjob/...` (docs/08 §5.4). Empty means
+  # the value of generateCA. Leave false for a Secret an operator owns.
+  caJobs: null
 
 telegram:
   apiURL: https://api.telegram.org
@@ -105,10 +127,17 @@ secrets:
   introspection:
     name: nyyrikki-keycloak
     key: client-secret
-  # The SSH user CA's private key (docs/07 D6), mounted only with an SSH
-  # target. Create it as docs/setup/ssh-hosts.md says.
+  # The SSH CA Secret (docs/08 D1), mounted whole at /etc/nyyrikki/ssh/
+  # with an SSH target: user-ca (required), user-ca-next and host-ca
+  # (optional). Made by the hook Job (ssh.generateCA) or with
+  # `nyyrikkid ssh-ca init` (docs/setup/ssh-hosts.md).
+  sshCA:
+    name: nyyrikki-ssh-ca
+  # Deprecated: R10's Secret holding only the user CA key. When name is
+  # set, it is mounted as user-ca instead of sshCA, no CA is generated,
+  # and NOTES.txt says how to migrate (docs/08 D14). Empty by default.
   sshUserCA:
-    name: nyyrikki-ssh-user-ca
+    name: ""
     key: user-ca
 
 # Impersonate the human's user and groups, nothing else (docs/06 D3).

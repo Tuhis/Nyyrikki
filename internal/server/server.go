@@ -23,12 +23,14 @@ import (
 	sshhost "github.com/Tuhis/Nyyrikki/deploy/ssh-host"
 	"github.com/Tuhis/Nyyrikki/internal/audit"
 	"github.com/Tuhis/Nyyrikki/internal/authn"
+	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/config"
 	"github.com/Tuhis/Nyyrikki/internal/decision"
 	"github.com/Tuhis/Nyyrikki/internal/hostsetup"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl"
 	"github.com/Tuhis/Nyyrikki/internal/mcpserver"
 	"github.com/Tuhis/Nyyrikki/internal/runner"
+	"github.com/Tuhis/Nyyrikki/internal/sshca"
 	"github.com/Tuhis/Nyyrikki/internal/sshtarget"
 	"github.com/Tuhis/Nyyrikki/internal/store"
 	"github.com/Tuhis/Nyyrikki/internal/stream"
@@ -56,9 +58,39 @@ type Options struct {
 	SSHDial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
+// newSSHKeys builds the CA key loader of docs/08 D1 from the ssh block:
+// the three key files, the extra trusted keys and the revoked ones.
+func newSSHKeys(cfg *config.Config, aw audit.Appender, log *slog.Logger) (*sshca.Keys, error) {
+	o := sshca.Options{
+		Files: sshca.Files{
+			UserCA:     cfg.SSH.UserCAKeyFile,
+			NextUserCA: cfg.SSH.NextUserCAKeyFile,
+			HostCA:     cfg.SSH.HostCAKeyFile,
+		},
+		Audit:  aw,
+		Logger: log,
+	}
+	for _, k := range cfg.SSH.UserCAPublicKeys {
+		pk, err := config.ParseUserCAKey(k)
+		if err != nil {
+			return nil, err
+		}
+		o.Extra = append(o.Extra, pk)
+	}
+	for _, k := range cfg.SSH.RevokedUserCAKeys {
+		pk, err := config.ParseUserCAKey(k)
+		if err != nil {
+			return nil, err
+		}
+		o.Revoked = append(o.Revoked, pk)
+	}
+	return sshca.New(o), nil
+}
+
 // newSSHRunner builds the SSH runner from the ssh block and the SSH
-// targets (docs/07 §5.5); nil when there are none.
-func newSSHRunner(cfg *config.Config, aw audit.Appender, log *slog.Logger, o Options) (*sshtarget.Runner, error) {
+// targets (docs/07 §5.5); nil when there are none. keys are the CA keys
+// of docs/08 D1.
+func newSSHRunner(cfg *config.Config, keys *sshca.Keys, aw audit.Appender, log *slog.Logger, o Options) (*sshtarget.Runner, error) {
 	parseKeys := func(keys []string) ([]ssh.PublicKey, error) {
 		var out []ssh.PublicKey
 		for _, k := range keys {
@@ -102,18 +134,10 @@ func newSSHRunner(cfg *config.Config, aw audit.Appender, log *slog.Logger, o Opt
 	if len(targets) == 0 {
 		return nil, nil
 	}
-	var pubs []ssh.PublicKey
-	for _, k := range cfg.SSH.UserCAPublicKeys {
-		pk, err := config.ParseUserCAKey(k)
-		if err != nil {
-			return nil, err
-		}
-		pubs = append(pubs, pk)
-	}
 	return sshtarget.NewRunner(sshtarget.RunnerConfig{
 		Targets:         targets,
 		RevokedHostKeys: revoked,
-		CA:              sshtarget.NewCA(cfg.SSH.UserCAKeyFile, pubs, cfg.SSH.SourceAddresses, o.Now),
+		CA:              sshtarget.NewCA(keys, cfg.SSH.SourceAddresses, o.Now),
 		ConnectTimeout:  cfg.SSH.ConnectTimeout.D(),
 		Limits: sshtarget.Limits{
 			DefaultTimeout: cfg.Run.DefaultTimeout.D(),
@@ -230,9 +254,21 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 		return err
 	}
 
-	sshRunner, err := newSSHRunner(cfg, aw, log, o)
+	sshKeys, err := newSSHKeys(cfg, aw, log)
 	if err != nil {
 		return err
+	}
+	sshRunner, err := newSSHRunner(cfg, sshKeys, aw, log, o)
+	if err != nil {
+		return err
+	}
+	if sshRunner != nil {
+		// Read once at start, only to say early what is wrong: runs and
+		// the /hosts/ endpoints read the keys again on each use, and fail
+		// closed then (docs/08 D1).
+		if _, err := sshKeys.Load(); err != nil {
+			log.Error("the SSH CA keys are unavailable; SSH runs and /hosts/ are refused until fixed", "detail", codes.DetailOf(err), "err", err)
+		}
 	}
 	runners := runner.Runners{Kubernetes: kubeRunner, SSH: sshRunner}
 
@@ -243,7 +279,7 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 	mux.Handle("GET /stream", verifier.Middleware(cfg.StreamURL(), stream.NewHandler(point, runners, verifier, aw, log)))
 	if sshRunner != nil {
 		// docs/07 D16: no authentication; a host has no token.
-		setup, err := hostsetup.New(cfg, sshhost.Script, aw, log)
+		setup, err := hostsetup.New(cfg, sshhost.Script, sshKeys, aw, log)
 		if err != nil {
 			return err
 		}

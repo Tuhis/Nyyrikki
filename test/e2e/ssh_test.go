@@ -3,19 +3,16 @@
 package e2e
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/pem"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
-
-	"golang.org/x/crypto/ssh"
 )
 
 // The SSH host of docs/07 G7: an OpenSSH container on the e2e network,
@@ -35,12 +32,13 @@ CMD ["/usr/sbin/sshd", "-D", "-e", "-o", "LogLevel=VERBOSE"]
 
 // sshEnv is the SSH host's side of the environment.
 type sshEnv struct {
-	ip       string
-	caPublic string
+	ip string
+	// caSecret is the CA Secret as the install hook made it (docs/08 D16).
+	caSecret *caSecret
 }
 
-// setupSSH starts the SSH host and creates the user CA's Secret
-// (docs/07 §5.6). It runs before the chart is installed.
+// setupSSH starts the SSH host. It runs before the chart is installed;
+// the chart's install hook makes the CA Secret (docs/08 D16).
 func (e *env) setupSSH(t *testing.T) *sshEnv {
 	t.Helper()
 	exec.Command("docker", "rm", "-f", sshHostName).Run()
@@ -55,19 +53,45 @@ func (e *env) setupSSH(t *testing.T) *sshEnv {
 	if os.Getenv("NYYRIKKI_E2E_KEEP") == "" {
 		t.Cleanup(func() { exec.Command("docker", "rm", "-f", sshHostName).Run() })
 	}
+	return s
+}
 
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	block, err := ssh.MarshalPrivateKey(priv, "nyyrikki-user-ca")
-	if err != nil {
+// caSecretName is the chart's default secrets.sshCA.name.
+const caSecretName = "nyyrikki-ssh-ca"
+
+// caSecret is what of the CA Secret must never change behind anyone's
+// back: its data, labels, annotations and UID.
+type caSecret struct {
+	UID         string
+	Labels      map[string]string
+	Annotations map[string]string
+	Data        map[string]string
+}
+
+func (e *env) getCASecret(t *testing.T) *caSecret {
+	t.Helper()
+	var obj struct {
+		Metadata struct {
+			UID         string            `json:"uid"`
+			Labels      map[string]string `json:"labels"`
+			Annotations map[string]string `json:"annotations"`
+		} `json:"metadata"`
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(e.kubectl(t, "-n", namespace, "get", "secret", caSecretName, "-o", "json")), &obj); err != nil {
 		t.Fatal(err)
 	}
-	signer, _ := ssh.NewSignerFromKey(priv)
-	s.caPublic = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
-	dir := filepath.Join(e.dir, "secrets")
-	os.MkdirAll(dir, 0o700)
-	e.kubectl(t, "-n", namespace, "create", "secret", "generic", "nyyrikki-ssh-user-ca",
-		"--from-file=user-ca="+writeFileMode(t, dir, "user-ca", pem.EncodeToMemory(block), 0o600))
-	return s
+	return &caSecret{UID: obj.Metadata.UID, Labels: obj.Metadata.Labels, Annotations: obj.Metadata.Annotations, Data: obj.Data}
+}
+
+// sameCASecret fails unless the CA Secret is the one recorded, byte for
+// byte (docs/08 G15).
+func (e *env) sameCASecret(t *testing.T, s *sshEnv, when string) {
+	t.Helper()
+	got := e.getCASecret(t)
+	if !reflect.DeepEqual(got, s.caSecret) {
+		t.Fatalf("%s changed the CA Secret: UID %s -> %s, data keys %d -> %d", when, s.caSecret.UID, got.UID, len(s.caSecret.Data), len(got.Data))
+	}
 }
 
 // values is the chart values for the SSH target and the ssh block.
@@ -81,9 +105,8 @@ func (s *sshEnv) values(nodeIP string, hostKeys []string) string {
     description: an OpenSSH container
     ssh: {address: "%s:22", hostKeys: %s, sudo: true, sessionKill: false}
 ssh:
-  userCAPublicKeys: [%q]
   sourceAddresses: [%s/32]
-`, sshTarget, s.ip, keys, s.caPublic, nodeIP)
+`, sshTarget, s.ip, keys, nodeIP)
 }
 
 func quoteAll(xs []string) []string {
@@ -111,6 +134,25 @@ var hostKeyLine = regexp.MustCompile(`(?m)^\s*-?\s*"?(ssh-ed25519 [A-Za-z0-9+/=]
 // sshSteps are the SSH target's end-to-end checks (docs/07 G6 e2e, G7,
 // G11 e2e, G14 e2e for SSH).
 func (e *env) sshSteps(t *testing.T, s *sshEnv, agent *cli, next func() int) {
+	step(t, "SE1: the install hook made the CA Secret, and its grant is gone", func(t *testing.T) {
+		c := e.getCASecret(t)
+		want := map[string]string{"nyyrikki.dev/release": "nyyrikki", "nyyrikki.dev/component": "ssh-ca", "app.kubernetes.io/managed-by": "nyyrikki-ssh-ca"}
+		if !reflect.DeepEqual(c.Labels, want) {
+			t.Fatalf("labels %v", c.Labels)
+		}
+		if c.Annotations["helm.sh/resource-policy"] != "keep" || c.Annotations["argocd.argoproj.io/compare-options"] != "IgnoreExtraneous" {
+			t.Fatalf("annotations %v", c.Annotations)
+		}
+		if len(c.Data) != 2 || c.Data["user-ca"] == "" || c.Data["host-ca"] == "" {
+			t.Fatalf("data keys: %d", len(c.Data))
+		}
+		s.caSecret = c
+		for _, k := range []string{"job", "serviceaccount", "role", "rolebinding"} {
+			if out, err := exec.Command("kubectl", "--kubeconfig", e.kubeconfig, "-n", namespace, "get", k, "nyyrikki-ssh-ca-init").CombinedOutput(); err == nil {
+				t.Fatalf("the hook's %s is still there: %s", k, out)
+			}
+		}
+	})
 	step(t, "SH6: the host is set up by the script Nyyrikki serves", func(t *testing.T) {
 		// docs/07 §5.7: dry run first, then for real; both from the URL.
 		url := fmt.Sprintf("%s/hosts/%s/setup.sh", e.canonical, sshTarget)
@@ -149,6 +191,8 @@ func (e *env) sshSteps(t *testing.T, s *sshEnv, agent *cli, next func() int) {
 			t.Fatal("an unpinned host was logged in to")
 		}
 		e.upgradeSSH(t, s, []string{want})
+		// The pre-upgrade hook ran again, and left the Secret alone.
+		e.sameCASecret(t, s, "helm upgrade")
 	})
 
 	step(t, "SH6: an approved command runs as ny-owner with sudo; the host logs the run's key ID", func(t *testing.T) {
@@ -293,4 +337,30 @@ func (e *env) lastRunID(t *testing.T, target string) string {
 		t.Fatalf("no run_started for %s in the logs", target)
 	}
 	return m[len(m)-1][1]
+}
+
+// caSecretSurvives checks docs/08 G15's last part, at the end of the run:
+// helm upgrade --force and helm uninstall leave the CA Secret byte for
+// byte.
+func (e *env) caSecretSurvives(t *testing.T, s *sshEnv) {
+	chart := filepath.Join(e.root, "deploy/chart/nyyrikki")
+	values := writeFile(t, e.dir, "values.yaml", []byte(e.values))
+	step(t, "SE1: helm upgrade --force leaves the CA Secret", func(t *testing.T) {
+		// --force replaces every object of the release. The chart's PVC
+		// can't be replaced once bound (its spec is immutable), so the
+		// upgrade fails there, after the pre-upgrade hook ran and after
+		// the objects before it were replaced. That limit of the chart
+		// predates docs/08; the Secret must survive either way.
+		out, err := exec.Command("helm", "--kubeconfig", e.kubeconfig, "upgrade", "nyyrikki", chart, "-n", namespace, "-f", values,
+			"--force", "--wait", "--timeout", "180s").CombinedOutput()
+		if err != nil && !(strings.Contains(string(out), `PersistentVolumeClaim "nyyrikki-nyyrikki" is invalid`) && strings.Contains(string(out), "immutable")) {
+			t.Fatalf("helm upgrade --force: %v\n%s", err, out)
+		}
+		t.Logf("helm upgrade --force: %v\n%s", err, out)
+		e.sameCASecret(t, s, "helm upgrade --force")
+	})
+	step(t, "SE1: helm uninstall leaves the CA Secret", func(t *testing.T) {
+		run(t, "helm", "--kubeconfig", e.kubeconfig, "uninstall", "nyyrikki", "-n", namespace, "--wait", "--timeout", "180s")
+		e.sameCASecret(t, s, "helm uninstall")
+	})
 }

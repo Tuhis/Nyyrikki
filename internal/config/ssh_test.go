@@ -35,13 +35,25 @@ func TestSSHValid(t *testing.T) {
 	if _, err := Parse([]byte(src)); err != nil {
 		t.Fatalf("no host keys: %v", err)
 	}
+	// docs/08 D1: user_ca_public_keys holds only extra keys and may be
+	// empty; the new key files and revoked keys parse.
+	src = strings.Replace(valid(t), "  user_ca_public_keys:\n    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y nyyrikki-user-ca\n",
+		"  next_user_ca_key_file: /etc/nyyrikki/ssh/user-ca-next\n  host_ca_key_file: /etc/nyyrikki/ssh/host-ca\n"+
+			"  revoked_user_ca_keys: [ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y]\n", 1)
+	c, err = Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("no extra CA keys: %v", err)
+	}
+	if len(c.SSH.UserCAPublicKeys) != 0 || c.SSH.NextUserCAKeyFile != "/etc/nyyrikki/ssh/user-ca-next" ||
+		c.SSH.HostCAKeyFile != "/etc/nyyrikki/ssh/host-ca" || len(c.SSH.RevokedUserCAKeys) != 1 {
+		t.Fatalf("ssh %+v", c.SSH)
+	}
 }
 
 func TestSSHInvalid(t *testing.T) {
 	const caKey = "    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y nyyrikki-user-ca\n"
 	cases := map[string][2]string{
 		"no source addresses":  {"  source_addresses: [203.0.113.10/32]\n", ""},
-		"no CA public keys":    {"  user_ca_public_keys:\n" + caKey, ""},
 		"no CA key file":       {"  user_ca_key_file: /etc/nyyrikki/ssh/user-ca\n", ""},
 		"source not a CIDR":    {"[203.0.113.10/32]", "[203.0.113.10]"},
 		"source not canonical": {"[203.0.113.10/32]", "[203.0.113.10/24]"},
@@ -60,6 +72,12 @@ func TestSSHInvalid(t *testing.T) {
 		"connect timeout":     {"  source_addresses: [203.0.113.10/32]\n", "  source_addresses: [203.0.113.10/32]\n  connect_timeout: 5m\n"},
 		"both types":          {"    ssh:\n      address", "    kubernetes:\n      in_cluster: true\n    ssh:\n      address"},
 		"unknown ssh field":   {"      sudo: true", "      sudo: true\n      port_forward: true"},
+		// docs/08 D1, D3.
+		"RSA revoked key":    {caKey, caKey + "  revoked_user_ca_keys: [\"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC7\"]\n"},
+		"revoked not a key":  {caKey, caKey + "  revoked_user_ca_keys: [x]\n"},
+		"next is user-ca":    {caKey, caKey + "  next_user_ca_key_file: /etc/nyyrikki/ssh/user-ca\n"},
+		"host CA is user-ca": {caKey, caKey + "  host_ca_key_file: /etc/nyyrikki/ssh/user-ca\n"},
+		"host CA is next":    {caKey, caKey + "  next_user_ca_key_file: /n\n  host_ca_key_file: /n\n"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

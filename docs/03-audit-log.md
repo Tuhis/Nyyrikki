@@ -74,6 +74,11 @@ approved, denied, expired, withdrawn), `decision` (allow or deny, with
 (the target and the client address), once per fetch of an SSH host's
 setup script.
 
+*Extended 2026-10-31 by [docs/08](08-ssh-onboarding.md) D14*:
+`ssh_ca_warning` (the fingerprints, in `detail`), once each time the set
+of extra `user_ca_public_keys` equal to a key derived from the CA Secret
+changes.
+
 ### 5.2 Schema
 
 ```sql

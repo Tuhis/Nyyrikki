@@ -121,17 +121,17 @@ func (h *sshHost) serve(c net.Conn, cfg *ssh.ServerConfig) {
 
 // withSSH adds the SSH target db-1, pinned to host, with a user CA key
 // file written for it.
-func withSSH(t *testing.T, host *sshHost, caPEM []byte, caPub ssh.PublicKey) servertest.Option {
+func withSSH(t *testing.T, host *sshHost, caPEM []byte, _ ssh.PublicKey) servertest.Option {
 	file := filepath.Join(t.TempDir(), "user-ca")
 	if err := os.WriteFile(file, caPEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return func(c *config.Config) {
+		// The CA's public key is derived from the key file (docs/08 D1).
 		c.SSH = config.SSH{
-			UserCAKeyFile:    file,
-			UserCAPublicKeys: []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(caPub)))},
-			SourceAddresses:  []string{"127.0.0.1/32"},
-			ConnectTimeout:   config.Duration(5e9),
+			UserCAKeyFile:   file,
+			SourceAddresses: []string{"127.0.0.1/32"},
+			ConnectTimeout:  config.Duration(5e9),
 		}
 		c.Targets = append(c.Targets, config.Target{Name: "db-1", Humans: []string{"owner"}, SSH: &config.SSHTarget{
 			Address:  host.ln.Addr().String(),
@@ -431,5 +431,97 @@ func TestElevateGroupMCP(t *testing.T) {
 	}
 	if rec == nil || fmt.Sprint(rec["targets"]) != "[db-1 prod]" || fmt.Sprint(rec["target_groups"]) != "[fleet]" {
 		t.Fatalf("audit %v", rec)
+	}
+}
+
+// TestSSHCAKeysFailClosed covers docs/08 D1 and D3 on the live server,
+// for each way the CA keys can fail: a broken optional key file (here
+// host-ca) and a revoked user-ca each make an approved SSH run
+// unavailable, audited as dependency_failed with the detail, with no
+// login on the host, and make setup.sh answer 503 with that detail.
+func TestSSHCAKeysFailClosed(t *testing.T) {
+	for name, c := range map[string]struct {
+		mod    func(t *testing.T, s *config.SSH, caPub ssh.PublicKey)
+		detail string
+	}{
+		"broken host-ca": {func(t *testing.T, s *config.SSH, _ ssh.PublicKey) {
+			s.HostCAKeyFile = filepath.Join(t.TempDir(), "host-ca")
+			os.WriteFile(s.HostCAKeyFile, []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nhalf written"), 0o600)
+		}, "ca_key_unreadable"},
+		"revoked user-ca": {func(_ *testing.T, s *config.SSH, caPub ssh.PublicKey) {
+			s.RevokedUserCAKeys = []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(caPub)))}
+		}, "user_ca_revoked"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			caPEM, caPub := newCA(t)
+			host := startSSHHost(t, caPub)
+			e := servertest.Start(t, withSSH(t, host, caPEM, caPub), func(cfg *config.Config) { c.mod(t, &cfg.SSH, caPub) })
+
+			resp, err := e.Client.Get(e.URL() + "/hosts/db-1/setup.sh")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(b), c.detail) || bytes.Contains(b, []byte("TARGET=")) {
+				t.Fatalf("setup.sh: %d %q", resp.StatusCode, b)
+			}
+
+			cs := mcpAgent(t, e, "claude-code", "s1")
+			ch := runAsync(t, cs, api.RunIn{Target: "db-1", Args: []string{"echo", "hi"}, Reason: "check"})
+			e.Tap(t, 1, "Approve")
+			r := <-ch
+			if r.eb == nil || r.eb.Code != codes.Unavailable {
+				t.Fatalf("run: %+v %+v", r.eb, r.out)
+			}
+			host.mu.Lock()
+			n := len(host.ids)
+			host.mu.Unlock()
+			if n != 0 {
+				t.Fatalf("%d logins on the host", n)
+			}
+			found := false
+			for _, rec := range e.Audit.Records() {
+				if rec["kind"] == codes.KindDependencyFailed && rec["detail"] == c.detail {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("no dependency_failed %s in the audit", c.detail)
+			}
+		})
+	}
+}
+
+// TestSSHCAWarnsDerivedExtra covers docs/08 D14: an extra key in
+// user_ca_public_keys equal to the derived user-ca is logged and audited
+// once as a warning, and served once.
+func TestSSHCAWarnsDerivedExtra(t *testing.T) {
+	caPEM, caPub := newCA(t)
+	host := startSSHHost(t, caPub)
+	line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(caPub)))
+	e := servertest.Start(t, withSSH(t, host, caPEM, caPub), func(c *config.Config) { c.SSH.UserCAPublicKeys = []string{line} })
+	for range 2 {
+		resp, err := e.Client.Get(e.URL() + "/hosts/db-1/setup.sh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || bytes.Count(b, []byte("\nCA_KEY=")) != 1 {
+			t.Fatalf("status %d, %d CA_KEY lines", resp.StatusCode, bytes.Count(b, []byte("\nCA_KEY=")))
+		}
+	}
+	n := 0
+	for _, rec := range e.Audit.Records() {
+		if rec["kind"] == codes.KindSSHCAWarning {
+			n++
+			if !strings.Contains(rec["detail"].(string), ssh.FingerprintSHA256(caPub)) {
+				t.Errorf("warning %v doesn't name the key", rec)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d ssh_ca_warning records, want 1", n)
 	}
 }

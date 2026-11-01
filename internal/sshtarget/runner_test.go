@@ -16,6 +16,7 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/decision"
 	"github.com/Tuhis/Nyyrikki/internal/decision/decisiontest"
+	"github.com/Tuhis/Nyyrikki/internal/sshca"
 	"github.com/Tuhis/Nyyrikki/internal/target"
 )
 
@@ -576,12 +577,12 @@ func TestSSHDependencyFailures(t *testing.T) {
 	})
 	t.Run("CA unreadable", func(t *testing.T) {
 		h := newHarness(t, func(c *RunnerConfig, _ *fakeHost) {
-			c.CA = NewCA("/nonexistent/user-ca", nil, []string{"127.0.0.1/32"}, nil)
+			c.CA = NewCA(userCA("/nonexistent/user-ca"), []string{"127.0.0.1/32"}, nil)
 		})
 		req := build(t, []string{"echo", "x"}, nil, false)
 		_, err := h.runner.Run(grantFor(t.Context(), req, nil), req, 0)
-		wantCode(t, err, codes.Unavailable, DetailCAUnreadable)
-		if rec, ok := h.audit.last(codes.KindDependencyFailed); !ok || rec.Detail != DetailCAUnreadable {
+		wantCode(t, err, codes.Unavailable, sshca.DetailUnreadable)
+		if rec, ok := h.audit.last(codes.KindDependencyFailed); !ok || rec.Detail != sshca.DetailUnreadable {
 			t.Fatalf("audit %+v", rec)
 		}
 	})

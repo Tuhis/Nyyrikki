@@ -1,0 +1,90 @@
+{{- /*
+The SSH CA rotation CronJobs (docs/08 D16, §5.4): suspended, never run on
+a schedule; started with
+  kubectl create job --from=cronjob/<release>-ssh-ca-stage ssh-ca-stage-1
+Each runs `nyyrikkid ssh-ca <command> --in-cluster` on secrets.sshCA.name
+in place. Their ServiceAccount may get and update that one Secret only.
+*/ -}}
+{{- if eq (include "nyyrikki.caJobs" .) "true" }}
+{{- $secret := required "secrets.sshCA.name is required" .Values.secrets.sshCA.name }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-ssh-ca-rotate
+  labels: {{- include "nyyrikki.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-ssh-ca-rotate
+  labels: {{- include "nyyrikki.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ $secret | quote }}]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-ssh-ca-rotate
+  labels: {{- include "nyyrikki.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-ssh-ca-rotate
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-ssh-ca-rotate
+    namespace: {{ .Release.Namespace }}
+{{- range list "stage" "promote" "unstage" "add-host-ca" }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $.Release.Name }}-ssh-ca-{{ . }}
+  labels: {{- include "nyyrikki.labels" $ | nindent 4 }}
+spec:
+  # Never runs on its own: start it by hand (docs/08 §5.4).
+  suspend: true
+  schedule: "0 0 1 1 *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      # A refusal or a conflict is not retried: look, then start it again.
+      backoffLimit: 0
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: nyyrikki-ssh-ca
+            app.kubernetes.io/instance: {{ $.Release.Name }}
+        spec:
+          serviceAccountName: {{ $.Release.Name }}-ssh-ca-rotate
+          automountServiceAccountToken: true
+          enableServiceLinks: false
+          restartPolicy: Never
+          {{- with $.Values.image.pullSecrets }}
+          imagePullSecrets: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext: {{- include "nyyrikki.podSecurityContext" $ | nindent 12 }}
+          containers:
+            - name: ssh-ca
+              image: {{ include "nyyrikki.image" $ }}
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              # The log holds fingerprints, and for promote the old public
+              # key; never a private key (docs/08 D16).
+              args: ["ssh-ca", {{ . | quote }}, "--in-cluster", "--name", {{ $secret | quote }}]
+              securityContext: {{- include "nyyrikki.containerSecurityContext" $ | nindent 16 }}
+              resources:
+                requests: {cpu: 10m, memory: 32Mi}
+                limits: {memory: 128Mi}
+          {{- with $.Values.nodeSelector }}
+          nodeSelector: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $.Values.tolerations }}
+          tolerations: {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,13 @@
+# Used with test-values.yaml by the chart gate: an SSH target, so the CA
+# hook Job and the rotation CronJobs are rendered and validated too.
+targets:
+  - name: this-cluster
+    inCluster: true
+  - name: lab
+    server: https://lab.example.com:6443
+    secretName: nyyrikki-target-lab
+  - name: db-1
+    ssh:
+      address: db-1.example.com:22
+ssh:
+  sourceAddresses: [203.0.113.10/32]

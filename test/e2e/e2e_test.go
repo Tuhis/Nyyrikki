@@ -365,6 +365,9 @@ func TestEndToEnd(t *testing.T) {
 	step(t, "OD17: an offline MCP harness outlives the browser sessions and ends on revoke or sign-out", func(t *testing.T) {
 		e.checkOffline(t, next)
 	})
+
+	// After everything else: it upgrades with --force and uninstalls.
+	e.caSecretSurvives(t, e.ssh)
 }
 
 // step runs one subtest and stops the walk at the first failure: later

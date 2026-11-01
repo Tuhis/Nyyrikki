@@ -29,6 +29,10 @@ gate() {
                    helm lint deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml --kube-version 1.35.0
                    helm template t deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml --kube-version 1.35.0 \
                      | kubeconform -strict -summary -kubernetes-version 1.35.0
+                   # With an SSH target: the CA hook and CronJobs (docs/08 D16).
+                   helm lint deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml -f deploy/chart/nyyrikki/ci/ssh-values.yaml --kube-version 1.35.0
+                   helm template t deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml -f deploy/chart/nyyrikki/ci/ssh-values.yaml --kube-version 1.35.0 \
+                     | kubeconform -strict -summary -kubernetes-version 1.35.0
                    NYYRIKKI_CHART_TESTS=1 go test -count=1 ./deploy/... ;;
       pinning)     scripts/check-pinning.sh ;;
       *) echo "unknown gate $name" >&2; exit 2 ;;
