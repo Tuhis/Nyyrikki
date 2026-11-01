@@ -534,3 +534,41 @@ func TestPullSchedule(t *testing.T) {
 		h.sameAs(pristine, "setup with the pull, then --uninstall")
 	})
 }
+
+// TestLock: the setup and the pull share a kernel lock (flock) on
+// /run/nyyrikki-ssh.lock, so neither runs while the other holds it, and a
+// holder that died leaves nothing to take over. It replaced a symbolic-link
+// lock whose stale-lock takeover wasn't atomic: two processes finding the
+// same stale lock could both end up holding it (review of #50). The lock
+// file is root's, mode 0600, so another user can't open it to hold it.
+func TestLock(t *testing.T) {
+	forEachDistro(t, func(t *testing.T, d distro) {
+		h := newHost(t, d)
+		v := h.values("owner")
+		h.mustSetup(v)
+		const lock = "/run/nyyrikki-ssh.lock"
+		if got := h.must("stat -c '%a %U' " + lock); strings.TrimSpace(got) != "600 root" {
+			t.Fatalf("lock file mode/owner %q", got)
+		}
+		// Another process holds the lock: both are refused, nothing changes.
+		// One process holds it: the shell takes the lock on its own
+		// descriptor and becomes sleep, so its PID is the only holder.
+		h.must("sh -c 'exec 9>>" + lock + "; flock -x 9; echo $$ >/tmp/lock-holder; exec sleep 30' </dev/null >/dev/null 2>&1 & sleep 1")
+		before := h.snapshot()
+		if r := h.setup(v); r.code == 0 || !strings.Contains(r.err+r.out, "another Nyyrikki setup or trust pull is running") {
+			t.Fatalf("setup while the lock is held: %s", r)
+		}
+		if o, e, code := h.exec("/etc/ssh/nyyrikki/pull.sh", ""); code == 0 || !strings.Contains(o+e, "is running") {
+			t.Fatalf("pull while the lock is held: exit %d %s %s", code, o, e)
+		}
+		h.sameAs(before, "a refused run")
+		// The holder dies: the file stays, the lock doesn't.
+		h.must("kill -KILL $(cat /tmp/lock-holder); sleep 1")
+		h.mustSetup(v)
+		// A symbolic link at the lock's path is refused, not followed.
+		h.must("rm -f " + lock + " && ln -s /tmp/elsewhere " + lock)
+		if r := h.setup(v); r.code == 0 || !strings.Contains(r.err+r.out, "symbolic link") || h.exists("/tmp/elsewhere") {
+			t.Fatalf("setup with a symlinked lock: %s", r)
+		}
+	})
+}

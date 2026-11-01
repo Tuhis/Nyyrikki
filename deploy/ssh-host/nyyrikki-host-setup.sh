@@ -52,7 +52,7 @@ ny_init() {
 	NY_HOSTCERT=$NY_DIR/ssh_host_ed25519_key-cert.pub
 	NY_CRON=/etc/cron.d/nyyrikki
 	NY_PERIODIC=/etc/periodic/15min/nyyrikki-pull
-	NY_LOCK=/etc/ssh/.nyyrikki-lock
+	NY_LOCK=/run/nyyrikki-ssh.lock
 	NY_NL='
 '
 	NY_WORK=
@@ -132,34 +132,31 @@ ny_cleanup() {
 	if [ -n "$NY_WORK" ] && [ -d "$NY_WORK" ]; then
 		rm -rf -- "$NY_WORK" 2>/dev/null || :
 	fi
-	if [ "$NY_LOCKED" = 1 ]; then
-		NY_LOCKED=0
-		if [ "$(readlink -- "$NY_LOCK" 2>/dev/null)" = "$$" ]; then
-			rm -f -- "$NY_LOCK" 2>/dev/null || :
-		fi
-	fi
+	# The lock (ny_lock) is released when this process exits, not here:
+	# nothing may run between releasing it and the end.
+	NY_LOCKED=0
 }
 
 # ny_lock takes the lock the trust pull takes too, so that the setup and a
-# pull never change the trust files at once. The lock is a symbolic link
-# naming the holder's PID, made atomically; one whose process is gone (a
-# kill, a reboot) is stale and taken over.
+# pull never change the trust files at once: a kernel lock (flock) on
+# NY_LOCK, held on file descriptor 9 until this process exits. A holder
+# that dies (a kill, a reboot) releases it, so there is nothing stale to
+# take over. The file is root's, mode 0600, so no other user can open it
+# to hold the lock. (A symbolic-link lock with a PID took over stale locks
+# in steps no atomic operation tied together; two processes could both
+# win. Review of #50.)
 ny_lock() {
-	ny_lk_n=0
-	while ! ln -s "$$" "$NY_LOCK" 2>/dev/null; do
-		ny_lk_pid=$(readlink -- "$NY_LOCK" 2>/dev/null) || ny_lk_pid=
-		case $ny_lk_pid in
-		'' | *[!0-9]*) ;;
-		*)
-			if kill -0 "$ny_lk_pid" 2>/dev/null; then
-				die "refused: another Nyyrikki setup or trust pull is running (PID $ny_lk_pid); run this again when it has finished"
-			fi
-			;;
-		esac
-		ny_lk_n=$((ny_lk_n + 1))
-		[ "$ny_lk_n" -le 3 ] || die "refused: can't take the lock $NY_LOCK"
-		rm -f -- "$NY_LOCK" || die "refused: can't remove the stale lock $NY_LOCK"
-	done
+	command -v flock >/dev/null 2>&1 || die "refused: flock not found (util-linux, or BusyBox's flock)"
+	[ ! -L "$NY_LOCK" ] || die "refused: $NY_LOCK is a symbolic link; remove it"
+	# A failed redirection on exec would end the shell without a word:
+	# try it in a subshell first.
+	( umask 077 && : >>"$NY_LOCK" ) 2>/dev/null || die "refused: can't open the lock $NY_LOCK"
+	ny_lk_umask=$(umask)
+	umask 077
+	exec 9>>"$NY_LOCK"
+	umask "$ny_lk_umask"
+	chown 0:0 -- "$NY_LOCK" && chmod 0600 -- "$NY_LOCK" || die "refused: can't secure the lock $NY_LOCK"
+	flock -n 9 || die "refused: another Nyyrikki setup or trust pull is running; run this again when it has finished"
 	NY_LOCKED=1
 }
 
@@ -1023,7 +1020,7 @@ pl_init() {
 	PL_LIST=$PL_DIR/accounts
 	PL_SERVERCA=$PL_DIR/server-ca.pem
 	PL_SUDO_PREFIX=/etc/sudoers.d/50-nyyrikki-
-	PL_LOCK=/etc/ssh/.nyyrikki-lock
+	PL_LOCK=/run/nyyrikki-ssh.lock
 	PL_NS=nyyrikki-trust@v1
 	PL_TMP=.nyyrikki-pull-new
 	PL_WORK=
@@ -1063,12 +1060,8 @@ pl_cleanup() {
 	if [ -n "$PL_WORK" ] && [ -d "$PL_WORK" ]; then
 		rm -rf -- "$PL_WORK" 2>/dev/null || :
 	fi
-	if [ "$PL_LOCKED" = 1 ]; then
-		PL_LOCKED=0
-		if [ "$(readlink -- "$PL_LOCK" 2>/dev/null)" = "$$" ]; then
-			rm -f -- "$PL_LOCK" 2>/dev/null || :
-		fi
-	fi
+	# The lock is released when this process exits (pl_lock).
+	PL_LOCKED=0
 }
 
 # shellcheck disable=SC2329 # called from trap
@@ -1185,22 +1178,20 @@ pl_put() {
 		mv -f -- "$pl_pt" "$2"
 }
 
+# pl_lock takes the setup's lock (ny_lock in the setup): a kernel lock
+# on PL_LOCK, held on file descriptor 9 until this process exits.
 pl_lock() {
-	pl_lk_n=0
-	while ! ln -s "$$" "$PL_LOCK" 2>/dev/null; do
-		pl_lk_pid=$(readlink -- "$PL_LOCK" 2>/dev/null) || pl_lk_pid=
-		case $pl_lk_pid in
-		'' | *[!0-9]*) ;;
-		*)
-			if kill -0 "$pl_lk_pid" 2>/dev/null; then
-				fail "a Nyyrikki setup or another pull is running (PID $pl_lk_pid); the next pull tries again"
-			fi
-			;;
-		esac
-		pl_lk_n=$((pl_lk_n + 1))
-		[ "$pl_lk_n" -le 3 ] || fail "can't take the lock $PL_LOCK"
-		rm -f -- "$PL_LOCK" || fail "can't remove the stale lock $PL_LOCK"
-	done
+	command -v flock >/dev/null 2>&1 || fail "flock not found"
+	[ ! -L "$PL_LOCK" ] || fail "$PL_LOCK is a symbolic link"
+	# A failed redirection on exec would end the shell without a word:
+	# try it in a subshell first.
+	( umask 077 && : >>"$PL_LOCK" ) 2>/dev/null || fail "can't open the lock $PL_LOCK"
+	pl_lk_umask=$(umask)
+	umask 077
+	exec 9>>"$PL_LOCK"
+	umask "$pl_lk_umask"
+	chown 0:0 -- "$PL_LOCK" && chmod 0600 -- "$PL_LOCK" || fail "can't secure the lock $PL_LOCK"
+	flock -n 9 || fail "a Nyyrikki setup or another pull is running; the next pull tries again"
 	PL_LOCKED=1
 }
 
