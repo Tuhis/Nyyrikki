@@ -153,7 +153,12 @@ func up(args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	if out, _ := exec.Command("kind", "get", "clusters").Output(); strings.Contains("\n"+string(out), "\n"+name+"\n") {
+	// Unknown counts as up: whatever fails after this removes what
+	// carries the quickstart's names.
+	if up, err := clusterUp(); err != nil || up {
+		if err != nil {
+			return fmt.Errorf("can't tell whether a quickstart is up: %v", err)
+		}
 		return errors.New("a quickstart is already up; remove it with dev/quickstart.sh down first")
 	}
 	token, err := readToken()
@@ -675,6 +680,15 @@ Remove everything with dev/quickstart.sh down, then delete the bot.
 		rel(filepath.Join(s.Dir, "info.txt")))
 }
 
+// clusterUp reports whether kind knows the quickstart's cluster.
+func clusterUp() (bool, error) {
+	out, err := stack.Run("kind", "get", "clusters")
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains("\n"+out, "\n"+name+"\n"), nil
+}
+
 // cleanup removes the stack (the agent pod with the cluster), its images
 // and the state directory.
 func cleanup(cfg stack.Config) {
@@ -693,7 +707,7 @@ func down() error {
 	cleanup(cfg)
 	// Say what is left, if anything: nothing should be.
 	var left []string
-	if out, _ := exec.Command("kind", "get", "clusters").Output(); strings.Contains("\n"+string(out), "\n"+name+"\n") {
+	if up, err := clusterUp(); err != nil || up {
 		left = append(left, "kind cluster "+name)
 	}
 	if out, _ := exec.Command("docker", "ps", "-aq", "--filter", "name=^"+name).Output(); strings.TrimSpace(string(out)) != "" {
