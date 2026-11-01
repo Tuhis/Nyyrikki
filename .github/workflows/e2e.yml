@@ -34,8 +34,8 @@ jobs:
     # One kind cluster at a time across refs, not only per ref: two at once
     # on the disk pool's Ceph volumes slowed setup to ~7 minutes and timed
     # out kind's etcd (ioio actions-runners/nyyrikki-e2e.yaml, 2026-10-30).
-    # That pool has a second runner so ssh-host.yml need not queue behind
-    # this job; this group keeps that runner from starting a second kind.
+    # The pool's runner limit used to be what kept it to one; this group
+    # holds whatever that limit is.
     # GitHub keeps one pending run per group: a third waiting run cancels
     # the older waiting one, never the running one.
     concurrency:

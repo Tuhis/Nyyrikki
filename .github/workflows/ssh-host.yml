@@ -33,9 +33,15 @@ concurrency:
 
 jobs:
   ssh-host:
-    # As ci.yml's RUNNER POOL, on e2e.yml's RUNNER_LABEL_DISK pool: the
-    # harness runs privileged systemd containers, which need dind.
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL_DISK || 'ubuntu-latest' }}
+    # ci.yml's RUNNER POOL, whose dind keeps its store in RAM. The harness
+    # needs dind for its privileged systemd containers, but not a real
+    # filesystem as kind does. It ran on e2e.yml's RUNNER_LABEL_DISK pool,
+    # whose dind store is a Ceph volume, until 2026-11-01: there, with 16
+    # cases at once, each ran up to ~10x slower than locally (session kill
+    # 486 s against ~40 s) and the suite still took 23 minutes, and its
+    # writes beside a kind run are the Ceph load that times out kind's
+    # etcd. The images take ~1.6 GB of the 12 GiB store.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
