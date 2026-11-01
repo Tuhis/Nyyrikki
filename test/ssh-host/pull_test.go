@@ -59,6 +59,7 @@ func (h *host) refused(what string, served []byte, want string) {
 // principals file or grants sudo, and logs what it would need a re-run
 // for.
 func TestPull(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		h.startFake()
@@ -229,6 +230,7 @@ func TestPull(t *testing.T) {
 // whose user-ca-next is revoked serves, from the real handler, a bundle
 // without it as a signer, which the host accepts and applies.
 func TestPullSigners(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		h.startFake()
@@ -352,6 +354,7 @@ func TestPullSigners(t *testing.T) {
 // refused and leaves the host unchanged, and with --reset-pull-state it
 // succeeds and sets the mark to its ISSUED; a far-ahead mark is forgotten.
 func TestSetupIssued(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		h.startFake()
@@ -437,6 +440,7 @@ func TestSetupIssued(t *testing.T) {
 // installed schedule runs the pull. --status changes nothing.
 // --uninstall removes every pull file.
 func TestPullSchedule(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		pristine := h.snapshot()
@@ -542,6 +546,7 @@ func TestPullSchedule(t *testing.T) {
 // same stale lock could both end up holding it (review of #50). The lock
 // file is root's, mode 0600, so another user can't open it to hold it.
 func TestLock(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		v := h.values("owner")
@@ -580,6 +585,7 @@ func TestLock(t *testing.T) {
 // "succeed" on a host whose KRL a leaked key had made list the staged key,
 // leaving it refusing every Nyyrikki login (round 1 of #50).
 func TestKRLListsTrustedKey(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		ca := h.defaultCA()

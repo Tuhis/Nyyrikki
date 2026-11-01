@@ -17,6 +17,7 @@ const afterTerminator = "touch /root/after-terminator\n"
 // checksum of a served file up to that line is the body's (docs/07 D16,
 // G13). Both shells parse it.
 func TestBodyShape(t *testing.T) {
+	t.Parallel()
 	b := body(t)
 	if !strings.HasSuffix(b, "\n") {
 		t.Fatal("the body doesn't end in a newline")
@@ -61,6 +62,7 @@ func TestBodyShape(t *testing.T) {
 // ssh-keygen -k -u; SUDO=false takes sudo away; --uninstall leaves the
 // host as it was (G8).
 func TestSetupAndLogin(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		pristine := h.snapshot()
@@ -197,162 +199,185 @@ func diffWithout(a, b string, keys ...string) string {
 // anything changes, and nothing in it runs (G8 "refuses each bad input",
 // G13).
 func TestBadValuesRefused(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
-		h := newHost(t, d)
-		good := h.values("owner").lines()
-		// good: TARGET, HUMAN, CA_KEY, SOURCE, SOURCE, SUDO, SIGNER_KEY,
-		// ISSUED, URL, END=9
-		ecdsa := strings.Fields(h.must("cat /etc/ssh/ssh_host_ecdsa_key.pub"))[1]
-		rsa := strings.Fields(h.must("cat /etc/ssh/ssh_host_rsa_key.pub"))[1]
-		hostEd := strings.Fields(h.must("cat /etc/ssh/ssh_host_ed25519_key.pub"))[1]
-		replace := func(i int, l ...string) []string {
-			out := append([]string{}, good[:i]...)
-			out = append(out, l...)
-			out = append(out, good[i+1:]...)
-			return renumber(out)
-		}
-		insert := func(l ...string) []string {
-			out := append([]string{}, good[:len(good)-1]...)
-			return renumber(append(append(out, l...), good[len(good)-1]))
-		}
-		b := body(t)
-		cases := []struct {
-			name   string
-			script string
-			lines  []string
-			args   []string
-			want   string
-		}{
-			{name: "command substitution in TARGET", lines: replace(0, "TARGET=$(touch /root/pwned)")},
-			{name: "shell syntax in HUMAN", lines: replace(1, "HUMAN=owner;touch${IFS}/root/pwned")},
-			{name: "command substitution in CA_KEY", lines: replace(2, "CA_KEY=ssh-ed25519 $(touch /root/pwned)")},
-			{name: "backquotes in SOURCE", lines: replace(3, "SOURCE=`touch /root/pwned`")},
-			{name: "quote breaking out in SOURCE", lines: replace(3, `SOURCE=127.0.0.1/32" ; touch /root/pwned ; "`)},
-			// With plain read, "HUMAN=own\" and "er" would join into a valid
-			// HUMAN=owner, and END would match.
-			{name: "a line ending in a backslash isn't joined", lines: append(append(append([]string{}, good[0], `HUMAN=own\`, "er"), good[2:6]...), "END=6")},
-			{name: "cut off after a data line", script: b + strings.Join(good[:3], "\n") + "\n"},
-			{name: "cut off inside a data line", script: b + strings.Join(good[:2], "\n") + "\nCA_KEY=ssh-ed"},
-			{name: "cut off right after the main line", script: b},
-			{name: "a line missing", lines: append(append([]string{}, good[:1]...), good[2:]...), want: "END"},
-			{name: "END too high", lines: append(append([]string{}, good[:6]...), "END=7"), want: "END"},
-			{name: "END with a leading zero", lines: append(append([]string{}, good[:6]...), "END=06"), want: "END"},
-			{name: "no END", lines: good[:6], want: "END"},
-			{name: "a line after END", lines: append(append([]string{}, good...), "HUMAN=x")},
-			{name: "END twice", lines: append(append([]string{}, good...), "END=6")},
-			{name: "unknown name", lines: insert("FOO=bar"), want: "unknown"},
-			{name: "lower-case name", lines: insert("human=x")},
-			{name: "line without =", lines: insert("HUMAN")},
-			{name: "empty line", lines: insert("")},
-			{name: "carriage return", lines: replace(5, "SUDO=true\r")},
-			{name: "TARGET twice", lines: insert("TARGET=db-2"), want: "twice"},
-			{name: "SUDO twice", lines: insert("SUDO=false"), want: "twice"},
-			{name: "HUMAN twice", lines: insert("HUMAN=owner"), want: "twice"},
-			{name: "TARGET upper case", lines: replace(0, "TARGET=DB-1")},
-			{name: "TARGET leading dash", lines: replace(0, "TARGET=-db")},
-			{name: "TARGET 64 characters", lines: replace(0, "TARGET="+strings.Repeat("a", 64))},
-			{name: "HUMAN 30 characters", lines: replace(1, "HUMAN="+strings.Repeat("a", 30))},
-			{name: "HUMAN with underscore", lines: replace(1, "HUMAN=own_er")},
-			{name: "CA_KEY rsa", lines: replace(2, "CA_KEY=ssh-rsa "+rsa)},
-			{name: "CA_KEY with a comment", lines: replace(2, "CA_KEY="+h.ca+" comment")},
-			{name: "CA_KEY not a key", lines: replace(2, "CA_KEY=ssh-ed25519 AAAAAAAA")},
-			{name: "CA_KEY an ecdsa key labelled ed25519", lines: replace(2, "CA_KEY=ssh-ed25519 "+ecdsa)},
-			{name: "SOURCE without a mask", lines: replace(3, "SOURCE=127.0.0.1")},
-			{name: "SOURCE with host bits", lines: replace(3, "SOURCE=10.0.0.1/24")},
-			{name: "SOURCE octet too big", lines: replace(3, "SOURCE=300.0.0.0/8")},
-			{name: "SOURCE mask too long", lines: replace(4, "SOURCE=::1/129")},
-			{name: "SOURCE triple colon", lines: replace(4, "SOURCE=1:::2/64")},
-			{name: "SOURCE with a zone", lines: replace(4, "SOURCE=fe80::1%eth0/64")},
-			{name: "SUDO yes", lines: replace(5, "SUDO=yes")},
-			{name: "no SOURCE", lines: renumber(append(append([]string{}, good[:3]...), good[5:]...)), want: "SOURCE"},
-			{name: "no CA_KEY", lines: renumber(append(append([]string{}, good[:2]...), good[3:]...)), want: "CA_KEY"},
-			{name: "unknown argument", lines: good, args: []string{"--force"}, want: "unknown argument"},
-			// docs/08 D13's data lines and options (G13).
-			{name: "SIGNER_KEY not a CA_KEY", lines: replace(6, "SIGNER_KEY=ssh-ed25519 "+hostEd), want: "SIGNER_KEY"},
-			{name: "SIGNER_KEY rsa", lines: replace(6, "SIGNER_KEY=ssh-rsa "+rsa), want: "SIGNER_KEY"},
-			{name: "SIGNER_KEY with shell", lines: replace(6, "SIGNER_KEY=ssh-ed25519 $(touch /root/pwned)"), want: "SIGNER_KEY"},
-			{name: "SIGNER_KEY twice", lines: insert(good[6]), want: "twice"},
-			{name: "no SIGNER_KEY", lines: renumber(append(append([]string{}, good[:6]...), good[7:]...)), want: "SIGNER_KEY"},
-			{name: "REVOKED_CA_KEY a CA_KEY", lines: insert("REVOKED_CA_KEY=" + h.ca), want: "REVOKED_CA_KEY"},
-			{name: "REVOKED_CA_KEY not a key", lines: insert("REVOKED_CA_KEY=ssh-ed25519 AAAAAAAA"), want: "REVOKED_CA_KEY"},
-			{name: "REVOKED_CA_KEY an ecdsa key labelled ed25519", lines: insert("REVOKED_CA_KEY=ssh-ed25519 " + ecdsa), want: "REVOKED_CA_KEY"},
-			{name: "ISSUED with a leading zero", lines: replace(7, "ISSUED=0"+h.issued[1:]), want: "ISSUED"},
-			{name: "ISSUED in seconds", lines: replace(7, "ISSUED="+h.issued[:10]), want: "ISSUED"},
-			{name: "ISSUED negative", lines: replace(7, "ISSUED=-"+h.issued[1:]), want: "ISSUED"},
-			{name: "ISSUED with shell", lines: replace(7, "ISSUED=$(touch /root/pwned)"), want: "ISSUED"},
-			{name: "ISSUED twice", lines: insert(good[7]), want: "twice"},
-			{name: "no ISSUED", lines: renumber(append(append([]string{}, good[:7]...), good[8:]...)), want: "ISSUED"},
-			{name: "URL http", lines: replace(8, "URL=http://127.0.0.1:8443"), want: "URL"},
-			{name: "URL with a path", lines: replace(8, "URL=https://127.0.0.1:8443/x"), want: "URL"},
-			{name: "URL with userinfo", lines: replace(8, "URL=https://a@127.0.0.1"), want: "URL"},
-			{name: "URL with shell", lines: replace(8, "URL=https://$(touch${IFS}/root/pwned)"), want: "URL"},
-			{name: "URL with a quote", lines: replace(8, `URL=https://a"b`), want: "URL"},
-			{name: "URL with a space", lines: replace(8, "URL=https://a b"), want: "URL"},
-			{name: "URL twice", lines: insert(good[8]), want: "twice"},
-			{name: "no URL", lines: renumber(good[:8]), want: "URL"},
-			{name: "--cacert without a file", lines: good, args: []string{"--cacert"}, want: "--cacert"},
-			{name: "--cacert of a missing file", lines: good, args: []string{"--cacert", "/nonexistent"}, want: "--cacert"},
-			{name: "--cacert of no certificate", lines: good, args: []string{"--cacert", "/etc/hostname"}, want: "PEM"},
-			{name: "--cacert twice", lines: good, args: []string{"--cacert", "/root/ca.pub", "--cacert", "/root/ca.pub"}, want: "twice"},
-			{name: "--enroll without a token", lines: good, args: []string{"--enroll"}, want: "token"},
-			{name: "--enroll with shell", lines: good, args: []string{"--enroll", "nye1.$(touch /root/pwned)"}, want: "token"},
-			{name: "--enroll not a token", lines: good, args: []string{"--enroll", "Bearer abc"}, want: "token"},
-			{name: "--enroll with --dry-run", lines: good, args: []string{"--dry-run", "--enroll", enrollToken}, want: "--dry-run"},
-			{name: "--status with --uninstall", lines: good, args: []string{"--status", "--uninstall"}, want: "--status"},
-			{name: "--uninstall with --enroll", lines: good, args: []string{"--uninstall", "--enroll", enrollToken}, want: "--uninstall"},
-			{name: "--uninstall with --reset-pull-state", lines: good, args: []string{"--uninstall", "--reset-pull-state"}, want: "--uninstall"},
-			{name: "--dry-run twice", lines: good, args: []string{"--dry-run", "--dry-run"}, want: "twice"},
-		}
-		before := h.snapshot()
-		for _, c := range cases {
-			t.Run(c.name, func(t *testing.T) {
-				s := c.script
-				if s == "" {
-					s = served(t, c.lines, afterTerminator)
-				}
-				for _, form := range []string{"file", "pipe"} {
-					var r result
-					if form == "file" {
-						r = h.run(s, c.args...)
-					} else if len(c.args) == 0 {
-						r = h.pipe(s)
-					} else {
-						continue
-					}
-					if r.code == 0 {
-						t.Fatalf("%s: accepted: %s", form, r)
-					}
-					if c.want != "" && !strings.Contains(r.err, c.want) {
-						t.Errorf("%s: the refusal doesn't mention %q: %s", form, c.want, r)
-					}
-					if h.exists("/root/pwned") || h.exists("/root/after-terminator") {
-						t.Fatalf("%s: a data line or the code after the terminator ran: %s", form, r)
-					}
-					h.sameAs(before, form+" "+c.name)
-				}
+		// The cases are split across badValueShards containers, each
+		// checking its share against its own snapshot: in one container
+		// they took ~4 minutes per distribution, the suite's longest case.
+		for shard := range badValueShards {
+			t.Run(fmt.Sprintf("shard %d", shard), func(t *testing.T) {
+				t.Parallel()
+				badValuesRefused(t, d, shard)
 			})
 		}
+	})
+}
 
-		t.Run("data from a terminal", func(t *testing.T) {
-			// What `sudo sh setup.sh` gets from a file cut right after the
-			// main line, if the shell ever handed main the terminal.
-			lines := strings.Split(strings.TrimSuffix(b, "\n"), "\n")
-			lines[len(lines)-1] = `main "$@"`
-			h.put("/root/tty.sh", strings.Join(lines, "\n")+"\n")
-			o, e, code := h.exec(`script -qec "sh /root/tty.sh" /dev/null`, "")
-			if code == 0 || !strings.Contains(o+e, "terminal") {
-				t.Fatalf("data from a terminal: exit %d\n%s%s", code, o, e)
+const badValueShards = 4
+
+// badValuesRefused runs every badValueShards-th case of TestBadValuesRefused,
+// from the shard-th on, and the terminal and non-root cases in shard 0.
+func badValuesRefused(t *testing.T, d distro, shard int) {
+	h := newHost(t, d)
+	good := h.values("owner").lines()
+	// good: TARGET, HUMAN, CA_KEY, SOURCE, SOURCE, SUDO, SIGNER_KEY,
+	// ISSUED, URL, END=9
+	ecdsa := strings.Fields(h.must("cat /etc/ssh/ssh_host_ecdsa_key.pub"))[1]
+	rsa := strings.Fields(h.must("cat /etc/ssh/ssh_host_rsa_key.pub"))[1]
+	hostEd := strings.Fields(h.must("cat /etc/ssh/ssh_host_ed25519_key.pub"))[1]
+	replace := func(i int, l ...string) []string {
+		out := append([]string{}, good[:i]...)
+		out = append(out, l...)
+		out = append(out, good[i+1:]...)
+		return renumber(out)
+	}
+	insert := func(l ...string) []string {
+		out := append([]string{}, good[:len(good)-1]...)
+		return renumber(append(append(out, l...), good[len(good)-1]))
+	}
+	b := body(t)
+	cases := []struct {
+		name   string
+		script string
+		lines  []string
+		args   []string
+		want   string
+	}{
+		{name: "command substitution in TARGET", lines: replace(0, "TARGET=$(touch /root/pwned)")},
+		{name: "shell syntax in HUMAN", lines: replace(1, "HUMAN=owner;touch${IFS}/root/pwned")},
+		{name: "command substitution in CA_KEY", lines: replace(2, "CA_KEY=ssh-ed25519 $(touch /root/pwned)")},
+		{name: "backquotes in SOURCE", lines: replace(3, "SOURCE=`touch /root/pwned`")},
+		{name: "quote breaking out in SOURCE", lines: replace(3, `SOURCE=127.0.0.1/32" ; touch /root/pwned ; "`)},
+		// With plain read, "HUMAN=own\" and "er" would join into a valid
+		// HUMAN=owner, and END would match.
+		{name: "a line ending in a backslash isn't joined", lines: append(append(append([]string{}, good[0], `HUMAN=own\`, "er"), good[2:6]...), "END=6")},
+		{name: "cut off after a data line", script: b + strings.Join(good[:3], "\n") + "\n"},
+		{name: "cut off inside a data line", script: b + strings.Join(good[:2], "\n") + "\nCA_KEY=ssh-ed"},
+		{name: "cut off right after the main line", script: b},
+		{name: "a line missing", lines: append(append([]string{}, good[:1]...), good[2:]...), want: "END"},
+		{name: "END too high", lines: append(append([]string{}, good[:6]...), "END=7"), want: "END"},
+		{name: "END with a leading zero", lines: append(append([]string{}, good[:6]...), "END=06"), want: "END"},
+		{name: "no END", lines: good[:6], want: "END"},
+		{name: "a line after END", lines: append(append([]string{}, good...), "HUMAN=x")},
+		{name: "END twice", lines: append(append([]string{}, good...), "END=6")},
+		{name: "unknown name", lines: insert("FOO=bar"), want: "unknown"},
+		{name: "lower-case name", lines: insert("human=x")},
+		{name: "line without =", lines: insert("HUMAN")},
+		{name: "empty line", lines: insert("")},
+		{name: "carriage return", lines: replace(5, "SUDO=true\r")},
+		{name: "TARGET twice", lines: insert("TARGET=db-2"), want: "twice"},
+		{name: "SUDO twice", lines: insert("SUDO=false"), want: "twice"},
+		{name: "HUMAN twice", lines: insert("HUMAN=owner"), want: "twice"},
+		{name: "TARGET upper case", lines: replace(0, "TARGET=DB-1")},
+		{name: "TARGET leading dash", lines: replace(0, "TARGET=-db")},
+		{name: "TARGET 64 characters", lines: replace(0, "TARGET="+strings.Repeat("a", 64))},
+		{name: "HUMAN 30 characters", lines: replace(1, "HUMAN="+strings.Repeat("a", 30))},
+		{name: "HUMAN with underscore", lines: replace(1, "HUMAN=own_er")},
+		{name: "CA_KEY rsa", lines: replace(2, "CA_KEY=ssh-rsa "+rsa)},
+		{name: "CA_KEY with a comment", lines: replace(2, "CA_KEY="+h.ca+" comment")},
+		{name: "CA_KEY not a key", lines: replace(2, "CA_KEY=ssh-ed25519 AAAAAAAA")},
+		{name: "CA_KEY an ecdsa key labelled ed25519", lines: replace(2, "CA_KEY=ssh-ed25519 "+ecdsa)},
+		{name: "SOURCE without a mask", lines: replace(3, "SOURCE=127.0.0.1")},
+		{name: "SOURCE with host bits", lines: replace(3, "SOURCE=10.0.0.1/24")},
+		{name: "SOURCE octet too big", lines: replace(3, "SOURCE=300.0.0.0/8")},
+		{name: "SOURCE mask too long", lines: replace(4, "SOURCE=::1/129")},
+		{name: "SOURCE triple colon", lines: replace(4, "SOURCE=1:::2/64")},
+		{name: "SOURCE with a zone", lines: replace(4, "SOURCE=fe80::1%eth0/64")},
+		{name: "SUDO yes", lines: replace(5, "SUDO=yes")},
+		{name: "no SOURCE", lines: renumber(append(append([]string{}, good[:3]...), good[5:]...)), want: "SOURCE"},
+		{name: "no CA_KEY", lines: renumber(append(append([]string{}, good[:2]...), good[3:]...)), want: "CA_KEY"},
+		{name: "unknown argument", lines: good, args: []string{"--force"}, want: "unknown argument"},
+		// docs/08 D13's data lines and options (G13).
+		{name: "SIGNER_KEY not a CA_KEY", lines: replace(6, "SIGNER_KEY=ssh-ed25519 "+hostEd), want: "SIGNER_KEY"},
+		{name: "SIGNER_KEY rsa", lines: replace(6, "SIGNER_KEY=ssh-rsa "+rsa), want: "SIGNER_KEY"},
+		{name: "SIGNER_KEY with shell", lines: replace(6, "SIGNER_KEY=ssh-ed25519 $(touch /root/pwned)"), want: "SIGNER_KEY"},
+		{name: "SIGNER_KEY twice", lines: insert(good[6]), want: "twice"},
+		{name: "no SIGNER_KEY", lines: renumber(append(append([]string{}, good[:6]...), good[7:]...)), want: "SIGNER_KEY"},
+		{name: "REVOKED_CA_KEY a CA_KEY", lines: insert("REVOKED_CA_KEY=" + h.ca), want: "REVOKED_CA_KEY"},
+		{name: "REVOKED_CA_KEY not a key", lines: insert("REVOKED_CA_KEY=ssh-ed25519 AAAAAAAA"), want: "REVOKED_CA_KEY"},
+		{name: "REVOKED_CA_KEY an ecdsa key labelled ed25519", lines: insert("REVOKED_CA_KEY=ssh-ed25519 " + ecdsa), want: "REVOKED_CA_KEY"},
+		{name: "ISSUED with a leading zero", lines: replace(7, "ISSUED=0"+h.issued[1:]), want: "ISSUED"},
+		{name: "ISSUED in seconds", lines: replace(7, "ISSUED="+h.issued[:10]), want: "ISSUED"},
+		{name: "ISSUED negative", lines: replace(7, "ISSUED=-"+h.issued[1:]), want: "ISSUED"},
+		{name: "ISSUED with shell", lines: replace(7, "ISSUED=$(touch /root/pwned)"), want: "ISSUED"},
+		{name: "ISSUED twice", lines: insert(good[7]), want: "twice"},
+		{name: "no ISSUED", lines: renumber(append(append([]string{}, good[:7]...), good[8:]...)), want: "ISSUED"},
+		{name: "URL http", lines: replace(8, "URL=http://127.0.0.1:8443"), want: "URL"},
+		{name: "URL with a path", lines: replace(8, "URL=https://127.0.0.1:8443/x"), want: "URL"},
+		{name: "URL with userinfo", lines: replace(8, "URL=https://a@127.0.0.1"), want: "URL"},
+		{name: "URL with shell", lines: replace(8, "URL=https://$(touch${IFS}/root/pwned)"), want: "URL"},
+		{name: "URL with a quote", lines: replace(8, `URL=https://a"b`), want: "URL"},
+		{name: "URL with a space", lines: replace(8, "URL=https://a b"), want: "URL"},
+		{name: "URL twice", lines: insert(good[8]), want: "twice"},
+		{name: "no URL", lines: renumber(good[:8]), want: "URL"},
+		{name: "--cacert without a file", lines: good, args: []string{"--cacert"}, want: "--cacert"},
+		{name: "--cacert of a missing file", lines: good, args: []string{"--cacert", "/nonexistent"}, want: "--cacert"},
+		{name: "--cacert of no certificate", lines: good, args: []string{"--cacert", "/etc/hostname"}, want: "PEM"},
+		{name: "--cacert twice", lines: good, args: []string{"--cacert", "/root/ca.pub", "--cacert", "/root/ca.pub"}, want: "twice"},
+		{name: "--enroll without a token", lines: good, args: []string{"--enroll"}, want: "token"},
+		{name: "--enroll with shell", lines: good, args: []string{"--enroll", "nye1.$(touch /root/pwned)"}, want: "token"},
+		{name: "--enroll not a token", lines: good, args: []string{"--enroll", "Bearer abc"}, want: "token"},
+		{name: "--enroll with --dry-run", lines: good, args: []string{"--dry-run", "--enroll", enrollToken}, want: "--dry-run"},
+		{name: "--status with --uninstall", lines: good, args: []string{"--status", "--uninstall"}, want: "--status"},
+		{name: "--uninstall with --enroll", lines: good, args: []string{"--uninstall", "--enroll", enrollToken}, want: "--uninstall"},
+		{name: "--uninstall with --reset-pull-state", lines: good, args: []string{"--uninstall", "--reset-pull-state"}, want: "--uninstall"},
+		{name: "--dry-run twice", lines: good, args: []string{"--dry-run", "--dry-run"}, want: "twice"},
+	}
+	before := h.snapshot()
+	for i, c := range cases {
+		if i%badValueShards != shard {
+			continue
+		}
+		t.Run(c.name, func(t *testing.T) {
+			s := c.script
+			if s == "" {
+				s = served(t, c.lines, afterTerminator)
 			}
-			h.sameAs(before, "data from a terminal")
-		})
-		t.Run("not root", func(t *testing.T) {
-			h.put("/tmp/setup.sh", served(t, good, ""))
-			o, e, code := h.exec("chmod 0644 /tmp/setup.sh && runuser -u alice -- sh /tmp/setup.sh", "")
-			if code == 0 || !strings.Contains(e, "root") {
-				t.Fatalf("as alice: exit %d\n%s%s", code, o, e)
+			for _, form := range []string{"file", "pipe"} {
+				var r result
+				if form == "file" {
+					r = h.run(s, c.args...)
+				} else if len(c.args) == 0 {
+					r = h.pipe(s)
+				} else {
+					continue
+				}
+				if r.code == 0 {
+					t.Fatalf("%s: accepted: %s", form, r)
+				}
+				if c.want != "" && !strings.Contains(r.err, c.want) {
+					t.Errorf("%s: the refusal doesn't mention %q: %s", form, c.want, r)
+				}
+				if h.exists("/root/pwned") || h.exists("/root/after-terminator") {
+					t.Fatalf("%s: a data line or the code after the terminator ran: %s", form, r)
+				}
+				h.sameAs(before, form+" "+c.name)
 			}
-			h.sameAs(before, "a run as alice")
 		})
+	}
+
+	if shard != 0 {
+		return
+	}
+	t.Run("data from a terminal", func(t *testing.T) {
+		// What `sudo sh setup.sh` gets from a file cut right after the
+		// main line, if the shell ever handed main the terminal.
+		lines := strings.Split(strings.TrimSuffix(b, "\n"), "\n")
+		lines[len(lines)-1] = `main "$@"`
+		h.put("/root/tty.sh", strings.Join(lines, "\n")+"\n")
+		o, e, code := h.exec(`script -qec "sh /root/tty.sh" /dev/null`, "")
+		if code == 0 || !strings.Contains(o+e, "terminal") {
+			t.Fatalf("data from a terminal: exit %d\n%s%s", code, o, e)
+		}
+		h.sameAs(before, "data from a terminal")
+	})
+	t.Run("not root", func(t *testing.T) {
+		h.put("/tmp/setup.sh", served(t, good, ""))
+		o, e, code := h.exec("chmod 0644 /tmp/setup.sh && runuser -u alice -- sh /tmp/setup.sh", "")
+		if code == 0 || !strings.Contains(e, "root") {
+			t.Fatalf("as alice: exit %d\n%s%s", code, o, e)
+		}
+		h.sameAs(before, "a run as alice")
 	})
 }
 
@@ -370,6 +395,7 @@ func renumber(lines []string) []string {
 // TestRefusedHostStates: each failed check of §5.7 step 1 and step 4's
 // account checks stops the run without changing a file (G8).
 func TestRefusedHostStates(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		v := h.values("owner")
@@ -437,6 +463,7 @@ func TestRefusedHostStates(t *testing.T) {
 // rolls the host back, also when a signal arrives during the rollback,
 // and nothing runs after it (G8).
 func TestRollback(t *testing.T) {
+	t.Parallel()
 	type injection struct {
 		cmd, pattern, action string
 		skip                 int
@@ -576,6 +603,7 @@ func dropPath(snap, p string) string {
 // account, no account has a sudoers file without its Match block, and a
 // re-run or --uninstall brings the host to a defined state (G8).
 func TestKilled(t *testing.T) {
+	t.Parallel()
 	type tcase struct {
 		name          string
 		rerun         bool
@@ -668,6 +696,7 @@ func (h *host) assertFailsClosed() {
 // sudoers file, principals file and account; with processes, it stops and
 // the account stays inert (G8).
 func TestHumanRemoved(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		h.mustSetup(h.values("owner", "second"))
@@ -721,6 +750,7 @@ func TestHumanRemoved(t *testing.T) {
 // TestUninstall: --uninstall refuses while an account has processes, after
 // taking away its sudo and principals; then leaves nothing (G8).
 func TestUninstall(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		pristine := h.snapshot()
@@ -784,6 +814,7 @@ func TestUninstall(t *testing.T) {
 // the revocation list the running sshd reads, so key logins keep working
 // (review round 1 on #30, finding 2).
 func TestRollbackKeepsRevocationList(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		v := h.values("owner")
@@ -806,6 +837,7 @@ func TestRollbackKeepsRevocationList(t *testing.T) {
 
 // TestDryRun changes nothing and lists the files.
 func TestDryRun(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		v := h.values("owner")
@@ -836,6 +868,7 @@ func TestDryRun(t *testing.T) {
 // included (docs/08 G13): pull.sh as the page's command takes it from
 // the script, and the schedule the host's cron runs.
 func TestManualPage(t *testing.T) {
+	t.Parallel()
 	files, fromScript, data := manualFiles(t)
 	check := func(t *testing.T, h *host, withLogind bool) {
 		pristine := h.snapshot()
@@ -919,6 +952,7 @@ func TestManualPage(t *testing.T) {
 // unmeasured release, another logind file is refused, and --uninstall
 // leaves nothing in effect (G8).
 func TestSessionKill(t *testing.T) {
+	t.Parallel()
 	forEachSystemdDistro(t, testSessionKill)
 }
 
@@ -1078,6 +1112,7 @@ func waitFor(t *testing.T, d time.Duration, what string, f func() bool) {
 // TestMeasureM14: sshd_config's first effective line is the Include of
 // the drop-in directory (docs/07 M14).
 func TestMeasureM14(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		first := strings.TrimSpace(h.must(`awk '{ sub(/#.*/, "") } NF { print; exit }' /etc/ssh/sshd_config`))
@@ -1096,6 +1131,7 @@ func TestMeasureM14(t *testing.T) {
 // without a TTY unless `!requiretty` applies to the user, and D7's
 // sudoers file makes it apply (docs/07 M15).
 func TestMeasureM15(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		def, _, _ := h.exec("grep -rn requiretty /etc/sudoers /etc/sudoers.d", "")

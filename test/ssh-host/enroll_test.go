@@ -125,6 +125,7 @@ func (h *host) waitRC() (string, string) {
 // waiting, and a SIGKILL after installing the certificate, leave the host
 // fail-closed.
 func TestEnroll(t *testing.T) {
+	t.Parallel()
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		h.startFake()

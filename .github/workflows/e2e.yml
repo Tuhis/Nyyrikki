@@ -31,6 +31,16 @@ jobs:
     # As ci.yml's RUNNER POOL, with RUNNER_LABEL_DISK: kind needs dind on a
     # real filesystem, so the e2e has a pool of its own.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL_DISK || 'ubuntu-latest' }}
+    # One kind cluster at a time across refs, not only per ref: two at once
+    # on the disk pool's Ceph volumes slowed setup to ~7 minutes and timed
+    # out kind's etcd (ioio actions-runners/nyyrikki-e2e.yaml, 2026-10-30).
+    # That pool has a second runner so ssh-host.yml need not queue behind
+    # this job; this group keeps that runner from starting a second kind.
+    # GitHub keeps one pending run per group: a third waiting run cancels
+    # the older waiting one, never the running one.
+    concurrency:
+      group: e2e-kind
+      cancel-in-progress: false
     timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
