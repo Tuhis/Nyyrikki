@@ -658,13 +658,20 @@ Where SE5 differs from, or settles what D6, D7 and D8 leave open:
   and only before the token expires: an enrollment approved near the end
   of the 15 minutes has a short window for its check. The certificate is
   valid either way; a refused check only means the host's script reports
-  it. A malformed body doesn't use the token up.
+  it. A malformed body, or a revoked host key, doesn't use the token up.
+  A token that expires while the approver decides still gets its
+  certificate; the check after it is then refused as `token_expired`.
 - **Order of refusals.** A query string is `400` and a name that isn't
   an SSH target `404`, as for `setup.sh`, before the token is read. Then
   the CA keys: unreadable (`ca_key_unreadable`, `user_ca_revoked`) or no
   `host-ca` (`host_ca_absent`) is `503`, so no token is checked against a
   key that may be half rotated. Then the token (`401`), then the body
-  (`400`). None of these sends a prompt.
+  (`400`, read within 30 s), then a `HOST_KEY` listed in
+  `ssh.revoked_host_keys` (`400 host_key_revoked`), then the claim, which
+  also refuses a token that expired while its body was read (`401
+  token_expired`). None of these sends a prompt. *Revised 2026-11-01
+  (rounds 1 and 2 of #47)*: the revoked-key refusal and the claim's own
+  expiry check were added.
 - **The body** is exactly `HOST_KEY=`, `SESSION_KILL=` and `END=2`, in
   that order, each line ending in a newline, printable ASCII only, at
   most 4 KiB. The key must be in its canonical form, type and base64
