@@ -486,6 +486,11 @@ spec:
 		if ns == Namespace || ns == "" {
 			return fmt.Errorf("the human gets no rights in namespace %q", ns)
 		}
+		// Only a namespace made here: kubectl create namespace below
+		// fails with AlreadyExists on any that exists, which aborts the
+		// setup. That is the guard that keeps kube-system, default and
+		// the like, whose Pod Security and contents aren't ours, out of
+		// the human's reach; keep the create, never an apply.
 		cmds = append(cmds,
 			[]string{"create", "namespace", ns},
 			[]string{"label", "namespace", ns, "pod-security.kubernetes.io/enforce=restricted", "pod-security.kubernetes.io/enforce-version=latest"},

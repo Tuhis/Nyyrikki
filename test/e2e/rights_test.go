@@ -66,6 +66,19 @@ func (e *env) checkHumanRights(t *testing.T, playground string) {
 		{"get", "secrets", "--all-namespaces"},
 		{"create", "namespaces"},
 		{"create", "clusterrolebindings"},
+		// Becoming someone else, or minting a token for nyyrikkid's
+		// ServiceAccount, would reach past the human's own rights.
+		{"impersonate", "users"},
+		{"impersonate", "groups"},
+		{"create", "serviceaccounts/token", "-n", namespace},
+		// edit grants no RBAC, so the human can't widen their own rights,
+		// not even in their own namespace.
+		{"create", "rolebindings", "-n", playground},
+		{"create", "rolebindings", "-n", namespace},
+		// The quickstart's agent pod's namespace (dev/quickstart): the
+		// human has no rights there, so neither has a request.
+		{"get", "pods", "-n", "nyyrikki-agent"},
+		{"create", "pods/exec", "-n", "nyyrikki-agent"},
 	} {
 		if can(args...) {
 			t.Errorf("the human can %v", args)
