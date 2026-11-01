@@ -39,6 +39,11 @@ goroot=$(go env GOROOT)
 mkdir -p "$out/go"
 cp "$goroot/LICENSE" "$out/go/LICENSE"
 
+# Copies from the module cache keep its read-only mode, both go-licenses'
+# and ours; make the set writable so release.yml can merge the platforms'
+# sets over each other as a non-root user (review of #52).
+chmod -R u+w "$out"
+
 # Fail closed: a module's licence beside Nyyrikki's own and Go's, at least.
 n=$(find "$out" -type f | wc -l)
 [ "$n" -gt 2 ] || { echo "only $n licence files in $out" >&2; exit 1; }
