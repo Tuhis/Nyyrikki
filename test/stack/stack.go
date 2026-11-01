@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -208,7 +209,9 @@ func WriteFile(dir, name string, b []byte, mode os.FileMode) (string, error) {
 // else. It ignores what isn't there, and cfg.Context: it is what runs
 // after a Ctrl-C.
 func Teardown(cfg Config) {
-	Detached("kind", "delete", "cluster", "--name", cfg.Cluster()).Run()
+	// The stack's own kubeconfig: kind then leaves the user's
+	// (~/.kube/config, $KUBECONFIG) alone. A missing file is fine.
+	Detached("kind", "delete", "cluster", "--name", cfg.Cluster(), "--kubeconfig", filepath.Join(cfg.Dir, "kubeconfig")).Run()
 	Detached("docker", append([]string{"rm", "-f", cfg.KeycloakContainer()}, cfg.ExtraContainers...)...).Run()
 	Detached("docker", "network", "rm", cfg.Network()).Run()
 }
@@ -316,6 +319,24 @@ func (s *Stack) BuildImage() error {
 		return err
 	}
 	_, err := runEnv(s.ctx(), nil, "kind", "load", "docker-image", s.Image(), "--name", s.Cluster())
+	return err
+}
+
+// LoadImage loads a local image into the kind cluster, for the node's
+// platform, as an archive: kind load docker-image can't import a
+// multi-platform image, which the containerd image store may make.
+func (s *Stack) LoadImage(image string) error {
+	platform := "linux/" + runtime.GOARCH
+	tar := filepath.Join(s.Dir, "image.tar")
+	defer os.Remove(tar)
+	if _, err := runEnv(s.ctx(), nil, "docker", "save", "--platform", platform, "-o", tar, image); err != nil {
+		// Older Docker has no save --platform; the image was built or
+		// pulled for the platform already.
+		if _, err := runEnv(s.ctx(), nil, "docker", "save", "-o", tar, image); err != nil {
+			return err
+		}
+	}
+	_, err := runEnv(s.ctx(), nil, "kind", "load", "image-archive", tar, "--name", s.Cluster())
 	return err
 }
 

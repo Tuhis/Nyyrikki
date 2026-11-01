@@ -40,6 +40,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -62,8 +63,9 @@ const (
 	agentImage = "nyyrikki-agent:quickstart"
 	// Where the stack's CA is in the agent pod.
 	agentCA = "/etc/nyyrikki/ca.crt"
-	// The agent image's base: a shell, for dev/quickstart.sh agent.
-	agentBase = "busybox:1.36"
+	// The agent image's base: a shell, for dev/quickstart.sh agent. By
+	// digest, as the only thing in the agent's pod besides the CLI.
+	agentBase = "busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
 )
 
 // binDirPrefix names the temporary directory dev/quickstart.sh builds
@@ -324,10 +326,11 @@ func startAgent(s *stack.Stack) error {
 	if _, err := stack.WriteFile(dir, "Dockerfile", []byte(agentDockerfile), 0o644); err != nil {
 		return err
 	}
-	if _, err := s.Exec("docker", "build", "-q", "-t", agentImage, dir); err != nil {
+	// For the node's platform, which is this machine's.
+	if _, err := s.Exec("docker", "build", "-q", "--platform", "linux/"+runtime.GOARCH, "-t", agentImage, dir); err != nil {
 		return err
 	}
-	if _, err := s.Exec("kind", "load", "docker-image", agentImage, "--name", s.Cluster()); err != nil {
+	if err := s.LoadImage(agentImage); err != nil {
 		return err
 	}
 	mf, err := stack.WriteFile(s.Dir, "agent.yaml", []byte(agentManifest), 0o600)
@@ -363,6 +366,13 @@ func checkAgent(s *stack.Stack) error {
 	return nil
 }
 
+// pollerStoppedLog is the start of the line nyyrikkid logs when its
+// Telegram poller stops for good, in internal/server/server.go. Keep the
+// two in step: a mismatch turns the clear error below into a 3-minute
+// timeout. (Not a shared constant: importing internal/server would build
+// all of nyyrikkid's dependencies into the quickstart.)
+const pollerStoppedLog = "telegram poller stopped"
+
 // waitReady waits for nyyrikkid to be ready. Ready means its Telegram
 // poller runs; a token Telegram refuses, or a second program polling the
 // same bot, stops the poller for good (docs/05 D2) and nyyrikkid never
@@ -376,7 +386,7 @@ func waitReady(s *stack.Stack) error {
 			return nil
 		}
 		logs, _ := s.Kubectl("-n", stack.Namespace, "logs", "deploy/"+stack.Deployment, "--tail=200")
-		if strings.Contains(logs, "telegram poller stopped") {
+		if strings.Contains(logs, pollerStoppedLog) {
 			return errors.New("nyyrikkid stopped polling Telegram: Telegram refused the bot token, or another program polls the same bot (only one may)")
 		}
 		if time.Now().After(deadline) {

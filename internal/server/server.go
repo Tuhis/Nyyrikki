@@ -324,6 +324,8 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 			// and escalations are denied, but the server keeps serving so
 			// /readyz reports it. Exiting would make the kubelet restart
 			// us into exactly the retry loop docs/05 D2 forbids.
+			// dev/quickstart matches this message's start
+			// (pollerStoppedLog): keep the two in step.
 			log.Error("telegram poller stopped; escalations are denied until restart", "err", err)
 			return
 		}

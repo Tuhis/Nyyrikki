@@ -25,7 +25,10 @@ The agent's machine is the pod `nyyrikki-agent` in the namespace
 you sign it in, its own Nyyrikki login. It has no ServiceAccount token
 and no rights in the cluster. `dev/quickstart.sh agent` opens a shell in
 it. Run your agent there, or on another machine that holds nothing but
-its Nyyrikki login ([agents.md](agents.md)).
+its Nyyrikki login ([agents.md](agents.md)). That shell attaches the
+pod's terminal to yours, so whatever runs in the pod can send your
+terminal escape sequences, such as OSC 52, which writes to your
+clipboard. Use a terminal that ignores what you don't want.
 
 ## What you need
 
