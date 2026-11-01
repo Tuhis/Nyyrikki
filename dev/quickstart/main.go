@@ -32,14 +32,17 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Tuhis/Nyyrikki/test/stack"
 )
@@ -129,11 +132,11 @@ func readToken() (string, error) {
 
 func up(args []string) (err error) {
 	fs := flag.NewFlagSet("up", flag.ExitOnError)
-	approver := fs.Int64("telegram-user", 0, "the approver's Telegram user ID (docs/setup/telegram.md)")
+	approver := fs.Int64("telegram-user", 0, "the approver's Telegram user ID; without it, up finds it among who has written to the bot")
 	checkBot := fs.Bool("check-bot", true, "ask Telegram whether the bot token is valid before building anything")
 	fs.Parse(args)
-	if *approver <= 0 {
-		return errors.New("-telegram-user must be your Telegram user ID, a positive number (docs/setup/telegram.md)")
+	if *approver < 0 || (*approver == 0 && !*checkBot) {
+		return errors.New("-telegram-user must be your Telegram user ID, a positive number (it is required with -check-bot=false)")
 	}
 	root, state, err := paths()
 	if err != nil {
@@ -170,6 +173,11 @@ func up(args []string) (err error) {
 			return err
 		}
 		logf("Telegram knows the token: bot @%s", bot)
+	}
+	if *approver == 0 {
+		if *approver, err = pickApprover(token, bot); err != nil {
+			return err
+		}
 	}
 
 	if err := os.MkdirAll(state, 0o700); err != nil {
@@ -357,23 +365,46 @@ func waitReady(s *stack.Stack) error {
 	}
 }
 
-// getMe asks Telegram whether token is a bot's, and returns its username.
-// getMe reads no updates, so it takes none away from nyyrikkid.
-func getMe(token string) (string, error) {
+// botAPI is the real Bot API, which nyyrikkid uses too (the chart's
+// default). Tests point it elsewhere.
+var botAPI = "https://api.telegram.org"
+
+// botGet calls the Bot API's method with token. Its errors never carry
+// the token, which is in the URL.
+func botGet(token, method string) (*http.Response, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.telegram.org/bot"+token+"/getMe", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", botAPI+"/bot"+token+"/"+method, nil)
 	if err != nil {
-		return "", errors.New("could not build the getMe request")
+		cancel()
+		return nil, fmt.Errorf("could not build the %s request", method)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		cancel()
 		// A *url.Error carries the URL, which carries the token.
 		var ue *url.Error
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return "", fmt.Errorf("could not reach api.telegram.org, which nyyrikkid needs too: %v", err)
+		return nil, fmt.Errorf("could not reach api.telegram.org, which nyyrikkid needs too: %v", err)
+	}
+	resp.Body = cancelOnClose{resp.Body, cancel}
+	return resp, nil
+}
+
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c cancelOnClose) Close() error { c.cancel(); return c.ReadCloser.Close() }
+
+// getMe asks Telegram whether token is a bot's, and returns its username.
+// getMe reads no updates, so it takes none away from nyyrikkid.
+func getMe(token string) (string, error) {
+	resp, err := botGet(token, "getMe")
+	if err != nil {
+		return "", err
 	}
 	defer resp.Body.Close()
 	var r struct {
@@ -389,6 +420,117 @@ func getMe(token string) (string, error) {
 		return "", fmt.Errorf("getMe at Telegram answered %s", resp.Status)
 	}
 	return r.Result.Username, nil
+}
+
+// sender is a Telegram user who has written to the bot.
+type sender struct {
+	ID        int64
+	Username  string
+	FirstName string
+}
+
+func (s sender) String() string {
+	name := printable(s.FirstName)
+	if s.Username != "" {
+		name += " (@" + printable(s.Username) + ")"
+	}
+	return fmt.Sprintf("%s, user ID %d", strings.TrimSpace(name), s.ID)
+}
+
+// printable keeps what is safe to show on the human's terminal: anyone
+// can write to a bot and choose their own name.
+func printable(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsPrint(r) && b.Len() < 64 {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// senders lists who has written to the bot, from the updates Telegram
+// still holds. getUpdates without an offset confirms none of them, so
+// nyyrikkid still gets them all; nor does it set allowed_updates, which
+// would stay set for nyyrikkid.
+func senders(token string) ([]sender, error) {
+	resp, err := botGet(token, "getUpdates?timeout=0")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return nil, errors.New("the bot's updates were refused by Telegram (409): the bot has a webhook, or another program polls it; use a new bot")
+	}
+	type from struct {
+		ID        int64  `json:"id"`
+		IsBot     bool   `json:"is_bot"`
+		Username  string `json:"username"`
+		FirstName string `json:"first_name"`
+	}
+	var r struct {
+		OK     bool `json:"ok"`
+		Result []struct {
+			Message *struct {
+				From *from `json:"from"`
+			} `json:"message"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil || !r.OK {
+		return nil, fmt.Errorf("getUpdates at Telegram answered %s", resp.Status)
+	}
+	var out []sender
+	seen := map[int64]bool{}
+	for _, u := range r.Result {
+		if u.Message == nil || u.Message.From == nil || u.Message.From.IsBot || u.Message.From.ID <= 0 || seen[u.Message.From.ID] {
+			continue
+		}
+		f := u.Message.From
+		seen[f.ID] = true
+		out = append(out, sender{ID: f.ID, Username: f.Username, FirstName: f.FirstName})
+	}
+	return out, nil
+}
+
+// pickApprover finds the approver among who has written to the bot, and
+// asks the human, on the terminal, to confirm or choose: anyone may write
+// to a bot, and the approver is whoever's taps Nyyrikki will obey.
+func pickApprover(token, bot string) (int64, error) {
+	who, err := senders(token)
+	if err != nil {
+		return 0, err
+	}
+	if len(who) == 0 {
+		return 0, fmt.Errorf("nobody has written to @%s yet: send it any message from your own Telegram account, then run dev/quickstart.sh up again", bot)
+	}
+	var list strings.Builder
+	for i, s := range who {
+		fmt.Fprintf(&list, "  %d. %s\n", i+1, s)
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return 0, fmt.Errorf("no terminal to ask which of these is you; set NYYRIKKI_QUICKSTART_TELEGRAM_USER to its user ID:\n%s", list.String())
+	}
+	defer tty.Close()
+	fmt.Fprintf(tty, "These have written to @%s. Nyyrikki will obey the taps of the one you pick:\n%s", bot, list.String())
+	if len(who) == 1 {
+		fmt.Fprint(tty, "Is that you? [y/N] ")
+	} else {
+		fmt.Fprintf(tty, "Which one is you? [1-%d] ", len(who))
+	}
+	line, _ := bufio.NewReader(tty).ReadString('\n')
+	line = strings.TrimSpace(line)
+	if len(who) == 1 {
+		if strings.EqualFold(line, "y") || strings.EqualFold(line, "yes") {
+			return who[0].ID, nil
+		}
+		return 0, errors.New("no approver chosen; write to the bot from your own account, or set NYYRIKKI_QUICKSTART_TELEGRAM_USER")
+	}
+	n, err := strconv.Atoi(line)
+	if err != nil || n < 1 || n > len(who) {
+		return 0, errors.New("no approver chosen")
+	}
+	return who[n-1].ID, nil
 }
 
 // secret makes a random password and keeps it in state/name, 0600.

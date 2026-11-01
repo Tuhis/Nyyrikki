@@ -45,10 +45,9 @@ its Nyyrikki login ([agents.md](agents.md)).
 1. In Telegram, make a **new** bot with **@BotFather** (`/newbot`). Use
    it only for this, and delete it (`/deletebot`) when you're done.
    **Never use the bot of a real deployment.**
-2. Send the bot any message, then find your user ID as
-   [telegram.md](telegram.md) step 3 shows. Nyyrikki only accepts taps
-   from that ID. Do this before `up`: once Nyyrikki polls the bot, it
-   takes the updates itself.
+2. Send the bot any message from your own Telegram account. `up` reads
+   who has written to the bot and asks you which one is you. Nyyrikki
+   then obeys only that account's taps.
 
 ## Up
 
@@ -56,12 +55,14 @@ its Nyyrikki login ([agents.md](agents.md)).
 dev/quickstart.sh up
 ```
 
-The script explains the above, then asks for the token (not echoed) and
-your user ID. It checks the token with Telegram's `getMe` before building
-anything. The token then goes only into the cluster's Secret: it isn't
-written to any file on your machine, and it is never printed. Without a
-terminal, set `NYYRIKKI_QUICKSTART_BOT_TOKEN` and
-`NYYRIKKI_QUICKSTART_TELEGRAM_USER`.
+The script explains the above, then asks for the token (not echoed).
+It checks the token with Telegram's `getMe`, then lists the accounts that
+have written to the bot (from `getUpdates`, which leaves the updates in
+place for Nyyrikki) and asks you to confirm or pick yours. All of that
+happens before anything is built. The token then goes only into the
+cluster's Secret: it isn't written to any file on your machine, and it is
+never printed. Without a terminal, set `NYYRIKKI_QUICKSTART_BOT_TOKEN`
+and `NYYRIKKI_QUICKSTART_TELEGRAM_USER` (your user ID).
 
 At the end it prints what to do next, and keeps a copy in
 `dev/.quickstart/info.txt`. In short:

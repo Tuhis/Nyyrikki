@@ -56,8 +56,9 @@ needs a Telegram bot of your own (docs/setup/quickstart.md):
     delete it (/deletebot) when you are done. Never use the bot of a real
     deployment.
 
-  * Send your new bot any message, then find your Telegram user ID as
-    docs/setup/telegram.md step 3 shows. Nyyrikki only accepts taps from it.
+  * Send your new bot any message from your own Telegram account. up
+    lists who has written to it and asks which one is you: Nyyrikki
+    obeys only that account's taps.
 
   * While the quickstart is up, run NO AI agent on this machine. The token
     goes into the kind cluster's Secret, and this machine holds kind's
@@ -74,16 +75,17 @@ EOF
     echo >&2
   fi
   [ -n "$token" ] || die "no bot token"
-  if [ -z "$uid" ]; then
-    [ -t 0 ] || die "no terminal to ask on: set NYYRIKKI_QUICKSTART_TELEGRAM_USER"
-    read -rp "Your Telegram user ID: " uid
+  # Without it, the program finds the ID among who has written to the bot.
+  local user_flag=()
+  if [ -n "$uid" ]; then
+    [[ $uid =~ ^[1-9][0-9]*$ ]] || die "NYYRIKKI_QUICKSTART_TELEGRAM_USER is a Telegram user ID, a number such as 123456789"
+    user_flag=(-telegram-user "$uid")
   fi
-  [[ $uid =~ ^[1-9][0-9]*$ ]] || die "the Telegram user ID is a number, such as 123456789"
 
   cd "$root"
   # The token goes to the program on a pipe: printf is a builtin, so it is
   # in no process's argv or environment, and in no file.
-  printf '%s\n' "$token" | go run -tags quickstart ./dev/quickstart up -telegram-user "$uid" "$@"
+  printf '%s\n' "$token" | go run -tags quickstart ./dev/quickstart up "${user_flag[@]}" "$@"
 }
 
 agent() {

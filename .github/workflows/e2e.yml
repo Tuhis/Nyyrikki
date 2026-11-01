@@ -49,9 +49,11 @@ jobs:
           go install sigs.k8s.io/kind@$KIND_VERSION
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       # The quickstart shares the e2e's stack (test/stack) and is built
-      # only with its own tag: this keeps it compiling.
+      # only with its own tag: this keeps it compiling, and runs its tests.
       - name: Quickstart builds
-        run: go vet -tags quickstart ./dev/quickstart/ ./test/stack/
+        run: |
+          go vet -tags quickstart ./dev/quickstart/ ./test/stack/
+          go test -tags quickstart -count=1 ./dev/quickstart/
       - name: End-to-end test
         env:
           # The test bind-mounts its temp files (Keycloak's certificate, the
