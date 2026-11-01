@@ -9,12 +9,15 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -315,5 +318,98 @@ func TestCAKeysWarnRevokedNext(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), fp) {
 		t.Fatalf("not logged: %s", logs.String())
+	}
+}
+
+// blockAudit blocks every Append until release is closed, counting calls.
+type blockAudit struct {
+	calls   atomic.Int32
+	release chan struct{}
+}
+
+func (a *blockAudit) Append(ctx context.Context, _ audit.Record) error {
+	a.calls.Add(1)
+	select {
+	case <-a.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// While a warning is being written, other loads neither write it again nor
+// wait for it (round 2 of #42).
+func TestCAKeysWarnOneWriter(t *testing.T) {
+	dir := t.TempDir()
+	user := newKey(t, dir, KeyUserCA)
+	next := newKey(t, dir, KeyNextUserCA)
+	a := &blockAudit{release: make(chan struct{})}
+	k := New(Options{Files: Files{UserCA: user.file, NextUserCA: next.file}, Revoked: []ssh.PublicKey{next.pub},
+		Audit: a, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	first := make(chan error, 1)
+	go func() { _, err := k.Load(); first <- err }()
+	deadline := time.Now().Add(5 * time.Second)
+	for a.calls.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the first load never wrote the warning")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := k.Load(); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a second load waited for the first one's audit write")
+	}
+	if n := a.calls.Load(); n != 1 {
+		t.Fatalf("%d audit writes, want 1", n)
+	}
+	close(a.release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// flipRead returns user-ca's bytes alternating between two keys on every
+// read of that path, as a rotation landing mid-load would.
+func flipRead(path string, a, b []byte, flips int) func(string) ([]byte, error) {
+	var mu sync.Mutex
+	n := 0
+	return func(p string) ([]byte, error) {
+		if p != path {
+			return os.ReadFile(p)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		n++
+		if n <= flips*2 && n%2 == 0 {
+			return append([]byte(nil), b...), nil
+		}
+		return append([]byte(nil), a...), nil
+	}
+}
+
+// readConsistent retries when user-ca changed during a load, and fails
+// closed after three straddled reads (round 2 of #42).
+func TestCAKeysReadStraddle(t *testing.T) {
+	dir := t.TempDir()
+	user := newKey(t, dir, KeyUserCA)
+	other := newKey(t, t.TempDir(), "other")
+	k := New(Options{Files: Files{UserCA: user.file}})
+	k.readFile = flipRead(user.file, user.pem, other.pem, 1)
+	s, err := k.Load()
+	if err != nil {
+		t.Fatalf("one straddle: %v", err)
+	}
+	if !bytes.Equal(s.UserCA.PublicKey().Marshal(), user.pub.Marshal()) {
+		t.Fatal("the load mixed two versions")
+	}
+	k.readFile = flipRead(user.file, user.pem, other.pem, 100)
+	if _, err := k.Load(); codes.Of(err) != codes.Unavailable || codes.DetailOf(err) != DetailUnreadable {
+		t.Fatalf("three straddles: %v", err)
 	}
 }

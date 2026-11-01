@@ -71,8 +71,13 @@ type Options struct {
 type Keys struct {
 	o Options
 
-	mu     sync.Mutex
-	warned string // the duplicate fingerprints last warned about
+	// readFile is os.ReadFile; tests replace it to simulate a rotation
+	// landing mid-load.
+	readFile func(string) ([]byte, error)
+
+	mu      sync.Mutex
+	warned  string // the warnings last written
+	writing string // the warnings being written now
 }
 
 // New returns a loader. Nothing is read until Load.
@@ -80,7 +85,7 @@ func New(o Options) *Keys {
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
-	return &Keys{o: o}
+	return &Keys{o: o, readFile: os.ReadFile}
 }
 
 // Set is one reading of the key files. It holds private keys: use it for
@@ -150,30 +155,27 @@ func (k *Keys) Load() (*Set, error) {
 // readConsistent reads the three key files. The kubelet swaps a mounted
 // Secret atomically, but three reads can straddle a swap (a promote
 // between them would pair the old user-ca with no user-ca-next), so
-// user-ca is read again at the end and the whole read retried if it
-// changed (round 1 of #42). Either outcome fails closed; this only keeps
-// one Load from mixing two versions.
+// user-ca is parsed from its first read, read again at the end, and the
+// whole read retried if the two differ (rounds 1 and 2 of #42). Either
+// outcome fails closed; this only keeps one Load from mixing two
+// versions.
 func (k *Keys) readConsistent() (user, next, host ssh.Signer, err error) {
 	for range 3 {
-		var before []byte
-		if before, err = os.ReadFile(k.o.Files.UserCA); err != nil {
-			before = nil
-		}
-		if user, err = readKey(k.o.Files.UserCA, false, "the SSH user CA key (user-ca) is unavailable"); err != nil {
-			clear(before)
+		var raw []byte
+		if raw, user, err = k.readKey(k.o.Files.UserCA, false, "the SSH user CA key (user-ca) is unavailable"); err != nil {
 			return nil, nil, nil, err
 		}
-		if next, err = readKey(k.o.Files.NextUserCA, true, "the staged SSH user CA key (user-ca-next) is unavailable"); err != nil {
-			clear(before)
+		if _, next, err = k.readKey(k.o.Files.NextUserCA, true, "the staged SSH user CA key (user-ca-next) is unavailable"); err != nil {
+			clear(raw)
 			return nil, nil, nil, err
 		}
-		if host, err = readKey(k.o.Files.HostCA, true, "the SSH host CA key (host-ca) is unavailable"); err != nil {
-			clear(before)
+		if _, host, err = k.readKey(k.o.Files.HostCA, true, "the SSH host CA key (host-ca) is unavailable"); err != nil {
+			clear(raw)
 			return nil, nil, nil, err
 		}
-		after, _ := os.ReadFile(k.o.Files.UserCA)
-		same := before != nil && bytes.Equal(before, after)
-		clear(before)
+		after, aerr := k.readFile(k.o.Files.UserCA)
+		same := aerr == nil && bytes.Equal(raw, after)
+		clear(raw)
 		clear(after)
 		if same {
 			return user, next, host, nil
@@ -186,19 +188,21 @@ func (k *Keys) readConsistent() (user, next, host ssh.Signer, err error) {
 // a derived one) and of a revoked staged key, once per change. The lock
 // covers only the comparison: the audit write, which may take seconds,
 // happens outside it, so SSH runs don't queue behind a slow audit sink
-// (round 1 of #42). Two concurrent loads may both write the same warning.
+// (round 1 of #42). While one load writes a set of warnings, others skip
+// it rather than writing it again or waiting (round 2 of #42).
 func (k *Keys) warn(warnings []string) {
 	key := strings.Join(warnings, "\n")
 	k.mu.Lock()
-	if key == k.warned {
-		k.mu.Unlock()
-		return
-	}
 	if key == "" {
 		k.warned = ""
 		k.mu.Unlock()
 		return
 	}
+	if key == k.warned || key == k.writing {
+		k.mu.Unlock()
+		return
+	}
+	k.writing = key
 	k.mu.Unlock()
 	for _, msg := range warnings {
 		k.o.Logger.Warn(msg)
@@ -209,34 +213,48 @@ func (k *Keys) warn(warnings []string) {
 			if err != nil {
 				// A warning, not a decision: retry on the next load.
 				k.o.Logger.Error("audit write of the SSH CA warning failed", "err", err)
+				k.mu.Lock()
+				if k.writing == key {
+					k.writing = ""
+				}
+				k.mu.Unlock()
 				return
 			}
 		}
 	}
 	k.mu.Lock()
 	k.warned = key
+	if k.writing == key {
+		k.writing = ""
+	}
 	k.mu.Unlock()
 }
 
-// readKey reads one key file. An optional file that doesn't exist (or
-// isn't configured) is absent: nil, nil.
-func readKey(path string, optional bool, msg string) (ssh.Signer, error) {
+// readKey reads and parses one key file, returning the bytes read (the
+// caller clears them) with the key. An optional file that doesn't exist
+// (or isn't configured) is absent: nil, nil, nil.
+func (k *Keys) readKey(path string, optional bool, msg string) ([]byte, ssh.Signer, error) {
 	if path == "" && optional {
-		return nil, nil
+		return nil, nil, nil
 	}
-	b, err := os.ReadFile(path)
+	b, err := k.readFile(path)
 	if err != nil {
+		clear(b)
 		if optional && errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, codes.WithDetail(codes.Unavailable, DetailUnreadable, "%s", msg)
+		return nil, nil, codes.WithDetail(codes.Unavailable, DetailUnreadable, "%s", msg)
 	}
 	s, err := ParsePrivateKey(b)
-	clear(b)
 	if err != nil {
-		return nil, codes.WithDetail(codes.Unavailable, DetailUnreadable, "%s", msg)
+		clear(b)
+		return nil, nil, codes.WithDetail(codes.Unavailable, DetailUnreadable, "%s", msg)
 	}
-	return s, nil
+	if optional {
+		clear(b)
+		return nil, s, nil
+	}
+	return b, s, nil
 }
 
 // ParsePrivateKey parses an unencrypted ed25519 OpenSSH private key. The
