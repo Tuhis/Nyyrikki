@@ -29,7 +29,7 @@ Prints a one-time enrollment token for the SSH target TARGET, valid 15
 minutes, and the command that sets the host up and enrolls it
 (docs/08 D6, D7). Run it in Nyyrikki's pod:
 
-  kubectl -n NAMESPACE exec deploy/nyyrikki -- nyyrikkid enroll-token TARGET
+  kubectl -n NAMESPACE exec deploy/RELEASE-nyyrikki -- nyyrikkid enroll-token TARGET
 `
 
 // noHostCARemedy is what enroll-token says without host-ca (docs/08
@@ -41,6 +41,10 @@ or, for a Secret the chart's CronJobs don't manage (no caJobs):
   kubectl -n NAMESPACE get secret SECRET -o yaml | nyyrikkid ssh-ca add-host-ca | kubectl replace -f -
 `
 
+// DefaultConfigPath is where the chart mounts the server's config file,
+// so that the command reads it when run in the pod without --config.
+const DefaultConfigPath = "/etc/nyyrikki/config/config.yaml"
+
 // Main runs the command and returns its exit code.
 func (c TokenCommand) Main(args []string) int {
 	if c.Now == nil {
@@ -49,7 +53,7 @@ func (c TokenCommand) Main(args []string) int {
 	fs := flag.NewFlagSet("enroll-token", flag.ContinueOnError)
 	fs.SetOutput(c.Stderr)
 	fs.Usage = func() { fmt.Fprint(c.Stderr, tokenUsage) }
-	configPath := fs.String("config", "/etc/nyyrikki/config.yaml", "path to the configuration file")
+	configPath := fs.String("config", DefaultConfigPath, "path to the configuration file")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

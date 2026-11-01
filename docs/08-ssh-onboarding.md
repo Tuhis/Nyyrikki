@@ -2,8 +2,9 @@
 
 **Status**: drafted 2026-10-31. Owner decisions OD1–OD9 taken the same
 day, in the conversation that asked for this doc. Approved 2026-10-31,
-when the PR that added it (#40) merged. SE1 implemented 2026-10-31
-(§10). Status lives in [`ROADMAP.md`](../ROADMAP.md).
+when the PR that added it (#40) merged. SE1–SE6 implemented 2026-10-31
+to 2026-11-01 (§10); G14 is the owner's. Status lives in
+[`ROADMAP.md`](../ROADMAP.md).
 
 Chunks **SE1–SE6** (`SE` = SSH ease; unused).
 
@@ -126,7 +127,7 @@ and SE6 turn these into tests.
 | D10 | **The host check before approval** (OD6): before rendering the prompt of an SSH run, and of an elevation naming SSH targets, Nyyrikki dials each SSH host, completes key exchange, verifies the host (D9), reads its facts, and disconnects **without authenticating**, within `ssh.connect_timeout`. For a run, a failed check is `unavailable` with its detail (`host_unreachable`, `host_key_mismatch`, `host_key_revoked`, `host_not_pinned`), audited, and the approver is never asked. For an elevation, a failed check doesn't block it: the message says, per target, "not reachable now: treated as not finishing cuts" (docs/07 D12's warning). The facts shown are kept with the approval or elevation. When the run dials after approval, it verifies the host again; if it would now show less than the approver was shown (`session_kill` was true and isn't), the run is `unavailable` with detail `host_changed`. Elevation targets that failed their check are shown with the warning, so they never trigger `host_changed`. | The approver is told what the host does, from a fact it signed, without anyone copying it by hand. A wrong or unreachable host fails before anyone is asked, not after. No credential is presented and no command runs: what the host sees is a key exchange, the same as `ssh-keyscan`. |
 | D11 | **Defaults and groups in config.** A target's `address` may omit the port (`22`). `ssh.defaults.sudo` (default `false`) applies to SSH targets that don't set `sudo`. A new top-level `groups` list, `[{name, targets: [...]}]`, names sets of targets of any type. Group names and target names share one namespace, and config validation refuses a name used twice or a group naming an unknown target. **`elevate` accepts group names** in `targets` and expands them on the server, before validation, into the targets they name. The elevation covers that fixed list, never the group: a later change to the group doesn't widen it (INV-03). `decision.MaxTargets` applies after expansion. Every target must be visible to the human, or the request is `invalid_request`. The elevation message lists every target, with the group's name next to its members. `run` takes target names only. **`list_targets`** returns, per target, `groups` and, for SSH targets, `sudo`. | Ten web hosts, one name. Expanding on the server, and showing what was expanded, keeps "an elevation covers exactly what the approver saw". `sudo` lets an agent pick the right host without trial and error. `session_kill` is the approver's concern and would cost a host check per listing (D10). |
 | D12 | **`nyyrikki ssh TARGET [-- ARGS...]`** in the CLI: exactly `nyyrikki run -t TARGET` when given no arguments and stdin is a terminal, and `nyyrikki run TARGET -- ARGS...` otherwise. It refuses a target whose type isn't `ssh` before calling `run`. The MCP tools don't change. | Reads like the `ssh` an agent already knows. It is sugar over the same `run` call, so the CLI offers nothing MCP doesn't (`CLAUDE.md`: thin clients of one API). |
-| D13 | **Setup script changes** (docs/07 §5.7): new data lines `SIGNER_KEY` (D4), `ISSUED` (as in D4), `URL` (the canonical URL; `https://` and the characters of a URL only) and `REVOKED_CA_KEY`. New options: `--reset-pull-state` (above), `--cacert FILE` (stored for the pull), `--enroll TOKEN` (D7), `--status` (prints what is installed, the pull schedule and the last pull; changes nothing). Step 2 also adds each `REVOKED_CA_KEY` to an existing KRL. Step 3 writes `signers.pub` from the `SIGNER_KEY` lines and sets `pull.state` to the setup's own `ISSUED` data line (the server's time when `setup.sh` was rendered), after the same check as D5 that it is at most 10 minutes ahead of the host's clock; otherwise step 1 refuses, naming the clock. If the stored mark is itself no more than 10 minutes ahead of the host's clock and is later than the setup's `ISSUED`, step 1 refuses too ("this setup script is older than the last bundle applied; fetch it again"), so a saved or baked-in copy can neither lower the mark nor restore an older signer set. The refusal prints the stored mark and names **`--reset-pull-state`**, which root on the host passes deliberately to set the mark to the setup's `ISSUED` regardless; the leak procedure uses it (§5.4), since a key holder can keep the mark just inside the refusal's window. *Revised 2026-10-31 (round 3 of #40)*: without the flag, the refusal could block the re-run leak recovery requires. *Revised 2026-10-31 (round 2 of #40)*: a stale body first reset the mark unconditionally. So every bundle issued before the setup the administrator just ran is refused, and a far-ahead `ISSUED` an earlier pull stored is forgotten. *Revised 2026-10-31 (round 1 of #40)*: the reset first went to the host's time minus 10 minutes, which could lower the mark and let a bundle from those minutes be replayed. Whenever `/etc/ssh/nyyrikki/ssh_host_ed25519_key-cert.pub` exists, steps 3 and 5 write `HostCertificate` for it among the drop-in's global keywords, before any `Match` block (sshd doesn't allow it inside one), so a re-run without `--enroll` keeps an enrolled host's certificate in use. *Revised 2026-10-31 (review of #40)*: a re-run first rewrote the drop-in without it. Step 3 writes the KRL with them included. A new step 8, after session kill, installs the pull (D5). Step 9 prints what it did, adding `pull: cron.d \| periodic \| none`. If `--enroll` was given, step 10 enrolls (D7). A failed enrollment doesn't roll back steps 2–9: the host is set up and fails closed without a certificate, as a host with empty pins does today. The script exits non-zero and says to run it again with a new token. `--uninstall` also removes the schedule, `pull.sh`, `pull.conf`, `pull.state`, `server-ca.pem`, the host certificate and its `HostCertificate` line. | Every rule of docs/07 §5.7 holds: refuse rather than guess, fail closed at every step, roll back what the run changed. Enrollment comes last because it waits on a person, and the host needs nothing from it to be safe. |
+| D13 | **Setup script changes** (docs/07 §5.7): new data lines `SIGNER_KEY` (D4), `ISSUED` (as in D4), `URL` (the canonical URL; `https://` and the characters of a URL only) and `REVOKED_CA_KEY`. New options: `--reset-pull-state` (above), `--cacert FILE` (stored for the pull), `--enroll TOKEN` (D7), `--status` (prints what is installed, the pull schedule and the last pull; changes nothing). Step 2 also adds each `REVOKED_CA_KEY` to an existing KRL. Step 1 refuses when the host's KRL already lists a `CA_KEY` or `SIGNER_KEY` of this script, naming the key and how to rebuild the KRL from the revoked keys; `--status` flags such keys. *Revised 2026-11-01 (round 1 of #50)*: the KRL only grows, and a bundle signed by a leaked key can add the staged key to it, so without this check the leak recovery's re-run succeeded and left the host refusing every Nyyrikki login; the KRL isn't rebuilt automatically, since that would drop revocations added by hand. Step 3 writes `signers.pub` from the `SIGNER_KEY` lines and sets `pull.state` to the setup's own `ISSUED` data line (the server's time when `setup.sh` was rendered), after the same check as D5 that it is at most 10 minutes ahead of the host's clock; otherwise step 1 refuses, naming the clock. If the stored mark is itself no more than 10 minutes ahead of the host's clock and is later than the setup's `ISSUED`, step 1 refuses too ("this setup script is older than the last bundle applied; fetch it again"), so a saved or baked-in copy can neither lower the mark nor restore an older signer set. The refusal prints the stored mark and names **`--reset-pull-state`**, which root on the host passes deliberately to set the mark to the setup's `ISSUED` regardless; the leak procedure uses it (§5.4), since a key holder can keep the mark just inside the refusal's window. *Revised 2026-10-31 (round 3 of #40)*: without the flag, the refusal could block the re-run leak recovery requires. *Revised 2026-10-31 (round 2 of #40)*: a stale body first reset the mark unconditionally. So every bundle issued before the setup the administrator just ran is refused, and a far-ahead `ISSUED` an earlier pull stored is forgotten. *Revised 2026-10-31 (round 1 of #40)*: the reset first went to the host's time minus 10 minutes, which could lower the mark and let a bundle from those minutes be replayed. Whenever `/etc/ssh/nyyrikki/ssh_host_ed25519_key-cert.pub` exists, steps 3 and 5 write `HostCertificate` for it among the drop-in's global keywords, before any `Match` block (sshd doesn't allow it inside one), so a re-run without `--enroll` keeps an enrolled host's certificate in use. *Revised 2026-10-31 (review of #40)*: a re-run first rewrote the drop-in without it. Step 3 writes the KRL with them included. A new step 8, after session kill, installs the pull (D5). Step 9 prints what it did, adding `pull: cron.d \| periodic \| none`. If `--enroll` was given, step 10 enrolls (D7). A failed enrollment doesn't roll back steps 2–9: the host is set up and fails closed without a certificate, as a host with empty pins does today. The script exits non-zero and says to run it again with a new token. `--uninstall` also removes the schedule, `pull.sh`, `pull.conf`, `pull.state`, `server-ca.pem`, the host certificate and its `HostCertificate` line. | Every rule of docs/07 §5.7 holds: refuse rather than guess, fail closed at every step, roll back what the run changed. Enrollment comes last because it waits on a person, and the host needs nothing from it to be safe. |
 | D14 | **Chart**: `secrets.sshCA.name` (default `nyyrikki-ssh-ca`) is mounted whole at `/etc/nyyrikki/ssh/`, and the config points at `user-ca`, `user-ca-next` and `host-ca` there. For one minor release, the old `secrets.sshUserCA.{name,key}`, when set, is mounted as `user-ca` **instead** (one Secret on the directory, never two), `ssh.generateCA` defaults to `false` while it is set, and `NOTES.txt` says to migrate. **Migration from R10**, in this order, which `NOTES.txt` repeats: (1) `kubectl get secret nyyrikki-ssh-user-ca -o yaml | <ssh-ca> import | kubectl create -f -` writes `secrets.sshCA.name` with the old key as `user-ca` and a fresh `host-ca`; (2) remove that key from `ssh.userCAPublicKeys` and unset `secrets.sshUserCA`, in one rollout; (3) after it, delete `nyyrikki-ssh-user-ca`. If step 1's `create` fails with `AlreadyExists`, compare fingerprints (`import` prints the old key's; the docs show how to read the existing `user-ca`'s): equal means the migration is already done; different means `sshUserCA` was unset first and the hook made a fresh CA no host trusts, so delete that Secret and run step 1 again. `NOTES.txt` gives the same steps. The CA loader logs and audits a warning when an extra key in `user_ca_public_keys` equals a derived one, since it would stay trusted after a promote. *Revised 2026-10-31 (round 2 of #40)*: the migration was first one step, leaving the old key trusted as an extra and its private half in the old Secret. Without migrating, enrollment stays off (no `host-ca`), rotation is refused (D2), and nothing else changes. *Revised 2026-10-31 (round 1 of #40)*: first `generateCA` defaulted to on for an upgrading R10 release, which would have made a CA no host trusts and switched to it when the compatibility ended. New values map one to one onto D1, D3, D8, D9 and D11's config: `ssh.revokedUserCAKeys`, `ssh.hostCAs`, `ssh.revokedHostKeys`, `ssh.hostCertValidity`, `ssh.defaults.sudo`, `groups`, and `ssh.generateCA` and `ssh.caJobs` for D16. `NOTES.txt` prints, per SSH target, the `enroll-token` command and the setup command, unconditionally, since the chart can't see whether `host-ca` exists (D16). | Rotation edits the Secret, not the values (D1). The chart test checks that every value reaches the binary (docs/06). |
 | D15 | **Setup docs** (`docs/setup/ssh-hosts.md`) are rewritten around three paths, quickest first: *enroll* (`ssh-ca init`, a target with an address, `enroll-token`, one command on the host, one tap); *declarative* (pins or an organisation's host CA in the values, the setup command from cloud-init or Ansible, with snippets, OD8); *manual* (the file listing, kept checked by docs/07 G9). | The simplest path comes first. The others stay complete. |
 | D16 | **The chart makes the CA keys** (OD9), when `ssh.generateCA` is true, which is the default as soon as one SSH target exists. A hook Job (`helm.sh/hook: pre-install,pre-upgrade`, weight `-5`, delete policy `before-hook-creation,hook-succeeded`), running the Nyyrikki image as `nyyrikkid ssh-ca init --create`, creates the Secret `secrets.sshCA.name` with fresh `user-ca` and `host-ca` through the Kubernetes API, with labels `nyyrikki.dev/release: <release>`, `nyyrikki.dev/component: ssh-ca` and `app.kubernetes.io/managed-by: nyyrikki-ssh-ca` (deliberately not `Helm`), annotations `helm.sh/resource-policy: keep` and `argocd.argoproj.io/compare-options: IgnoreExtraneous`, and **no `app.kubernetes.io/instance`**: Argo CD's label tracking counts a live object with that label as part of the app, and auto-sync with prune would delete the Secret, then make a new CA on the next sync, whose PreSync runs the hook again. *Revised 2026-10-31 (round 1 of #40)*: the labels first included `app.kubernetes.io/instance`. If the Secret already exists, the create's `AlreadyExists` is success and nothing is changed or read: the Job never overwrites or patches a Secret, and so needs no `get`. Its ServiceAccount, Role and RoleBinding are hooks too (weight `-10`, delete policy `before-hook-creation,hook-succeeded,hook-failed`, so the grant goes away after a failed Job as well, where Helm deletes the hooks that ran before the failed one; *revised 2026-11-01 (round 1 of #42)*: a `helm install` interrupted or timed out while the Job runs, or a release uninstalled before a later upgrade, leaves `<release>-ssh-ca-init`'s ServiceAccount, Role and RoleBinding behind, since hook objects aren't in the release; the setup page says to check for them and gives the `kubectl delete` line; the Job itself keeps `before-hook-creation,hook-succeeded`, so a failed Job's log stays), and the Role grants only `create` on Secrets in the namespace, which Kubernetes can't restrict to one name. The Job prints the public keys' fingerprints and never a private key. A failed Job fails the install or upgrade. `pre-upgrade` lets an existing release add its first SSH target. **Rotation and repair**: four suspended CronJobs, `<release>-ssh-ca-stage`, `-promote`, `-unstage` and `-add-host-ca`, run those commands (D2). They render when `ssh.caJobs` is true, which defaults to `ssh.generateCA`; set it true with `generateCA: false` for a Secret made by `ssh-ca` on a workstation, and leave it false for one an operator such as External Secrets owns, which they would fight. They act on the Secret in place when started with `kubectl create job --from=cronjob/…`. Their ServiceAccount's Role grants `get` and `update` on that one Secret by name. `promote` writes the old public key to its log, which is public data. The Secret is left alone by `helm uninstall`, `--force` and a broken release. The docs show how to delete it: `kubectl delete secret -l nyyrikki.dev/release=<release>,nyyrikki.dev/component=ssh-ca`. A Secret without `host-ca` (from `ssh-ca` before it existed, External Secrets, an R10 migration not done) keeps enrollment off: `enroll-token` refuses and prints the remedy (the `-add-host-ca` CronJob, or `ssh-ca add-host-ca`), and `NOTES.txt` says the same unconditionally, since the chart can't see the Secret without `lookup`. **Rendering without Helm** (`helm template | kubectl apply`, Kustomize's `helmCharts`) turns hooks into plain objects: the namespace-wide `create` grant would stay and the Job would be reapplied. That mode needs `ssh.generateCA: false`; the docs say so, and the chart can't detect it. With `ssh.generateCA: false`, the Secret comes from `ssh-ca` on a workstation, External Secrets, sealed secrets, or anything else that writes those keys. | No key is made outside the cluster, and none passes through a log, the Helm release Secret, or a terminal. A Secret Helm doesn't own can't be replaced by Helm: a CA every host trusts must never change by accident (M8). The broad `create` is meant to last only while the hook runs, and its ServiceAccount is deleted with it; an interrupted install or an uninstall can leave it behind, as the Decision column says. |
@@ -270,7 +271,9 @@ not undo what the leaked key may already have signed**: a bundle signed
 with it could have added the holder's own CA and signer (stage, D5)
 before the revocation, and that key is not in `revoked_user_ca_keys`.
 So after either leak, **re-run the setup on every host with
-`--reset-pull-state`**, which rewrites `user_ca.pub` and `signers.pub`
+`--reset-pull-state`** (if it refuses because the host's KRL lists a key
+the values trust, which a bundle signed by the leaked key can cause,
+rebuild the KRL from the revoked keys as the setup page says, then re-run), which rewrites `user_ca.pub` and `signers.pub`
 from the values (D13) even when a bundle the leaked key signed set the
 mark just ahead of the setup's `ISSUED`. The pull
 recovers from the revocation of extra keys, not from a leak of a key
@@ -724,6 +727,142 @@ Where SE5 differs from, or settles what D6, D7 and D8 leave open:
 - **Decided while implementing; the owner may revisit**: a check after
   the token's expiry is refused, and every copy of a settled enrollment
   names who settled it.
+
+### SE6 (2026-11-01)
+
+Where SE6 differs from, or settles what D5, D13, D14 and D15 leave open:
+
+- **The served data lines** are, in order, `TARGET`, `HUMAN`s,
+  `CA_KEY`s, `SIGNER_KEY`s, `REVOKED_CA_KEY`s, `SOURCE`s, `SUDO`,
+  `ISSUED`, `URL`, `END`; the script accepts them in any order.
+  `ISSUED` is 13 digits without a leading zero (Unix milliseconds,
+  2001–2286), so 64-bit shell arithmetic compares it exactly on dash,
+  bash and BusyBox ash. `URL` is the canonical URL's scheme and host,
+  without a slash: `https://`, a host name or a bracketed IPv6
+  address, an optional port, at most 200 characters, nothing else. Config
+  refuses a canonical URL outside that form when an SSH target exists
+  (`config.HostURL`), so `setup.sh` is never refused for it. The script
+  refuses a `SIGNER_KEY` that isn't a `CA_KEY` and a `REVOKED_CA_KEY` that
+  is one, and requires at least one `SIGNER_KEY`.
+- **Options** may each appear once. `--status` takes no other;
+  `--uninstall` only `--dry-run`; `--dry-run` refuses `--enroll`. A token
+  must be `nye1.` and base64url. `--cacert` must be a readable file of at
+  most 1 MiB holding a PEM certificate.
+- **`pull.state`** holds `ISSUED=`, `BY=setup` or `BY=pull`, and, from a
+  pull, `APPLIED=` (Unix seconds). The setup writes no time, so a re-run
+  of the same script changes nothing. A malformed `pull.state` is refused
+  unless `--reset-pull-state`. A mark more than 10 minutes ahead of the
+  host's clock is forgotten, as D13 says, and step 1 says so.
+- **Step 3's order**: the mark first, so from then on every bundle
+  issued before the script is refused; then `signers.pub`, `user_ca.pub`,
+  the revocation list and the drop-in. Each is journaled, so a rollback
+  restores them. Step 2's revocations are not: like the rest of step 2,
+  what the values no longer trust stays untrusted.
+- **One lock**: a kernel lock (`flock`, util-linux or BusyBox) on
+  `/run/nyyrikki-ssh.lock` (a tmpfs, so nothing outlives a reboot), a
+  root-owned file of mode 0600, held on a
+  file descriptor until the process exits. The setup (but not
+  `--dry-run` or `--status`) and the pull both take it, so a pull from
+  cron never interleaves with a setup. A holder that dies (a kill, a
+  reboot) releases it, so there is nothing stale to take over. A run that
+  finds it held refuses; the pull tries again at its next run. A
+  symbolic link at the path is refused, not followed. Under `/run`, the
+  file leaves nothing under `/etc` behind, also after `--uninstall`. *Revised 2026-11-01 (review of #50)*: the lock was
+  first a symbolic link naming the holder's PID, taken over when stale by
+  `readlink`, `kill -0`, `rm`, `ln`; two processes finding the same stale
+  lock could both end up holding it, so a pull could interleave with the
+  leak-recovery setup and restore a signer it had just dropped. A file of
+  mode 0600 because `flock` works on a read-only descriptor: a readable
+  file would let any user hold the lock and stop every pull.
+- **Step 8** writes `pull.sh` and `pull.conf` whatever the schedule, so a
+  host with `pull: none` can run the pull by hand. A run without
+  `--cacert` removes an earlier `server-ca.pem`, and warns. A cron counts
+  if `cron` or `crond` is on the script's `PATH` and doesn't resolve to
+  BusyBox; root's crontab is read from `/etc/crontabs/root`,
+  `/var/spool/cron/crontabs/root` or `/var/spool/cron/root`, and needs a
+  non-comment `run-parts /etc/periodic/15min` line and `run-parts` on the
+  `PATH`. The minute is `cksum` of the target name modulo 15. The schedule
+  is written last, and moving between `cron.d` and `periodic` removes the
+  other.
+- **The pull** names each signer `signer-<n>` in its allowed-signers
+  file, with `namespaces="nyyrikki-trust@v1"`, and tries them in turn
+  with `ssh-keygen -Y verify -I`, so the identity that verifies names the
+  key. It requires `TARGET`, a `CA_KEY`, a `SIGNER_KEY`, a `HUMAN`, `SUDO`
+  and `ISSUED`; refuses a `SIGNER_KEY` that is also revoked; and drops a
+  `CA_KEY` that is revoked. A failure while applying leaves what was
+  already taken away (the order is D5's) and doesn't move the mark, so
+  the next pull applies the bundle again. Notices ("re-run the setup to
+  add …") go to `logger` only, so cron doesn't mail them every 15
+  minutes; a signer change also goes to stdout, which cron mails;
+  failures go to stderr. It compares key files as text, since a minimal
+  Rocky 9 has no `cmp`.
+- **Step 10** sends the token in a header file (`curl -H @file`), so no
+  process listing shows it, and waits up to 15 minutes for the approval
+  and 5 for the check. It installs the certificate only after
+  `ssh-keygen -L` shows a host certificate for the host's own key, and
+  checks the new drop-in with `sshd -t` and the same `sshd -T` checks as
+  step 3. A refused check exits non-zero and keeps the certificate, which
+  is valid; Ctrl-C while waiting ends the enrollment without a change.
+  `--enroll` needs `curl` and sshd using `/etc/ssh/ssh_host_ed25519_key`,
+  checked in step 1.
+- **`enroll-token`'s default `--config`** is now the chart's
+  `/etc/nyyrikki/config/config.yaml`, not the image's
+  `/etc/nyyrikki/config.yaml`, so the command D6 and `NOTES.txt` print
+  works as written in the chart's pod (`TestChartEnrollTokenConfig`).
+  Its usage text names the chart's Deployment, `deploy/<release>-nyyrikki`.
+- **`--status`** needs the data lines like every other run, takes no
+  lock and writes nothing outside its own temporary directory.
+- **`--uninstall`** removes the schedule first, then what it removed
+  before; `/etc/ssh/nyyrikki` goes with the pull, its state, the signers,
+  the CA file and the host certificate, and the drop-in with its
+  `HostCertificate` line.
+- **Alpine 3.22** needs no change to `sshd_config`: its first effective
+  line is the `Include`. It needs `shadow` for `useradd`; BusyBox `tr`
+  has no character classes, so the script's sanitizers use `' -~'`.
+- **`test/ssh-host`** runs every case on Debian 13, Ubuntu 24.04, Rocky 9
+  and Alpine 3.22, with `cron`/`cronie` and `curl` in the images. A fake
+  Nyyrikki (`test/ssh-host/fakeserver`) runs inside the container over
+  HTTPS with a test CA, serving bundles the test signs with
+  `sshca.SignSSHSIG` or takes from the real handler, and canned
+  enrollment answers. The shim calls a BusyBox applet by its name.
+  G4: `TestPull`; G5: `TestPullSchedule`; G13: `TestBadValuesRefused`,
+  `TestSetupIssued`, `TestPullSigners`, `TestEnroll`, `TestManualPage`,
+  and the new cases of `TestRollback` and `TestKilled`.
+- **e2e on kind** (`TestEndToEnd`). G7: the SSH target's values carry
+  no `hostKeys`; a run before enrollment is refused with no prompt (the
+  host check fails); `enroll-token`, run with `kubectl exec`, prints the
+  command, which the OpenSSH container runs with `--cacert` and
+  `--enroll`; the fake Bot API's prompt shows the host key's
+  fingerprint, and the tap approves; the script prints the fingerprint
+  before the certificate arrives and reports `check: ny-owner: ok`; the
+  existing SH6 steps then run on the host as verified by its
+  certificate. (On `main`, the e2e had failed since SE4 at the step that
+  pinned host keys after a run: with `host-ca`, an unpinned host is
+  checked before any prompt.) G15: a rotation through the `-stage` and
+  `-promote` CronJobs, each taken up by the host's `pull.sh` (run by
+  hand: the container has no cron), then a run signed by the new key,
+  and the old key in no `CA_KEY`; and a second release in its own
+  namespace: without an SSH target it makes no Secret; an upgrade whose
+  hook can't run (its image can't be pulled, so Helm times out) leaves
+  no hook ServiceAccount, Role or RoleBinding, measured with Helm 3.20.2
+  locally (CI pins 3.19.0); the upgrade that adds the first SSH target
+  makes the Secret with D16's labels; an R10 release (`sshUserCA` set),
+  installed and upgraded, renders no hook, makes no CA Secret, mounts
+  the R10 Secret and leaves it byte for byte. The step "a session ended
+  in Keycloak is denied at once" now uses a session-bound login of its
+  own. The step asserted exit 77 (`session_inactive`) from the agent's
+  login; once SE6's steps outlast its first access token's 5 minutes,
+  the CLI refreshes first, the offline refresh is refused after the
+  sign-out, and the CLI exits with its refresh error instead: denied
+  either way, but not the exit the step checked. *Corrected 2026-11-01
+  (round 2 of #50)*: this first read that an admin sign-out doesn't end
+  an offline session, which `dcr_test.go` disproves (an offline token is
+  `session_inactive` at once after a sign-out).
+  The e2e's timeouts went from 40 and 45 minutes to 50 and 55.
+- **Decided while implementing; the owner may revisit**: the lock; the
+  removal of `server-ca.pem` by a run without `--cacert`; `pull.sh`
+  written without a schedule; a bundle without a `HUMAN` refused; and
+  `enroll-token`'s default config path.
 
 ## 11. Post-implementation review (YYYY-MM-DD)
 

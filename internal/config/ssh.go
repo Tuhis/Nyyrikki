@@ -199,6 +199,26 @@ func ParseUserCAKey(s string) (ssh.PublicKey, error) {
 	return pk, nil
 }
 
+// hostURLPattern is the form of the URL hosts pull from and enroll at
+// (docs/08 D13's URL data line), which the setup script checks too:
+// https, a host name or a bracketed IPv6 address, an optional port, and
+// nothing else, so the value is safe as one argument and in pull.conf.
+var hostURLPattern = regexp.MustCompile(`^https://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?$`)
+
+// maxHostURL bounds the URL data line, as the script does.
+const maxHostURL = 200
+
+// HostURL is the URL data line for a canonical URL: its scheme and host,
+// without a trailing slash (docs/08 D13). It refuses anything the setup
+// script would refuse.
+func HostURL(canonical string) (string, error) {
+	u := strings.TrimSuffix(canonical, "/")
+	if len(u) > maxHostURL || !hostURLPattern.MatchString(u) {
+		return "", errors.New("must be an https URL of a host name or address and an optional port only, for SSH hosts (docs/08 D13)")
+	}
+	return u, nil
+}
+
 // ParseSourceAddress parses one of Nyyrikki's source addresses: a CIDR
 // in canonical form, as both sshd's from= and the certificate's
 // source-address take it (docs/07 D4, D5).

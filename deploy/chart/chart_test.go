@@ -18,6 +18,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/Tuhis/Nyyrikki/internal/config"
+	"github.com/Tuhis/Nyyrikki/internal/hostsetup"
 )
 
 type object = map[string]any
@@ -620,25 +621,38 @@ func notes(t *testing.T, extra ...string) string {
 	return string(out)
 }
 
-// TestChartSSHNotes: NOTES names each SSH target's setup command, says
-// runs wait for the host keys, and says where the CA Secret comes from,
-// how to delete it and how to add a missing host-ca (docs/08 D14, D16).
+// TestChartSSHNotes: NOTES names, per SSH target, the enroll-token
+// command and the setup command, unconditionally (docs/08 D14, G12), says
+// runs wait for enrollment or the host keys, and says where the CA Secret
+// comes from, how to delete it and how to add a missing host-ca (D16).
 func TestChartSSHNotes(t *testing.T) {
 	out := notes(t, append(append([]string(nil), sshSet...), "--set", "targets[2].ssh.hostKeys=null")...)
 	for _, want := range []string{
+		"kubectl -n default exec deploy/t-nyyrikki -- nyyrikkid enroll-token db-1",
 		"curl -fsSL https://nyyrikki.example.com/hosts/db-1/setup.sh | sudo sh",
-		"Runs on db-1 are refused until",
+		"Runs on db-1 are refused until it is enrolled",
 		"The install hook made it",
 		"kubectl -n default delete secret -l nyyrikki.dev/release=t,nyyrikki.dev/component=ssh-ca",
 		"kubectl -n default create job --from=cronjob/t-ssh-ca-add-host-ca",
-		"nyyrikkid enroll-token",
+		"--cacert",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("NOTES lack %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "deprecated") {
-		t.Errorf("NOTES call the new Secret deprecated:\n%s", out)
+	for _, not := range []string{"deprecated", "later release", "arrives"} {
+		if strings.Contains(out, not) {
+			t.Errorf("NOTES say %q:\n%s", not, out)
+		}
+	}
+	// The enroll-token command is printed whether or not the target has
+	// pins: the chart can't see whether host-ca exists (D14).
+	if out := notes(t, sshSet...); !strings.Contains(out, "nyyrikkid enroll-token db-1") || strings.Contains(out, "Runs on db-1 are refused") {
+		t.Errorf("a pinned target's NOTES:\n%s", out)
+	}
+	// With secrets.sshUserCA (no host-ca until migrated), still printed.
+	if out := notes(t, compatSet...); !strings.Contains(out, "nyyrikkid enroll-token db-1") {
+		t.Errorf("NOTES in compatibility mode lack enroll-token:\n%s", out)
 	}
 	// Without the hook or the CronJobs, the workstation commands.
 	out = notes(t, append(append([]string(nil), sshSet...), "--set", "ssh.generateCA=false")...)
@@ -747,5 +761,17 @@ func TestChartSSHCAFlagsMustBeBool(t *testing.T) {
 				t.Errorf("%s=%q as a string: err %v\n%s", key, v, err, out)
 			}
 		}
+	}
+}
+
+// TestChartEnrollTokenConfig: `nyyrikkid enroll-token TARGET`, run in the
+// pod as NOTES.txt and docs/08 D6 print it, without --config, reads the
+// config file the chart gives the server (docs/08 SE6: its default was the
+// image's /etc/nyyrikki/config.yaml, which the chart doesn't mount).
+func TestChartEnrollTokenConfig(t *testing.T) {
+	c := containerOf(t, podSpec(t, render(t, sshSet...)))
+	want := "--config " + hostsetup.DefaultConfigPath
+	if got := args(c); got != want {
+		t.Fatalf("the server runs with %q; enroll-token reads %q by default", got, want)
 	}
 }

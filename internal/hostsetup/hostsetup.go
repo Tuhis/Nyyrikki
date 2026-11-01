@@ -115,22 +115,48 @@ func (b *lines) bytes() ([]byte, error) {
 	return []byte(strings.Join(b.l, "\n") + "\n"), nil
 }
 
-// DataLines builds the data lines for target t (docs/07 D16): every
-// value from config, each in a format config validation already checked
-// and the script checks again, and one CA_KEY per key of trusted, the
-// trusted set of docs/08 D1. The last line counts the others.
-func DataLines(c *config.Config, t *config.Target, trusted []ssh.PublicKey) ([]byte, error) {
+// DataLines builds the data lines for target t (docs/07 D16, docs/08
+// D13): every value from config or the CA keys, each in a format config
+// validation already checked and the script checks again, in order:
+// TARGET; one HUMAN per human; one CA_KEY per key of the trusted set
+// (docs/08 D1); one SIGNER_KEY per bundle signer (D4), a subset of the
+// CA_KEYs; one REVOKED_CA_KEY per revoked key (D3); one SOURCE per
+// source address; SUDO; ISSUED, the server's time in Unix milliseconds;
+// URL, the canonical URL the host pulls from and enrolls at (D5, D7).
+// The last line counts the others.
+func DataLines(c *config.Config, t *config.Target, set *sshca.Set, issued time.Time) ([]byte, error) {
 	if t == nil || t.SSH == nil {
 		return nil, errors.New("hostsetup: not an SSH target")
+	}
+	if set == nil {
+		return nil, errors.New("hostsetup: no CA keys")
+	}
+	trusted, signers := set.Trusted(), set.Signers()
+	if len(trusted) == 0 || len(signers) == 0 {
+		return nil, errors.New("hostsetup: no trusted user CA key or no signer")
+	}
+	if err := signersTrusted(trusted, signers); err != nil {
+		return nil, err
+	}
+	u, err := config.HostURL(c.Server.CanonicalURL)
+	if err != nil {
+		return nil, fmt.Errorf("hostsetup: server.canonical_url %w", err)
+	}
+	ms, err := issuedMillis(issued)
+	if err != nil {
+		return nil, err
 	}
 	var b lines
 	b.add("TARGET", t.Name)
 	b.humans(t)
-	if len(trusted) == 0 {
-		return nil, errors.New("hostsetup: no trusted user CA key")
-	}
 	for _, pk := range trusted {
 		b.key("CA_KEY", pk)
+	}
+	for _, pk := range signers {
+		b.key("SIGNER_KEY", pk)
+	}
+	for _, pk := range set.Revoked() {
+		b.key("REVOKED_CA_KEY", pk)
 	}
 	for _, a := range c.SSH.SourceAddresses {
 		p, err := config.ParseSourceAddress(a)
@@ -140,9 +166,32 @@ func DataLines(c *config.Config, t *config.Target, trusted []ssh.PublicKey) ([]b
 		b.add("SOURCE", p.String())
 	}
 	b.add("SUDO", strconv.FormatBool(t.SSH.Sudo))
+	b.add("ISSUED", ms)
+	b.add("URL", u)
 	b.end()
 	b.l = append(b.l, Terminator)
 	return b.bytes()
+}
+
+// issuedMillis is ISSUED's form: Unix milliseconds, 13 digits without a
+// leading zero (2001 to 2286), as the script checks it.
+func issuedMillis(t time.Time) (string, error) {
+	s := strconv.FormatInt(t.UnixMilli(), 10)
+	if len(s) != 13 || s[0] == '0' || s[0] == '-' {
+		return "", errors.New("hostsetup: the clock is outside the years ISSUED can express")
+	}
+	return s, nil
+}
+
+// signersTrusted checks D4's invariant: every signer is a trusted key.
+// A host refuses data lines where it doesn't hold (D5, D13).
+func signersTrusted(trusted, signers []ssh.PublicKey) error {
+	for _, s := range signers {
+		if !slices.ContainsFunc(trusted, func(p ssh.PublicKey) bool { return bytes.Equal(p.Marshal(), s.Marshal()) }) {
+			return errors.New("hostsetup: a signer is not a trusted key")
+		}
+	}
+	return nil
 }
 
 // SignatureLine separates a trust bundle's data lines from its signature
@@ -162,12 +211,14 @@ func TrustLines(t *config.Target, set *sshca.Set, issued time.Time) ([]byte, err
 	if len(trusted) == 0 || len(signers) == 0 {
 		return nil, errors.New("hostsetup: no trusted user CA key or no signer")
 	}
-	for _, s := range signers {
-		// SIGNER_KEY is always a subset of CA_KEY (docs/08 D4); a host
-		// refuses a bundle where it isn't (D5).
-		if !slices.ContainsFunc(trusted, func(p ssh.PublicKey) bool { return bytes.Equal(p.Marshal(), s.Marshal()) }) {
-			return nil, errors.New("hostsetup: a signer is not a trusted key")
-		}
+	// SIGNER_KEY is always a subset of CA_KEY (docs/08 D4); a host
+	// refuses a bundle where it isn't (D5).
+	if err := signersTrusted(trusted, signers); err != nil {
+		return nil, err
+	}
+	ms, err := issuedMillis(issued)
+	if err != nil {
+		return nil, err
 	}
 	var b lines
 	b.add("TARGET", t.Name)
@@ -182,7 +233,7 @@ func TrustLines(t *config.Target, set *sshca.Set, issued time.Time) ([]byte, err
 	}
 	b.humans(t)
 	b.add("SUDO", strconv.FormatBool(t.SSH.Sudo))
-	b.add("ISSUED", strconv.FormatInt(issued.UnixMilli(), 10))
+	b.add("ISSUED", ms)
 	b.end()
 	return b.bytes()
 }
@@ -295,7 +346,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	contentType := "text/x-shellscript; charset=utf-8"
 	switch m[2] {
 	case pathSetup:
-		data, err := DataLines(h.cfg, t, set.Trusted())
+		data, err := DataLines(h.cfg, t, set, h.now())
 		if err != nil {
 			h.log.Error("building the setup script's data lines failed", "target", t.Name, "err", err)
 			http.Error(w, "unavailable", http.StatusInternalServerError)

@@ -131,8 +131,15 @@ func TestSetupAndLogin(t *testing.T) {
 		if out, code := h.certLogin("owner", "db-1", "true"); code == 0 {
 			t.Fatalf("a certificate of a revoked CA logged in: %q", out)
 		}
-		// A re-run keeps the revocation list (§5.6 "after a leak", step 2).
-		h.mustSetup(v)
+		// A re-run whose values still trust the revoked CA is refused, and
+		// the revocation list stays (docs/08 D13, round 1 of #50: a key the
+		// values trust that the list names would leave the host refusing
+		// Nyyrikki).
+		revoked := h.snapshot()
+		if r := h.setup(v); r.code == 0 || !strings.Contains(r.err, "revocation list") {
+			t.Fatalf("a re-run trusting a revoked CA: %s", r)
+		}
+		h.sameAs(revoked, "a re-run refused for the revocation list")
 		if q := h.must("ssh-keygen -Q -f /etc/ssh/nyyrikki/revoked.krl /root/ca.pub || true"); !strings.Contains(q, "REVOKED") {
 			t.Fatalf("a re-run replaced the revocation list: %q", q)
 		}
@@ -193,9 +200,11 @@ func TestBadValuesRefused(t *testing.T) {
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		good := h.values("owner").lines()
-		// good: TARGET, HUMAN, CA_KEY, SOURCE, SOURCE, SUDO, END=6
+		// good: TARGET, HUMAN, CA_KEY, SOURCE, SOURCE, SUDO, SIGNER_KEY,
+		// ISSUED, URL, END=9
 		ecdsa := strings.Fields(h.must("cat /etc/ssh/ssh_host_ecdsa_key.pub"))[1]
 		rsa := strings.Fields(h.must("cat /etc/ssh/ssh_host_rsa_key.pub"))[1]
+		hostEd := strings.Fields(h.must("cat /etc/ssh/ssh_host_ed25519_key.pub"))[1]
 		replace := func(i int, l ...string) []string {
 			out := append([]string{}, good[:i]...)
 			out = append(out, l...)
@@ -258,6 +267,41 @@ func TestBadValuesRefused(t *testing.T) {
 			{name: "no SOURCE", lines: renumber(append(append([]string{}, good[:3]...), good[5:]...)), want: "SOURCE"},
 			{name: "no CA_KEY", lines: renumber(append(append([]string{}, good[:2]...), good[3:]...)), want: "CA_KEY"},
 			{name: "unknown argument", lines: good, args: []string{"--force"}, want: "unknown argument"},
+			// docs/08 D13's data lines and options (G13).
+			{name: "SIGNER_KEY not a CA_KEY", lines: replace(6, "SIGNER_KEY=ssh-ed25519 "+hostEd), want: "SIGNER_KEY"},
+			{name: "SIGNER_KEY rsa", lines: replace(6, "SIGNER_KEY=ssh-rsa "+rsa), want: "SIGNER_KEY"},
+			{name: "SIGNER_KEY with shell", lines: replace(6, "SIGNER_KEY=ssh-ed25519 $(touch /root/pwned)"), want: "SIGNER_KEY"},
+			{name: "SIGNER_KEY twice", lines: insert(good[6]), want: "twice"},
+			{name: "no SIGNER_KEY", lines: renumber(append(append([]string{}, good[:6]...), good[7:]...)), want: "SIGNER_KEY"},
+			{name: "REVOKED_CA_KEY a CA_KEY", lines: insert("REVOKED_CA_KEY=" + h.ca), want: "REVOKED_CA_KEY"},
+			{name: "REVOKED_CA_KEY not a key", lines: insert("REVOKED_CA_KEY=ssh-ed25519 AAAAAAAA"), want: "REVOKED_CA_KEY"},
+			{name: "REVOKED_CA_KEY an ecdsa key labelled ed25519", lines: insert("REVOKED_CA_KEY=ssh-ed25519 " + ecdsa), want: "REVOKED_CA_KEY"},
+			{name: "ISSUED with a leading zero", lines: replace(7, "ISSUED=0"+h.issued[1:]), want: "ISSUED"},
+			{name: "ISSUED in seconds", lines: replace(7, "ISSUED="+h.issued[:10]), want: "ISSUED"},
+			{name: "ISSUED negative", lines: replace(7, "ISSUED=-"+h.issued[1:]), want: "ISSUED"},
+			{name: "ISSUED with shell", lines: replace(7, "ISSUED=$(touch /root/pwned)"), want: "ISSUED"},
+			{name: "ISSUED twice", lines: insert(good[7]), want: "twice"},
+			{name: "no ISSUED", lines: renumber(append(append([]string{}, good[:7]...), good[8:]...)), want: "ISSUED"},
+			{name: "URL http", lines: replace(8, "URL=http://127.0.0.1:8443"), want: "URL"},
+			{name: "URL with a path", lines: replace(8, "URL=https://127.0.0.1:8443/x"), want: "URL"},
+			{name: "URL with userinfo", lines: replace(8, "URL=https://a@127.0.0.1"), want: "URL"},
+			{name: "URL with shell", lines: replace(8, "URL=https://$(touch${IFS}/root/pwned)"), want: "URL"},
+			{name: "URL with a quote", lines: replace(8, `URL=https://a"b`), want: "URL"},
+			{name: "URL with a space", lines: replace(8, "URL=https://a b"), want: "URL"},
+			{name: "URL twice", lines: insert(good[8]), want: "twice"},
+			{name: "no URL", lines: renumber(good[:8]), want: "URL"},
+			{name: "--cacert without a file", lines: good, args: []string{"--cacert"}, want: "--cacert"},
+			{name: "--cacert of a missing file", lines: good, args: []string{"--cacert", "/nonexistent"}, want: "--cacert"},
+			{name: "--cacert of no certificate", lines: good, args: []string{"--cacert", "/etc/hostname"}, want: "PEM"},
+			{name: "--cacert twice", lines: good, args: []string{"--cacert", "/root/ca.pub", "--cacert", "/root/ca.pub"}, want: "twice"},
+			{name: "--enroll without a token", lines: good, args: []string{"--enroll"}, want: "token"},
+			{name: "--enroll with shell", lines: good, args: []string{"--enroll", "nye1.$(touch /root/pwned)"}, want: "token"},
+			{name: "--enroll not a token", lines: good, args: []string{"--enroll", "Bearer abc"}, want: "token"},
+			{name: "--enroll with --dry-run", lines: good, args: []string{"--dry-run", "--enroll", enrollToken}, want: "--dry-run"},
+			{name: "--status with --uninstall", lines: good, args: []string{"--status", "--uninstall"}, want: "--status"},
+			{name: "--uninstall with --enroll", lines: good, args: []string{"--uninstall", "--enroll", enrollToken}, want: "--uninstall"},
+			{name: "--uninstall with --reset-pull-state", lines: good, args: []string{"--uninstall", "--reset-pull-state"}, want: "--uninstall"},
+			{name: "--dry-run twice", lines: good, args: []string{"--dry-run", "--dry-run"}, want: "twice"},
 		}
 		before := h.snapshot()
 		for _, c := range cases {
@@ -395,6 +439,7 @@ func TestRollback(t *testing.T) {
 		name   string
 		rerun  bool // set up with owner first, then run with other: owner is stale
 		inert  bool // the run got past step 2: the stale account must be inert
+		revoke bool // the re-run revokes a CA key (docs/08 D13 step 2)
 		inject []injection
 		real   string // a real configuration that makes the step fail
 	}
@@ -409,6 +454,11 @@ func TestRollback(t *testing.T) {
 		tcase{name: "re-run, step 2 fails", rerun: true, inject: []injection{{"rm", "*/etc/sudoers.d/50-nyyrikki-ny-owner", "fail", 0}}},
 		tcase{name: "re-run, step 5 userdel fails", rerun: true, inert: true, inject: []injection{{"userdel", "*ny-owner", "fail", 0}}},
 		tcase{name: "re-run, step 6 visudo fails", rerun: true, inert: true, inject: []injection{{"visudo", "*", "fail", 0}}},
+		// docs/08 D13: the revocation of step 2, the pull of step 8.
+		tcase{name: "re-run, step 2 revocation fails", rerun: true, revoke: true, inject: []injection{{"ssh-keygen", "-q -k -u -f*", "fail", 0}}},
+		tcase{name: "step 3 signers fail", inject: []injection{{"mv", "*/etc/ssh/nyyrikki/signers.pub", "fail", 0}}},
+		tcase{name: "step 8 pull.conf fails", inject: []injection{{"mv", "*/etc/ssh/nyyrikki/pull.conf", "fail", 0}}},
+		tcase{name: "re-run, step 8 schedule fails", rerun: true, inert: true, revoke: true, inject: []injection{{"mv", "*/etc/[cp]*/nyyrikki*", "fail", 0}}},
 	)
 	for _, sig := range []string{"INT", "TERM", "HUP"} {
 		cases = append(cases,
@@ -419,6 +469,7 @@ func TestRollback(t *testing.T) {
 			tcase{name: sig + " in step 5 of a re-run", rerun: true, inert: true, inject: []injection{{"userdel", "*ny-owner", sig, 0}}},
 			tcase{name: sig + " during the rollback", inject: []injection{{"visudo", "*", "fail", 0}, {"userdel", "*", sig, 0}}},
 			tcase{name: sig + " twice during the rollback", inject: []injection{{"visudo", "*", sig, 0}, {"userdel", "*", sig, 0}, {"sshd", "-t", sig, 2}}},
+			tcase{name: sig + " in step 8", inject: []injection{{"mv", "*/etc/ssh/nyyrikki/pull.sh", sig, 0}}},
 		)
 	}
 	forEachDistro(t, func(t *testing.T, d distro) {
@@ -430,6 +481,9 @@ func TestRollback(t *testing.T) {
 				if c.rerun {
 					h.mustSetup(v)
 					v = h.values("other")
+					if c.revoke {
+						v.revoked = []string{"ssh-ed25519 " + strings.Fields(h.must("cat /etc/ssh/ssh_host_ed25519_key.pub"))[1]}
+					}
 				}
 				if c.real != "" {
 					h.must(c.real)
@@ -455,6 +509,16 @@ func TestRollback(t *testing.T) {
 					t.Fatalf("something ran after the rollback: %s", r)
 				}
 				after := h.snapshot()
+				if c.revoke {
+					// A revocation is taken away, which a rollback leaves
+					// (docs/08 D13), unless it never happened.
+					q := h.must("ssh-keygen -Q -f /etc/ssh/nyyrikki/revoked.krl /etc/ssh/ssh_host_ed25519_key.pub || true")
+					if failed := c.inject[0].cmd == "ssh-keygen"; failed == strings.Contains(q, "REVOKED") {
+						t.Fatalf("revoked after the rollback: %q", q)
+					}
+					before = dropPath(before, "/etc/ssh/nyyrikki/revoked.krl")
+					after = dropPath(after, "/etc/ssh/nyyrikki/revoked.krl")
+				}
 				if c.rerun {
 					// What step 2 took away from the stale account stays
 					// away, and once step 5 deleted it, it stays deleted.
@@ -509,6 +573,7 @@ func TestKilled(t *testing.T) {
 	type tcase struct {
 		name          string
 		rerun         bool
+		revoke        bool
 		cmd, pattern  string
 		skip          int
 		thenUninstall bool
@@ -526,6 +591,12 @@ func TestKilled(t *testing.T) {
 		{name: "re-run, step 5 before userdel", rerun: true, cmd: "userdel", pattern: "*ny-owner"},
 		{name: "re-run, step 5 before the drop-in", rerun: true, cmd: "mv", pattern: "*/etc/ssh/sshd_config.d/50-nyyrikki.conf", skip: 1},
 		{name: "re-run, step 6", rerun: true, cmd: "visudo", pattern: "*"},
+		// docs/08 D13.
+		{name: "step 3 before signers.pub", cmd: "mv", pattern: "*/etc/ssh/nyyrikki/signers.pub"},
+		{name: "step 8 before pull.sh", cmd: "mv", pattern: "*/etc/ssh/nyyrikki/pull.sh", thenUninstall: true},
+		{name: "step 8 before the schedule", cmd: "mv", pattern: "*/etc/[cp]*/nyyrikki*"},
+		{name: "re-run, step 2 revocation", rerun: true, revoke: true, cmd: "ssh-keygen", pattern: "-q -k -u -f*"},
+		{name: "re-run, step 2 before the KRL is replaced", rerun: true, revoke: true, cmd: "mv", pattern: "*/etc/ssh/nyyrikki/revoked.krl"},
 	}
 	forEachDistro(t, func(t *testing.T, d distro) {
 		for _, c := range cases {
@@ -537,6 +608,9 @@ func TestKilled(t *testing.T) {
 				if c.rerun {
 					h.mustSetup(v)
 					v = h.values("other")
+					if c.revoke {
+						v.revoked = []string{"ssh-ed25519 " + strings.Fields(h.must("cat /etc/ssh/ssh_host_ed25519_key.pub"))[1]}
+					}
 				}
 				h.installShim(c.cmd, c.pattern, "KILL", c.skip, false)
 				r := h.run(served(t, v.lines(), afterTerminator))
@@ -681,7 +755,8 @@ func TestUninstall(t *testing.T) {
 		h.must("rm /etc/ssh/sshd_config.d/99-broken.conf")
 		// A check that fails once the drop-in is gone keeps the revocation
 		// list the running sshd reads, so key logins keep working.
-		h.must("useradd -m -s /bin/sh admin")
+		// "*", not useradd's "!": sshd without PAM (Alpine) refuses a locked account.
+		h.must("useradd -m -s /bin/sh admin && usermod -p '*' admin")
 		h.installShim("sshd", "-t", "fail", 1, false)
 		r = h.setup(v, "--uninstall")
 		h.clearShim("sshd")
@@ -706,7 +781,8 @@ func TestRollbackKeepsRevocationList(t *testing.T) {
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		v := h.values("owner")
-		h.must("useradd -m -s /bin/sh admin")
+		// "*", not useradd's "!": sshd without PAM (Alpine) refuses a locked account.
+		h.must("useradd -m -s /bin/sh admin && usermod -p '*' admin")
 		h.installShim("visudo", "*", "fail", 0, false)
 		h.installShim("sshd", "-t", "fail", 2, false)
 		r := h.setup(v)
@@ -750,20 +826,31 @@ func TestDryRun(t *testing.T) {
 }
 
 // TestManualPage: the files the script writes are the manual page's
-// listing, for the page's own sample values (G9).
+// listing, for the page's own sample values (G9), the trust pull's files
+// included (docs/08 G13): pull.sh as the page's command takes it from
+// the script, and the schedule the host's cron runs.
 func TestManualPage(t *testing.T) {
-	files, data := manualFiles(t)
+	files, fromScript, data := manualFiles(t)
 	check := func(t *testing.T, h *host, withLogind bool) {
 		pristine := h.snapshot()
-		r := h.run(served(t, data, ""))
+		served := served(t, data, "")
+		r := h.run(served)
 		if r.code != 0 {
 			t.Fatalf("setup with the page's data lines: %s", r)
 		}
 		for path, f := range files {
-			logind := strings.HasPrefix(path, "/etc/systemd/")
-			if logind && !withLogind {
+			skip := false
+			switch {
+			case strings.HasPrefix(path, "/etc/systemd/"):
+				skip = !withLogind
+			case path == "/etc/cron.d/nyyrikki":
+				skip = !strings.Contains(r.out, "pull: cron.d")
+			case path == "/etc/periodic/15min/nyyrikki-pull":
+				skip = !strings.Contains(r.out, "pull: periodic")
+			}
+			if skip {
 				if h.exists(path) {
-					t.Errorf("%s written on a host without session kill", path)
+					t.Errorf("%s written on a host where it doesn't apply", path)
 				}
 				continue
 			}
@@ -777,6 +864,21 @@ func TestManualPage(t *testing.T) {
 				t.Errorf("%s differs from docs/setup/ssh-hosts.md:\ngot:\n%s\nwant:\n%s", path, got, want)
 			}
 		}
+		if !strings.Contains(r.out, "pull: cron.d") && !strings.Contains(r.out, "pull: periodic") {
+			t.Errorf("no pull schedule on a host with cron and curl:\n%s", r.out)
+		}
+		// The page's command takes pull.sh from the script, byte for byte.
+		h.must("mkdir -p /root/manual")
+		h.put("/root/manual/setup.sh", served)
+		for path, f := range fromScript {
+			name := path[strings.LastIndex(path, "/")+1:]
+			h.must("cd /root/manual && " + f[1])
+			got := h.must("stat -c '%a %u' " + shellQuote(path) + " && [ \"$(md5sum < /root/manual/" + name + ")\" = \"$(md5sum < " + shellQuote(path) + ")\" ] && echo same")
+			if got != strings.TrimPrefix(f[0], "0")+" 0\nsame\n" {
+				t.Errorf("%s isn't what the page's command takes from the script: %q", path, got)
+			}
+		}
+		h.must("rm -rf /root/manual")
 		// Nothing else: every file the script added is listed, or the KRL.
 		for _, l := range strings.Split(diffSnap(pristine, h.snapshot()), "\n") {
 			if !strings.HasPrefix(l, "+ /") {
@@ -788,7 +890,9 @@ func TestManualPage(t *testing.T) {
 			}
 			// Besides the listing: the KRL, and what useradd makes (the
 			// home's skeleton files, a mail spool on RHEL-family hosts).
-			if _, ok := files[f[0]]; !ok && f[0] != "/etc/ssh/nyyrikki/revoked.krl" && !strings.HasPrefix(f[0], "/home/ny-owner/") && !strings.HasSuffix(f[0], "/mail/ny-owner") {
+			_, listed := files[f[0]]
+			_, taken := fromScript[f[0]]
+			if !listed && !taken && f[0] != "/etc/ssh/nyyrikki/revoked.krl" && !strings.HasPrefix(f[0], "/home/ny-owner/") && !strings.HasSuffix(f[0], "/mail/ny-owner") {
 				t.Errorf("the script wrote %s, which the manual page doesn't list", f[0])
 			}
 		}

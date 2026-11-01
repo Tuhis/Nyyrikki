@@ -29,6 +29,11 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 	q.Add("_pragma", "busy_timeout(5000)")
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "synchronous(FULL)")
+	// Transactions begin immediate, taking the write lock at once: a
+	// deferred one that read first can't write after another connection
+	// committed (SQLITE_BUSY_SNAPSHOT, which busy_timeout doesn't cover), and
+	// a settle was lost that way under load (#50).
+	q.Add("_txlock", "immediate")
 	db, err := sql.Open("sqlite", "file:"+path+"?"+q.Encode())
 	if err != nil {
 		return nil, err

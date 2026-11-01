@@ -238,6 +238,18 @@ the doc.
 - **BusyBox `wget` can't be given a CA file**: its only TLS option is
   `--no-check-certificate`. Use `curl --cacert`.
   ([docs/08](08-ssh-onboarding.md) M6)
+- **BusyBox `tr` has no character classes**: `tr -c '[:print:]' '?'`
+  takes the class as the literal characters `[:print]` and replaces
+  everything else. Write the range: `tr -c ' -~' '?'`.
+  ([docs/08](08-ssh-onboarding.md) §10, SE6)
+- **Not every host has `cmp`**: a minimal Rocky 9 has no `diffutils`.
+  A script that must run there compares small files another way.
+  ([docs/08](08-ssh-onboarding.md) §10, SE6)
+- **A job a non-interactive shell starts with `&` has `SIGINT` and
+  `SIGQUIT` ignored, and a shell started with a signal ignored can't
+  trap it.** A test that sends Ctrl-C to a script it started that way
+  proves nothing; start it detached instead (`docker exec -d`, `setsid`).
+  ([docs/08](08-ssh-onboarding.md) §10, SE6)
 
 **Tooling and dependencies**
 

@@ -416,14 +416,14 @@ func TestTrustBundleNoPrivateKey(t *testing.T) {
 	}
 }
 
-// TestTrustBundleSetupUnchanged: adding the trust path left setup.sh's
-// response as it was.
+// TestTrustBundleSetupUnchanged: adding the trust path left setup.sh a
+// script, unsigned. Its SIGNER_KEY lines are docs/08 D13's, since SE6.
 func TestTrustBundleSetupUnchanged(t *testing.T) {
 	cfg := testConfig(t)
 	keys, _ := testKeys(t, cfg)
 	h, _ := New(cfg, []byte(body), keys, &recAudit{}, nil)
 	w := get(t, h, http.MethodGet, "/hosts/db-1/setup.sh")
-	if w.Code != 200 || strings.Contains(w.Body.String(), SignatureLine) || strings.Contains(w.Body.String(), "SIGNER_KEY") ||
+	if w.Code != 200 || strings.Contains(w.Body.String(), SignatureLine) ||
 		w.Header().Get("Content-Type") != "text/x-shellscript; charset=utf-8" {
 		t.Fatalf("setup.sh changed: %d %v", w.Code, w.Header())
 	}

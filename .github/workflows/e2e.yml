@@ -31,7 +31,7 @@ jobs:
     # As ci.yml's RUNNER POOL, with RUNNER_LABEL_DISK: kind needs dind on a
     # real filesystem, so the e2e has a pool of its own.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL_DISK || 'ubuntu-latest' }}
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -52,4 +52,4 @@ jobs:
           # self-hosted runner dockerd is a sidecar that sees only the work
           # volume, so they go there.
           TMPDIR: ${{ runner.temp }}
-        run: go test -tags e2e -count=1 -timeout 40m -v ./test/e2e/
+        run: go test -tags e2e -count=1 -timeout 50m -v ./test/e2e/
