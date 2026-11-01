@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/Tuhis/Nyyrikki/compare/v0.4.0...v0.5.0) (2026-11-01)
+
+
+### Features
+
+* **deploy:** accept OpenSSH 8.9 and Ubuntu 22.04 hosts (docs/07 OD7) ([#55](https://github.com/Tuhis/Nyyrikki/issues/55)) ([e514341](https://github.com/Tuhis/Nyyrikki/commit/e514341b63ec7305d2cb8e2b8684c1827fabd8ac))
+* **deploy:** sign releases key-less with cosign, with SBOM and provenance (docs/09 PB3) ([#54](https://github.com/Tuhis/Nyyrikki/issues/54)) ([0958e05](https://github.com/Tuhis/Nyyrikki/commit/0958e05350eb58a8e2b1a52df4123c9a4db10995))
+
 ## [0.4.0](https://github.com/Tuhis/Nyyrikki/compare/v0.3.0...v0.4.0) (2026-11-01)
 
 
