@@ -37,6 +37,9 @@ type fakeDecision struct {
 	// block, if set, holds the call until it is closed or the caller
 	// goes away.
 	block chan struct{}
+	// beforeIssue, if set, runs on the call's goroutine just before the
+	// certificate is issued.
+	beforeIssue func()
 }
 
 func (f *fakeDecision) DecideEnroll(ctx context.Context, r decision.EnrollRequest, issue func(context.Context, string) error) error {
@@ -53,6 +56,9 @@ func (f *fakeDecision) DecideEnroll(ctx context.Context, r decision.EnrollReques
 	}
 	if err != nil {
 		return err
+	}
+	if f.beforeIssue != nil {
+		f.beforeIssue()
 	}
 	return issue(ctx, "apr_test")
 }
@@ -617,5 +623,71 @@ func TestEnrollRevokedHostKey(t *testing.T) {
 	}
 	if w := env.post(t, "/hosts/db-1/enroll", AuthScheme+" "+tok, enrollBody(newHostKey(t), false)); w.Code != 200 || env.dec.prompts() != 1 {
 		t.Fatalf("the token was used up: %d %q", w.Code, w.Body.String())
+	}
+}
+
+// The body's read deadline must not outlive the body: on HTTP/1.1 net/http
+// keeps reading the connection in the background to notice a client that
+// goes away, and a deadline left in place cancels the request mid-approval
+// (round 2 of #47).
+func TestEnrollSlowApprovalHTTP1(t *testing.T) {
+	old := enrollBodyTimeout
+	enrollBodyTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { enrollBodyTimeout = old })
+	env := newEnrollEnv(t)
+	env.dec.block = make(chan struct{})
+	srv := httptest.NewUnstartedServer(env.mux)
+	srv.EnableHTTP2 = false
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	client := srv.Client()
+	client.Transport.(*http.Transport).ForceAttemptHTTP2 = false
+
+	tok := env.mint(t, "db-1", env.now)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/hosts/db-1/enroll", strings.NewReader(enrollBody(newHostKey(t), false)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", AuthScheme+" "+tok)
+	type result struct {
+		code  int
+		proto string
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		resp, err := client.Do(req)
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		done <- result{code: resp.StatusCode, proto: resp.Proto}
+	}()
+	time.Sleep(4 * enrollBodyTimeout) // the approver takes longer than the body deadline
+	close(env.dec.block)
+	r := <-done
+	if r.err != nil || r.code != 200 || r.proto != "HTTP/1.1" {
+		t.Fatalf("slow approval over HTTP/1.1: %+v, detail %q", r, env.lastDetail())
+	}
+}
+
+// A token that expires while the approver decides still gets its
+// certificate (it was approved and is audited), but the check afterwards
+// is refused as expired and dials nothing (round 2 of #47).
+func TestEnrollTokenExpiresDuringApproval(t *testing.T) {
+	env := newEnrollEnv(t)
+	tok := env.mint(t, "db-1", env.now)
+	start := env.now
+	env.dec.beforeIssue = func() { env.now = start.Add(TokenLife + time.Minute) }
+	w := env.post(t, "/hosts/db-1/enroll", AuthScheme+" "+tok, enrollBody(newHostKey(t), false))
+	if w.Code != 200 {
+		t.Fatalf("enroll: %d %q", w.Code, w.Body.String())
+	}
+	parseCertResponse(t, w.Body.String())
+	w = env.post(t, "/hosts/db-1/enroll/check", AuthScheme+" "+tok, "")
+	if w.Code != http.StatusUnauthorized || env.lastDetail() != detailTokenExpired || env.prober.calls != 0 {
+		t.Fatalf("check: %d %q, detail %q, probes %d", w.Code, w.Body.String(), env.lastDetail(), env.prober.calls)
 	}
 }

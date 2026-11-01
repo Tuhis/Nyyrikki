@@ -34,9 +34,11 @@ const (
 	AuthScheme = "Nyyrikki-Enroll"
 	// maxEnrollBody bounds the enrollment's data lines (docs/08 §6).
 	maxEnrollBody = 4 << 10
-	// enrollBodyTimeout bounds the read of an enrollment body (round 1 of #47).
-	enrollBodyTimeout = 30 * time.Second
 )
+
+// enrollBodyTimeout bounds the read of an enrollment body (round 1 of
+// #47); a variable for tests.
+var enrollBodyTimeout = 30 * time.Second
 
 // Token refusals, each a 401 and an audit detail (docs/08 D6, G6). A
 // forged, truncated or other target's token is token_invalid: the
@@ -283,8 +285,14 @@ func (e *Enroll) serveEnroll(w http.ResponseWriter, r *http.Request) {
 	// Bound how long a client may take over its body; the claim below
 	// refuses an expired token whatever the deadline (round 1 of #47).
 	// Not every ResponseWriter supports deadlines, so the error is ignored.
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(enrollBodyTimeout))
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(enrollBodyTimeout))
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxEnrollBody))
+	// Cleared once the body is read, so the deadline can't reach the
+	// approval wait. net/http (Go 1.26) clears it itself when it starts
+	// its background read after the body; this doesn't rely on that
+	// (round 2 of #47, TestEnrollSlowApprovalHTTP1).
+	_ = rc.SetReadDeadline(time.Time{})
 	if err != nil {
 		e.refuse(w, r, rec, http.StatusBadRequest, detailBadBody)
 		return
@@ -300,7 +308,7 @@ func (e *Enroll) serveEnroll(w http.ResponseWriter, r *http.Request) {
 	// (round 1 of #47).
 	for _, k := range e.c.Config.SSH.RevokedHostKeys {
 		if pk, err := config.ParsePublicKey(k); err == nil && bytes.Equal(pk.Marshal(), hostKey.Marshal()) {
-			e.refuse(w, r, rec, http.StatusBadRequest, "host_key_revoked")
+			e.refuse(w, r, rec, http.StatusBadRequest, sshtarget.DetailHostKeyRevoked)
 			return
 		}
 	}
