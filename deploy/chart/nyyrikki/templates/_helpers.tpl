@@ -36,7 +36,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "nyyrikki.generateCA" -}}
 {{- if not (or (kindIs "invalid" .Values.ssh.generateCA) (kindIs "bool" .Values.ssh.generateCA)) -}}
 {{- /* A quoted value would otherwise fall back to the default and render the hook's create grant (round 1 of #42). */ -}}
-{{- fail "ssh.generateCA must be true, false or empty, not a string" -}}
+{{- fail "ssh.generateCA must be true, false or null (left unset), not a string or number" -}}
 {{- end -}}
 {{- $gen := and (eq (include "nyyrikki.hasSSH" .) "true") (ne (include "nyyrikki.sshCompat" .) "true") -}}
 {{- if kindIs "bool" .Values.ssh.generateCA -}}
@@ -54,7 +54,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/* "true" when the rotation CronJobs render (docs/08 D16): ssh.caJobs, by default the value of generateCA; only with an SSH target. */}}
 {{- define "nyyrikki.caJobs" -}}
 {{- if not (or (kindIs "invalid" .Values.ssh.caJobs) (kindIs "bool" .Values.ssh.caJobs)) -}}
-{{- fail "ssh.caJobs must be true, false or empty, not a string" -}}
+{{- fail "ssh.caJobs must be true, false or null (left unset), not a string or number" -}}
 {{- end -}}
 {{- $jobs := eq (include "nyyrikki.generateCA" .) "true" -}}
 {{- if kindIs "bool" .Values.ssh.caJobs -}}

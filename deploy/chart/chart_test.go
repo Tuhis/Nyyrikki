@@ -739,7 +739,7 @@ func TestChartSSHCAFlagsMustBeBool(t *testing.T) {
 	for _, key := range []string{"ssh.generateCA", "ssh.caJobs"} {
 		for _, v := range []string{"false", "true", "yes"} {
 			out, err := helmTemplate(t, append(append([]string(nil), sshSet...), "--set-string", key+"="+v)...)
-			if err == nil || !strings.Contains(out, key+" must be true, false or empty") {
+			if err == nil || !strings.Contains(out, key+" must be true, false or null (left unset)") {
 				t.Errorf("%s=%q as a string: err %v\n%s", key, v, err, out)
 			}
 		}
