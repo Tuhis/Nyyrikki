@@ -257,9 +257,11 @@ already reports, licenses and signs.
 - **PB3 can't be fully verified until the next release.** The verify
   steps make a broken signature fail the job instead of shipping
   silently.
-- **The quickstart's Keycloak runs `start-dev` with `admin/admin`** on a
-  docker network. It isn't reachable from outside the host, but it is a
-  development setup and the script says so.
+- **The quickstart's Keycloak runs `start-dev`** on a docker network.
+  It isn't reachable from outside the host, but it is a development
+  setup and the script says so. *Revised 2026-11-01 (PB5)*: its admin
+  password and the owner's are random, kept `0600` under
+  `dev/.quickstart/`, not `admin/admin` (the e2e keeps `admin`).
 - **A public repository invites drive-by PRs** that the design-first
   process will turn away. CONTRIBUTING.md already says so.
 
