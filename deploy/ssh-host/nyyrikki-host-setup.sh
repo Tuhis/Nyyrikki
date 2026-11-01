@@ -2256,6 +2256,7 @@ ny_enroll_abort() {
 			warn "restoring the earlier host certificate in place of the one this run installed"
 		else
 			NY_CERT_ON=0
+			[ "$NY_CERT_PREV" = 0 ] || warn "can't put the earlier host certificate back: the host is no longer enrolled"
 			warn "removing the host certificate this run installed, and its HostCertificate line"
 			rm -f -- "$NY_HOSTCERT" || warn "can't remove $NY_HOSTCERT"
 		fi
@@ -2436,8 +2437,13 @@ ny_status_keys() {
 	while IFS= read -r ny_sk_l; do
 		printf '%s\n' "$ny_sk_l" >"$NY_WORK/s.pub" 2>/dev/null || continue
 		ny_sk_fp=$(ssh-keygen -l -f "$NY_WORK/s.pub" 2>/dev/null) || ny_sk_fp="(doesn't parse)"
-		if [ -f "$NY_KRL" ] && ! ssh-keygen -Q -f "$NY_KRL" "$NY_WORK/s.pub" >/dev/null 2>&1; then
-			ny_sk_fp="$ny_sk_fp  REVOKED by $NY_KRL"
+		if [ -f "$NY_KRL" ]; then
+			ssh-keygen -Q -f "$NY_KRL" "$NY_WORK/s.pub" >/dev/null 2>&1
+			case $? in
+			0) ;;
+			1) ny_sk_fp="$ny_sk_fp  REVOKED by $NY_KRL" ;;
+			*) ny_sk_fp="$ny_sk_fp  (can't check against $NY_KRL)" ;;
+			esac
 		fi
 		say "    $ny_sk_fp"
 	done <"$2"
@@ -2467,9 +2473,12 @@ ny_status() {
 	if [ -f "$NY_KRL" ]; then
 		for ny_sk_k in $NY_CA_B64 $NY_SIGNER_B64; do
 			printf 'ssh-ed25519 %s\n' "$ny_sk_k" >"$NY_WORK/s.pub" 2>/dev/null || continue
-			if ! ssh-keygen -Q -f "$NY_KRL" "$NY_WORK/s.pub" >/dev/null 2>&1; then
-				say "this script trusts $(ssh-keygen -l -f "$NY_WORK/s.pub" 2>/dev/null | cut -d' ' -f2), which $NY_KRL lists: REVOKED; a setup run refuses it"
-			fi
+			ssh-keygen -Q -f "$NY_KRL" "$NY_WORK/s.pub" >/dev/null 2>&1
+			case $? in
+			0) ;;
+			1) say "this script trusts $(ssh-keygen -l -f "$NY_WORK/s.pub" 2>/dev/null | cut -d' ' -f2), which $NY_KRL lists: REVOKED; a setup run refuses it" ;;
+			*) say "can't check this script's keys against $NY_KRL" ;;
+			esac
 		done
 	fi
 	if [ -f "$NY_CRON" ]; then
