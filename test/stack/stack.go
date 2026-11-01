@@ -114,8 +114,8 @@ func (c Config) ctx() context.Context {
 	return context.Background()
 }
 
-// sleep waits for d, or less if the config's context ends.
-func (c Config) sleep(d time.Duration) error {
+// Sleep waits for d, or less if the config's context ends (with its error).
+func (c Config) Sleep(d time.Duration) error {
 	select {
 	case <-c.ctx().Done():
 		return c.ctx().Err()
@@ -597,7 +597,7 @@ func (s *Stack) WaitCanonical(within time.Duration) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("canonical URL not reachable: %v", err)
 		}
-		if err := s.sleep(time.Second); err != nil {
+		if err := s.Sleep(time.Second); err != nil {
 			return err
 		}
 	}

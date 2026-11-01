@@ -48,7 +48,7 @@ func (s *Stack) ConfigureKeycloak(extraClients ...map[string]any) error {
 			out, _ := exec.Command("docker", "logs", "--tail", "50", s.KeycloakContainer()).CombinedOutput()
 			return fmt.Errorf("keycloak did not start: %v\n%s", err, out)
 		}
-		if err := s.sleep(2 * time.Second); err != nil {
+		if err := s.Sleep(2 * time.Second); err != nil {
 			return err
 		}
 	}

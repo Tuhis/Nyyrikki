@@ -254,7 +254,7 @@ func build(cfg stack.Config, token []byte, approver int64) (*stack.Stack, error)
 		// The chart's default Bot API URL is the real one.
 		func() error { return s.Install(s.Values(stack.Values{ApproverID: approver}), false) },
 		func() error { return startAgent(s) },
-		func() error { return waitReady(s) },
+		func() error { return waitReady(s, 3*time.Minute) },
 		func() error { return s.WaitCanonical(90 * time.Second) },
 		func() error { return checkAgent(s) },
 	} {
@@ -387,9 +387,9 @@ const pollerStoppedLog = "telegram poller stopped"
 // poller runs; a token Telegram refuses, or a second program polling the
 // same bot, stops the poller for good (docs/05 D2) and nyyrikkid never
 // becomes ready, so that is reported at once.
-func waitReady(s *stack.Stack) error {
+func waitReady(s *stack.Stack, within time.Duration) error {
 	logf("waiting for nyyrikkid to be ready (it polls Telegram)")
-	deadline := time.Now().Add(3 * time.Minute)
+	deadline := time.Now().Add(within)
 	for {
 		out, _ := s.Kubectl("-n", stack.Namespace, "get", "deploy", stack.Deployment, "-o", "jsonpath={.status.readyReplicas}")
 		if strings.TrimSpace(out) == "1" {
@@ -400,12 +400,10 @@ func waitReady(s *stack.Stack) error {
 			return errors.New("nyyrikkid stopped polling Telegram: Telegram refused the bot token, or another program polls the same bot (only one may)")
 		}
 		if time.Now().After(deadline) {
-			return errors.New("nyyrikkid did not become ready within 3 minutes")
+			return fmt.Errorf("nyyrikkid did not become ready within %v", within)
 		}
-		select {
-		case <-s.Context.Done():
-			return s.Context.Err()
-		case <-time.After(3 * time.Second):
+		if err := s.Sleep(3 * time.Second); err != nil {
+			return err
 		}
 	}
 }

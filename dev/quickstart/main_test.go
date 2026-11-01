@@ -3,10 +3,16 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Tuhis/Nyyrikki/test/stack"
 )
 
 const testToken = "123456789:AAtestTESTtestTESTtestTESTtestTESTte"
@@ -92,5 +98,23 @@ func TestBotErrorsHideTheToken(t *testing.T) {
 	fakeBotAPI(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
 	if _, err := getMe(testToken); err == nil || strings.Contains(err.Error(), testToken) || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("getMe on 401: %v", err)
+	}
+}
+
+// waitReady works on a stack without a context, as the stack's own waits
+// do: it runs out its time and says so, rather than panicking.
+func TestWaitReadyWithoutContext(t *testing.T) {
+	s := &stack.Stack{Kubeconfig: filepath.Join(t.TempDir(), "none")}
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = errors.New(fmt.Sprint("panic: ", r))
+			}
+		}()
+		err = waitReady(s, time.Second)
+	}()
+	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
+		t.Fatalf("waitReady without a context: %v", err)
 	}
 }
