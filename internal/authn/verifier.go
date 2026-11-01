@@ -276,7 +276,7 @@ func (v *Verifier) verifyProof(r *http.Request, token, jkt, wantHTU string) erro
 	if len(proofs) != 1 {
 		return fail("want exactly one DPoP header, got %d", len(proofs))
 	}
-	jws, err := jose.ParseSigned(proofs[0], allowedAlgs)
+	jws, err := jose.ParseSignedCompact(proofs[0], allowedAlgs)
 	if err != nil {
 		return fail("proof: %v", err)
 	}

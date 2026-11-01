@@ -443,7 +443,7 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 }
 
 func proofThumbprint(proof, method, htu string) (string, error) {
-	jws, err := jose.ParseSigned(proof, []jose.SignatureAlgorithm{jose.ES256})
+	jws, err := jose.ParseSignedCompact(proof, []jose.SignatureAlgorithm{jose.ES256})
 	if err != nil {
 		return "", err
 	}
