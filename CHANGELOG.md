@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/Tuhis/Nyyrikki/compare/v0.3.0...v0.4.0) (2026-11-01)
+
+
+### Features
+
+* **cli:** offline sessions for nyyrikki login (OD18) ([#41](https://github.com/Tuhis/Nyyrikki/issues/41)) ([0abec49](https://github.com/Tuhis/Nyyrikki/commit/0abec492a50ade63213034ca69876e6b36565ebd))
+* **credentials:** signed SSH trust bundle at /hosts/&lt;target&gt;/trust (docs/08 SE3) ([#45](https://github.com/Tuhis/Nyyrikki/issues/45)) ([3a1e53c](https://github.com/Tuhis/Nyyrikki/commit/3a1e53c4bc0d343e25dd565a34c9cea9f0d66f98))
+* **credentials:** SSH CA keys from one Secret, made by a hook, rotated in place (docs/08 SE1) ([#42](https://github.com/Tuhis/Nyyrikki/issues/42)) ([6853787](https://github.com/Tuhis/Nyyrikki/commit/68537871a4f1b853e0b4006629061c1cebff883a))
+* **deploy:** SSH host enrollment and trust pull in the setup script, setup docs (docs/08 SE6) ([#50](https://github.com/Tuhis/Nyyrikki/issues/50)) ([8f08181](https://github.com/Tuhis/Nyyrikki/commit/8f08181895a438c364aed378236cdc1b7bb26963))
+* **elevation:** SSH defaults, target groups, global host CAs and nyyrikki ssh (docs/08 SE2) ([#43](https://github.com/Tuhis/Nyyrikki/issues/43)) ([e39159d](https://github.com/Tuhis/Nyyrikki/commit/e39159d84136c6aed51a2039ba0d040d6c7990ab))
+* **gateway:** SSH host enrollment with one Telegram tap (docs/08 SE5) ([#47](https://github.com/Tuhis/Nyyrikki/issues/47)) ([1bf594d](https://github.com/Tuhis/Nyyrikki/commit/1bf594d00163baccf56105ed440a4d912acda9b7))
+* **gateway:** trust Nyyrikki's host CA and check SSH hosts before approval (docs/08 SE4) ([#46](https://github.com/Tuhis/Nyyrikki/issues/46)) ([8d61ee3](https://github.com/Tuhis/Nyyrikki/commit/8d61ee38006f7f72a70da5b07a22f719bc136719))
+
 ## [0.3.0](https://github.com/Tuhis/Nyyrikki/compare/v0.2.1...v0.3.0) (2026-10-30)
 
 
