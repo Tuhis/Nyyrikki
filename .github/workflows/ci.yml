@@ -76,6 +76,11 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Gates
         run: scripts/gates.sh
+      - name: CLI licence notices, as the release packs them
+        # docs/09 D3: the release's merge as this non-root user, so a
+        # merge that only works as root fails here, not in a release
+        # (review of #52).
+        run: scripts/cli-licenses.sh "$RUNNER_TEMP/nyyrikki-licenses.tar.gz"
       - name: gates-selftest
         # Every gate must fail on its canary (docs/01 §5.6, G4).
         run: scripts/gates-selftest.sh

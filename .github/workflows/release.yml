@@ -61,6 +61,17 @@ jobs:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v3.1.4
+      # The CLI's licence notices (docs/09 D3, §5.3), before the image is
+      # pushed: a failure here (the module proxy, an empty set) stops the
+      # release before anything is published. The same go-licenses as the
+      # image's build stage; CI runs the same script.
+      - name: CLI licence notices
+        run: |
+          GO_LICENSES_VERSION=$(sed -n 's/^ARG GO_LICENSES_VERSION=//p' Dockerfile)
+          [[ $GO_LICENSES_VERSION == v* ]] || { echo "no GO_LICENSES_VERSION in Dockerfile"; exit 1; }
+          go install "github.com/google/go-licenses/v2@$GO_LICENSES_VERSION"
+          mkdir dist
+          PATH="$(go env GOPATH)/bin:$PATH" scripts/cli-licenses.sh dist/nyyrikki-licenses.tar.gz
       # The image first: if it fails, nothing that points at it is
       # published.
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
@@ -106,27 +117,10 @@ jobs:
           CGO_ENABLED: "0"
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir dist
           for os in linux darwin; do for arch in amd64 arm64; do
             GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
               -o "dist/nyyrikki-$os-$arch" ./cmd/nyyrikki
           done; done
-          # The CLI's licence notices (docs/09 D3, §5.3), with the same
-          # go-licenses as the image's build stage. save-licenses.sh fails
-          # on an empty set; the archive is checked again once packed.
-          GO_LICENSES_VERSION=$(sed -n 's/^ARG GO_LICENSES_VERSION=//p' Dockerfile)
-          [[ $GO_LICENSES_VERSION == v* ]] || { echo "no GO_LICENSES_VERSION in Dockerfile"; exit 1; }
-          go install "github.com/google/go-licenses/v2@$GO_LICENSES_VERSION"
-          # Every platform the CLI ships for, merged: their package sets
-          # can differ.
-          for os in linux darwin; do for arch in amd64 arm64; do
-            GOOS=$os GOARCH=$arch PATH="$(go env GOPATH)/bin:$PATH" \
-              scripts/save-licenses.sh ./cmd/nyyrikki "licenses-$os-$arch"
-            mkdir -p licenses && cp -R "licenses-$os-$arch/." licenses/
-          done; done
-          tar -czf dist/nyyrikki-licenses.tar.gz licenses
-          n=$(tar -tzf dist/nyyrikki-licenses.tar.gz | grep -vc '/$' || true)
-          [ "$n" -gt 3 ] || { echo "nyyrikki-licenses.tar.gz holds only $n files"; exit 1; }
           helm package deploy/chart/nyyrikki --version "$VERSION" --app-version "$VERSION" -d dist
           # Also as an OCI chart, for GitOps installs by version (docs/06 D6).
           printf '%s' "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
