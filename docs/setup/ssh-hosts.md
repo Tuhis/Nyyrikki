@@ -524,6 +524,18 @@ host since the stage, so its holder can do what a `user-ca` holder can):
    curl -fsSL https://nyyrikki.example.com/hosts/db-1/setup.sh | sudo sh -s -- --reset-pull-state
    ```
 
+   If the setup refuses because the host's revocation list lists a key
+   the values trust (the leaked key can have revoked the staged one
+   through a bundle), rebuild the list from the keys that should be
+   revoked, the `ssh.revokedUserCAKeys` and any you added by hand, then
+   run the setup again:
+
+   ```sh
+   ssh-keygen -k -f /etc/ssh/nyyrikki/revoked.krl.new revoked-1.pub revoked-2.pub
+   chmod 0644 /etc/ssh/nyyrikki/revoked.krl.new
+   mv /etc/ssh/nyyrikki/revoked.krl.new /etc/ssh/nyyrikki/revoked.krl
+   ```
+
 The pull recovers a host from the revocation of extra keys, not from a
 leak of a key that was ever a signer. `--status` and the `logger` lines
 show a host whose signers changed unexpectedly.
