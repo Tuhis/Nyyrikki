@@ -469,12 +469,15 @@ type sender struct {
 	FirstName string
 }
 
+// String shows what Telegram vouches for first, the user ID and the
+// @username, and the name the sender chose last, quoted, so that a name
+// such as `Ann (@ann), user ID 42` can't pass for another account.
 func (s sender) String() string {
-	name := printable(s.FirstName)
+	user := "(no username)"
 	if s.Username != "" {
-		name += " (@" + printable(s.Username) + ")"
+		user = "@" + printable(s.Username)
 	}
-	return fmt.Sprintf("%s, user ID %d", strings.TrimSpace(name), s.ID)
+	return fmt.Sprintf("user ID %d, %s, calls themself %s", s.ID, user, strconv.Quote(printable(s.FirstName)))
 }
 
 // printable keeps what is safe to show on the human's terminal: anyone
@@ -552,7 +555,9 @@ func pickApprover(token, bot string) (int64, error) {
 		return 0, fmt.Errorf("no terminal to ask which of these is you; set NYYRIKKI_QUICKSTART_TELEGRAM_USER to its user ID:\n%s", list.String())
 	}
 	defer tty.Close()
-	fmt.Fprintf(tty, "These have written to @%s. Nyyrikki will obey the taps of the one you pick:\n%s", bot, list.String())
+	fmt.Fprintf(tty, "These have written to @%s. Nyyrikki will obey the taps of the one you pick:\n%s"+
+		"Compare the @username with the one in your own Telegram settings (Settings, your profile).\n"+
+		"The quoted name is whatever the sender chose; anyone can call themself anything.\n", bot, list.String())
 	if len(who) == 1 {
 		fmt.Fprint(tty, "Is that you? [y/N] ")
 	} else {

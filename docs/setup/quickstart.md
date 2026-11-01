@@ -50,7 +50,10 @@ clipboard. Use a terminal that ignores what you don't want.
    **Never use the bot of a real deployment.**
 2. Send the bot any message from your own Telegram account. `up` reads
    who has written to the bot and asks you which one is you. Nyyrikki
-   then obeys only that account's taps.
+   then obeys only that account's taps. Anyone can write to a bot and
+   call themself anything, so go by the user ID and the `@username`
+   Telegram reports, and compare the username with the one in your own
+   Telegram settings.
 
 ## Up
 

@@ -36,21 +36,33 @@ func TestSenders(t *testing.T) {
 			{"update_id":2,"message":{"from":{"id":7,"is_bot":true,"first_name":"Other bot"}}},
 			{"update_id":3,"callback_query":{"from":{"id":99}}},
 			{"update_id":4,"message":{"from":{"id":42,"first_name":"Ann"}}},
-			{"update_id":5,"message":{"from":{"id":43,"first_name":"Bob\u001b]52;c;cHduZWQ=\u0007"}}}
+			{"update_id":5,"message":{"from":{"id":43,"first_name":"Bob\u001b]52;c;cHduZWQ=\u0007"}}},
+			{"update_id":6,"message":{"from":{"id":666,"first_name":"Ann (@ann), user ID 42\"","username":"mallory"}}}
 		]}`))
 	})
 	got, err := senders(testToken)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].ID != 42 || got[1].ID != 43 {
+	if len(got) != 3 || got[0].ID != 42 || got[1].ID != 43 || got[2].ID != 666 {
 		t.Fatalf("senders: %+v", got)
 	}
 	if s := got[1].String(); strings.ContainsAny(s, "\x1b\x07") {
 		t.Fatalf("a terminal escape reaches the terminal: %q", s)
 	}
-	if s := got[0].String(); s != "Ann (@ann), user ID 42" {
-		t.Fatalf("shown as %q", s)
+	// What Telegram checked comes first; the name the sender chose comes
+	// last, quoted, so it can't pass for another account's ID or username.
+	for _, c := range []struct {
+		s    sender
+		want string
+	}{
+		{got[0], `user ID 42, @ann, calls themself "Ann"`},
+		{got[1], `user ID 43, (no username), calls themself "Bob]52;c;cHduZWQ="`},
+		{got[2], `user ID 666, @mallory, calls themself "Ann (@ann), user ID 42\""`},
+	} {
+		if s := c.s.String(); s != c.want {
+			t.Errorf("shown as %s, want %s", s, c.want)
+		}
 	}
 }
 
