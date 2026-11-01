@@ -273,6 +273,64 @@ func TestHostSetupServed(t *testing.T) {
 	}
 }
 
+// TestTrustBundleServed covers docs/08 D4 on the live server: no token,
+// data lines then the signature line and an SSHSIG signature, the same
+// refusals as setup.sh, each fetch audited, and the path absent when
+// there is no SSH target.
+func TestTrustBundleServed(t *testing.T) {
+	caPEM, caPub := newCA(t)
+	host := startSSHHost(t, caPub)
+	e := servertest.Start(t, withSSH(t, host, caPEM, caPub))
+	resp, err := e.Client.Get(e.URL() + "/hosts/db-1/trust")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	signer := "SIGNER_KEY=" + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(caPub))) + "\n"
+	if resp.StatusCode != 200 || !bytes.HasPrefix(b, []byte("TARGET=db-1\n")) || !bytes.Contains(b, []byte(signer)) ||
+		!bytes.Contains(b, []byte("\nNYYRIKKI_SIGNATURE\n-----BEGIN SSH SIGNATURE-----\n")) || !bytes.HasSuffix(b, []byte("-----END SSH SIGNATURE-----\n")) {
+		t.Fatalf("status %d, body:\n%s", resp.StatusCode, b)
+	}
+	served := 0
+	for _, rec := range e.Audit.Records() {
+		if ts, _ := rec["targets"].([]any); rec["kind"] == codes.KindHostTrustServed && len(ts) == 1 && ts[0] == "db-1" &&
+			strings.Contains(fmt.Sprint(rec["detail"]), " issued ") {
+			served++
+		}
+	}
+	if served != 1 {
+		t.Fatalf("%d host_trust_served records", served)
+	}
+	for path, want := range map[string]int{"/hosts/prod/trust": 404, "/hosts/db-1/trust?x=1": 400} {
+		resp, err := e.Client.Get(e.URL() + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Errorf("%s: %d, want %d", path, resp.StatusCode, want)
+		}
+	}
+	resp, err = e.Client.Post(e.URL()+"/hosts/db-1/trust", "text/plain", nil)
+	if err == nil {
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("POST: %d", resp.StatusCode)
+		}
+	}
+
+	plain := servertest.Start(t)
+	resp, err = plain.Client.Get(plain.URL() + "/hosts/prod/trust")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("without SSH targets: %d", resp.StatusCode)
+	}
+}
+
 // TestSSHHiddenTargetLooksUnknown covers docs/02 D5 for SSH (review round
 // 1, finding 4): an SSH target the agent may not see answers exactly as a
 // name that doesn't exist, so the shape of args can't probe for one.

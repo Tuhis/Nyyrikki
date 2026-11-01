@@ -145,11 +145,15 @@ func TestUnauthenticated(t *testing.T) {
 	if prm["resource"] != e.URL()+"/mcp" || prm["authorization_servers"].([]any)[0] != e.AS.Issuer() {
 		t.Fatalf("metadata %v", prm)
 	}
-	// Anything else on the main port is 404.
-	resp, _ = e.Client.Get(e.URL() + "/debug/pprof/")
-	resp.Body.Close()
-	if resp.StatusCode != 404 {
-		t.Fatalf("unexpected handler: %d", resp.StatusCode)
+	// Anything else on the main port is 404 (docs/01 D10: the list is
+	// complete). Without an SSH target, so are /hosts/<t>/setup.sh
+	// (docs/07 D16) and /hosts/<t>/trust (docs/08 D4).
+	for _, p := range []string{"/debug/pprof/", "/hosts/prod/setup.sh", "/hosts/prod/trust", "/hosts/prod/enroll", "/metrics"} {
+		resp, _ = e.Client.Get(e.URL() + p)
+		resp.Body.Close()
+		if resp.StatusCode != 404 {
+			t.Fatalf("unexpected handler at %s: %d", p, resp.StatusCode)
+		}
 	}
 }
 

@@ -284,7 +284,8 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 	mux.Handle("POST /mcp", verifier.Middleware(cfg.MCPURL(), mcpSrv.Handler()))
 	mux.Handle("GET /stream", verifier.Middleware(cfg.StreamURL(), stream.NewHandler(point, runners, verifier, aw, log)))
 	if sshRunner != nil {
-		// docs/07 D16: no authentication; a host has no token.
+		// docs/07 D16, docs/08 D4: setup.sh and trust, no authentication;
+		// a host has no token.
 		setup, err := hostsetup.New(cfg, sshhost.Script, sshKeys, aw, log)
 		if err != nil {
 			return err
