@@ -32,7 +32,11 @@ func (s *Stack) ConfigureKeycloak(extraClients ...map[string]any) error {
 	hc := s.HTTPClient()
 	deadline := time.Now().Add(4 * time.Minute)
 	for {
-		resp, err := hc.Get(s.KeycloakBase() + "/realms/master/.well-known/openid-configuration")
+		req, err := http.NewRequestWithContext(s.ctx(), "GET", s.KeycloakBase()+"/realms/master/.well-known/openid-configuration", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := hc.Do(req)
 		if err == nil && resp.StatusCode == 200 {
 			resp.Body.Close()
 			break
@@ -44,7 +48,9 @@ func (s *Stack) ConfigureKeycloak(extraClients ...map[string]any) error {
 			out, _ := exec.Command("docker", "logs", "--tail", "50", s.KeycloakContainer()).CombinedOutput()
 			return fmt.Errorf("keycloak did not start: %v\n%s", err, out)
 		}
-		time.Sleep(2 * time.Second)
+		if err := s.sleep(2 * time.Second); err != nil {
+			return err
+		}
 	}
 	if _, err := s.Admin("POST", "/admin/realms", map[string]any{
 		"realm": Realm, "enabled": true, "accessTokenLifespan": 300,
@@ -227,7 +233,12 @@ func (s *Stack) configureDCR() error {
 // AdminLogin signs in to the master realm as admin.
 func (s *Stack) AdminLogin() (string, error) {
 	form := url.Values{"grant_type": {"password"}, "client_id": {"admin-cli"}, "username": {"admin"}, "password": {s.KeycloakAdminPassword}}
-	resp, err := s.HTTPClient().PostForm(s.KeycloakBase()+"/realms/master/protocol/openid-connect/token", form)
+	req, err := http.NewRequestWithContext(s.ctx(), "POST", s.KeycloakBase()+"/realms/master/protocol/openid-connect/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := s.HTTPClient().Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -251,7 +262,7 @@ func (s *Stack) Admin(method, path string, body any) ([]byte, error) {
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, s.KeycloakBase()+path, rd)
+	req, err := http.NewRequestWithContext(s.ctx(), method, s.KeycloakBase()+path, rd)
 	if err != nil {
 		return nil, err
 	}

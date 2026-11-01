@@ -21,6 +21,7 @@ package stack
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -31,6 +32,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -99,6 +101,26 @@ type Config struct {
 	ExtraContainers []string
 	// Logf reports progress.
 	Logf func(format string, args ...any)
+	// Context, if set, ends the stack's commands and waits when it is
+	// done (the quickstart's Ctrl-C). Teardown ignores it.
+	Context context.Context
+}
+
+func (c Config) ctx() context.Context {
+	if c.Context != nil {
+		return c.Context
+	}
+	return context.Background()
+}
+
+// sleep waits for d, or less if the config's context ends.
+func (c Config) sleep(d time.Duration) error {
+	select {
+	case <-c.ctx().Done():
+		return c.ctx().Err()
+	case <-time.After(d):
+		return nil
+	}
 }
 
 // Network is the docker network's name.
@@ -146,11 +168,11 @@ type Stack struct {
 // Run runs a command and returns its combined output. The error carries
 // the command and its output, so neither may hold a secret.
 func Run(name string, args ...string) (string, error) {
-	return runEnv(nil, name, args...)
+	return runEnv(context.Background(), nil, name, args...)
 }
 
-func runEnv(env []string, name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
+func runEnv(ctx context.Context, env []string, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
 	if env != nil {
 		cmd.Env = append(os.Environ(), env...)
 	}
@@ -162,9 +184,14 @@ func runEnv(env []string, name string, args ...string) (string, error) {
 	return out.String(), nil
 }
 
+// Exec is Run, ended when the config's context is.
+func (c Config) Exec(name string, args ...string) (string, error) {
+	return runEnv(c.ctx(), nil, name, args...)
+}
+
 // Kubectl runs kubectl against the stack's cluster.
 func (s *Stack) Kubectl(args ...string) (string, error) {
-	return Run("kubectl", append([]string{"--kubeconfig", s.Kubeconfig}, args...)...)
+	return runEnv(s.ctx(), nil, "kubectl", append([]string{"--kubeconfig", s.Kubeconfig}, args...)...)
 }
 
 // WriteFile writes b to dir/name with mode and returns the path.
@@ -178,11 +205,20 @@ func WriteFile(dir, name string, b []byte, mode os.FileMode) (string, error) {
 }
 
 // Teardown removes everything a stack named cfg.Name makes, and nothing
-// else. It ignores what isn't there.
+// else. It ignores what isn't there, and cfg.Context: it is what runs
+// after a Ctrl-C.
 func Teardown(cfg Config) {
-	exec.Command("kind", "delete", "cluster", "--name", cfg.Cluster()).Run()
-	exec.Command("docker", append([]string{"rm", "-f", cfg.KeycloakContainer()}, cfg.ExtraContainers...)...).Run()
-	exec.Command("docker", "network", "rm", cfg.Network()).Run()
+	Detached("kind", "delete", "cluster", "--name", cfg.Cluster()).Run()
+	Detached("docker", append([]string{"rm", "-f", cfg.KeycloakContainer()}, cfg.ExtraContainers...)...).Run()
+	Detached("docker", "network", "rm", cfg.Network()).Run()
+}
+
+// Detached is a command in a process group of its own, so that a Ctrl-C
+// at the terminal doesn't reach it: for cleaning up after one.
+func Detached(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	return cmd
 }
 
 // Create removes what a stack of the same name left behind, then makes
@@ -206,14 +242,14 @@ func Create(cfg Config) (*Stack, error) {
 
 	Teardown(cfg)
 	cfg.logf("creating the docker network %s (%s) and the kind cluster %s", cfg.Network(), cfg.Subnet, cfg.Cluster())
-	if _, err := Run("docker", "network", "create", "--subnet", cfg.Subnet, cfg.Network()); err != nil {
+	if _, err := runEnv(cfg.ctx(), nil, "docker", "network", "create", "--subnet", cfg.Subnet, cfg.Network()); err != nil {
 		return s, err
 	}
-	if _, err := runEnv([]string{"KIND_EXPERIMENTAL_DOCKER_NETWORK=" + cfg.Network()},
+	if _, err := runEnv(cfg.ctx(), []string{"KIND_EXPERIMENTAL_DOCKER_NETWORK=" + cfg.Network()},
 		"kind", "create", "cluster", "--name", cfg.Cluster(), "--kubeconfig", s.Kubeconfig, "--wait", "180s"); err != nil {
 		return s, err
 	}
-	out, err := Run("docker", "inspect", "-f", `{{with index .NetworkSettings.Networks "`+cfg.Network()+`"}}{{.IPAddress}} {{.Gateway}}{{end}}`, cfg.Cluster()+"-control-plane")
+	out, err := runEnv(cfg.ctx(), nil, "docker", "inspect", "-f", `{{with index .NetworkSettings.Networks "`+cfg.Network()+`"}}{{.IPAddress}} {{.Gateway}}{{end}}`, cfg.Cluster()+"-control-plane")
 	if err != nil {
 		return s, err
 	}
@@ -260,7 +296,7 @@ func Create(cfg Config) (*Stack, error) {
 	cfg.logf("starting Keycloak")
 	// The admin password goes in through docker's environment, not its
 	// argv, which errors would print.
-	if _, err := runEnv([]string{"KC_BOOTSTRAP_ADMIN_PASSWORD=" + cfg.KeycloakAdminPassword},
+	if _, err := runEnv(cfg.ctx(), []string{"KC_BOOTSTRAP_ADMIN_PASSWORD=" + cfg.KeycloakAdminPassword},
 		"docker", "run", "-d", "--name", cfg.KeycloakContainer(), "--network", cfg.Network(), "--ip", s.KeycloakIP,
 		"-v", kcDir+":/certs:ro",
 		"-e", "KC_BOOTSTRAP_ADMIN_USERNAME=admin", "-e", "KC_BOOTSTRAP_ADMIN_PASSWORD",
@@ -276,10 +312,10 @@ func Create(cfg Config) (*Stack, error) {
 // BuildImage builds the image from the checkout and loads it into kind.
 func (s *Stack) BuildImage() error {
 	s.logf("building the image %s and loading it into kind", s.Image())
-	if _, err := Run("docker", "build", "-q", "-t", s.Image(), s.Root); err != nil {
+	if _, err := runEnv(s.ctx(), nil, "docker", "build", "-q", "-t", s.Image(), s.Root); err != nil {
 		return err
 	}
-	_, err := Run("kind", "load", "docker-image", s.Image(), "--name", s.Cluster())
+	_, err := runEnv(s.ctx(), nil, "kind", "load", "docker-image", s.Image(), "--name", s.Cluster())
 	return err
 }
 
@@ -287,7 +323,7 @@ func (s *Stack) BuildImage() error {
 func (s *Stack) BuildCLI() error {
 	s.logf("building the CLI")
 	cli := filepath.Join(s.Dir, "nyyrikki")
-	build := exec.Command("go", "build", "-o", cli, "./cmd/nyyrikki")
+	build := exec.CommandContext(s.ctx(), "go", "build", "-o", cli, "./cmd/nyyrikki")
 	build.Dir = s.Root
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -360,7 +396,7 @@ spec:
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("kubectl", "--kubeconfig", s.Kubeconfig, "create", "-f", "-")
+	cmd := exec.CommandContext(s.ctx(), "kubectl", "--kubeconfig", s.Kubeconfig, "create", "-f", "-")
 	cmd.Stdin = bytes.NewReader(tg)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// kubectl's answer names the Secret, never its data.
@@ -423,7 +459,7 @@ func (s *Stack) Install(values string, wait bool) error {
 	if wait {
 		args = append(args, "--wait", "--timeout", "180s")
 	}
-	_, err = Run("helm", args...)
+	_, err = runEnv(s.ctx(), nil, "helm", args...)
 	return err
 }
 
@@ -432,7 +468,11 @@ func (s *Stack) Install(values string, wait bool) error {
 func (s *Stack) WaitCanonical(within time.Duration) error {
 	deadline := time.Now().Add(within)
 	for {
-		resp, err := s.HTTPClient().Get(s.Canonical + "/.well-known/oauth-protected-resource/mcp")
+		req, err := http.NewRequestWithContext(s.ctx(), "GET", s.Canonical+"/.well-known/oauth-protected-resource/mcp", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := s.HTTPClient().Do(req)
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
@@ -443,7 +483,9 @@ func (s *Stack) WaitCanonical(within time.Duration) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("canonical URL not reachable: %v", err)
 		}
-		time.Sleep(time.Second)
+		if err := s.sleep(time.Second); err != nil {
+			return err
+		}
 	}
 }
 

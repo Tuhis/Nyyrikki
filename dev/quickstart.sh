@@ -88,10 +88,25 @@ EOF
     user_flag=(-telegram-user "$uid")
   fi
 
-  cd "$root"
+  build
   # The token goes to the program on a pipe: printf is a builtin, so it is
-  # in no process's argv or environment, and in no file.
-  printf '%s\n' "$token" | go run -tags quickstart ./dev/quickstart up "${user_flag[@]}" "$@"
+  # in no process's argv or environment, and in no file. exec makes the
+  # program this process, so a Ctrl-C or a kill reaches it directly and
+  # it cleans up.
+  exec "$bin" up "${user_flag[@]}" "$@" < <(printf '%s\n' "$token")
+}
+
+# build compiles the program into a temporary directory, which the program
+# removes once it runs. Built rather than run with go run, so that no go
+# process sits between the signal and the program.
+build() {
+  cd "$root"
+  local dir
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/nyyrikki-quickstart-bin.XXXXXX")
+  trap 'rm -rf "$dir"' EXIT
+  go build -tags quickstart -o "$dir/quickstart" ./dev/quickstart
+  trap - EXIT
+  bin=$dir/quickstart
 }
 
 agent() {
@@ -101,8 +116,8 @@ agent() {
 }
 
 down() {
-  cd "$root"
-  exec go run -tags quickstart ./dev/quickstart down
+  build
+  exec "$bin" down
 }
 
 [ $# -ge 1 ] || usage

@@ -6,8 +6,8 @@
 // user made, and an agent pod in the cluster to run the CLI in.
 // dev/quickstart.sh runs it; run that, not this.
 //
-//	printf '%s\n' "$token" | go run -tags quickstart ./dev/quickstart up -telegram-user ID
-//	go run -tags quickstart ./dev/quickstart down
+//	quickstart up [-telegram-user ID] < token
+//	quickstart down
 //
 // up reads the bot token from stdin and puts it only into the cluster's
 // Secret: it is written to no file and is never printed or logged.
@@ -37,10 +37,12 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -64,7 +66,14 @@ const (
 	agentBase = "busybox:1.36"
 )
 
+// binDirPrefix names the temporary directory dev/quickstart.sh builds
+// the program into; the program removes it once it runs.
+const binDirPrefix = "nyyrikki-quickstart-bin."
+
 func main() {
+	if exe, err := os.Executable(); err == nil && strings.HasPrefix(filepath.Base(filepath.Dir(exe)), binDirPrefix) {
+		os.RemoveAll(filepath.Dir(exe))
+	}
 	if len(os.Args) < 2 {
 		usage()
 	}
@@ -153,11 +162,14 @@ func up(args []string) (err error) {
 	var s *stack.Stack
 	// Whatever fails from here on, nothing stays behind, unless asked to
 	// keep it for a look.
+	interrupted := func() bool { return cfg.Context != nil && cfg.Context.Err() != nil }
 	defer func() {
 		if err == nil {
 			return
 		}
-		if s != nil && s.Kubeconfig != "" {
+		if interrupted() {
+			err = errors.New("interrupted")
+		} else if s != nil && s.Kubeconfig != "" {
 			fmt.Fprintln(os.Stderr, s.Diagnostics())
 		}
 		if os.Getenv("NYYRIKKI_QUICKSTART_KEEP") != "" {
@@ -179,6 +191,15 @@ func up(args []string) (err error) {
 			return err
 		}
 	}
+
+	// From here on something is made, so a Ctrl-C or a SIGTERM no longer
+	// kills the program: it ends the step that runs, and the deferred
+	// cleanup removes what was made. Until the program returns, a second
+	// one is caught too, and the cleanup's commands run in a process group
+	// of their own, out of the terminal's reach.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	cfg.Context = ctx
 
 	if err := os.MkdirAll(state, 0o700); err != nil {
 		return err
@@ -289,24 +310,24 @@ spec:
 // and starts its pod.
 func startAgent(s *stack.Stack) error {
 	logf("starting the agent pod %s/%s", agentNS, agentPod)
-	ctx := filepath.Join(s.Dir, "agent-image")
-	if err := os.MkdirAll(ctx, 0o700); err != nil {
+	dir := filepath.Join(s.Dir, "agent-image")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	b, err := os.ReadFile(s.CLI)
 	if err != nil {
 		return err
 	}
-	if _, err := stack.WriteFile(ctx, "nyyrikki", b, 0o755); err != nil {
+	if _, err := stack.WriteFile(dir, "nyyrikki", b, 0o755); err != nil {
 		return err
 	}
-	if _, err := stack.WriteFile(ctx, "Dockerfile", []byte(agentDockerfile), 0o644); err != nil {
+	if _, err := stack.WriteFile(dir, "Dockerfile", []byte(agentDockerfile), 0o644); err != nil {
 		return err
 	}
-	if _, err := stack.Run("docker", "build", "-q", "-t", agentImage, ctx); err != nil {
+	if _, err := s.Exec("docker", "build", "-q", "-t", agentImage, dir); err != nil {
 		return err
 	}
-	if _, err := stack.Run("kind", "load", "docker-image", agentImage, "--name", s.Cluster()); err != nil {
+	if _, err := s.Exec("kind", "load", "docker-image", agentImage, "--name", s.Cluster()); err != nil {
 		return err
 	}
 	mf, err := stack.WriteFile(s.Dir, "agent.yaml", []byte(agentManifest), 0o600)
@@ -361,7 +382,11 @@ func waitReady(s *stack.Stack) error {
 		if time.Now().After(deadline) {
 			return errors.New("nyyrikkid did not become ready within 3 minutes")
 		}
-		time.Sleep(3 * time.Second)
+		select {
+		case <-s.Context.Done():
+			return s.Context.Err()
+		case <-time.After(3 * time.Second):
+		}
 	}
 }
 
@@ -634,7 +659,7 @@ Remove everything with dev/quickstart.sh down, then delete the bot.
 // and the state directory.
 func cleanup(cfg stack.Config) {
 	stack.Teardown(cfg)
-	exec.Command("docker", "image", "rm", "-f", cfg.Image(), agentImage).Run()
+	stack.Detached("docker", "image", "rm", "-f", cfg.Image(), agentImage).Run()
 	os.RemoveAll(cfg.Dir)
 }
 

@@ -140,6 +140,8 @@ the bot with @BotFather.
   bot has one poller, and Nyyrikki then stops for good (docs/05 D2). Stop
   the other program, then `down` and `up`.
 - **Already up.** Run `down` first.
+- **Ctrl-C during `up`** stops the step that runs and removes what was
+  made so far.
 - **Anything else.** `up` prints nyyrikkid's pods and logs, then removes
   what it made. With `NYYRIKKI_QUICKSTART_KEEP=1` it leaves the stack in
   place so you can look, and `down` removes it afterwards.
