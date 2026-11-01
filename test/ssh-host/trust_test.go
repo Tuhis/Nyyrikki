@@ -30,6 +30,7 @@ func (nopAudit) Append(context.Context, audit.Record) error { return nil }
 // refused for another namespace, a changed byte, and a signature by an
 // extra trusted key (M1).
 func TestTrustBundleOnHost(t *testing.T) {
+	t.Parallel()
 	cfgBytes, err := os.ReadFile("../../internal/config/testdata/valid.yaml")
 	if err != nil {
 		t.Fatal(err)

@@ -33,17 +33,31 @@ concurrency:
 
 jobs:
   ssh-host:
-    # As ci.yml's RUNNER POOL, on e2e.yml's RUNNER_LABEL_DISK pool: the
-    # harness runs privileged systemd containers, which need dind.
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL_DISK || 'ubuntu-latest' }}
+    # ci.yml's RUNNER POOL, whose dind keeps its store in RAM. The harness
+    # needs dind for its privileged systemd containers, but not a real
+    # filesystem as kind does. It ran on e2e.yml's RUNNER_LABEL_DISK pool,
+    # whose dind store is a Ceph volume, until 2026-11-01: there, with 16
+    # cases at once, each ran up to ~10x slower than locally (session kill
+    # 486 s against ~40 s) and the suite still took 23 minutes, and its
+    # writes beside a kind run are the Ceph load that times out kind's
+    # etcd. The images take ~1.6 GB of the 12 GiB store.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.26.x"
-          check-latest: true
+      # No setup-go: it took ~2 of the job's minutes downloading Go into a
+      # tool cache that dies with the ephemeral runner. The self-hosted
+      # runner image has Go 1.26 on PATH, and ubuntu-latest has a Go whose
+      # GOTOOLCHAIN=auto fetches the go.mod version. The tests drive shell
+      # in containers, so the Go patch release doesn't matter here (the
+      # gates in ci.yml keep check-latest for govulncheck).
+      - run: go version
       - name: Setup script in containers
         # The cases are containers, mostly waiting: run more at once than
-        # the runner has CPUs (SE6 added Alpine and the pull's cases).
-        run: go test -tags sshhost -count=1 -timeout 60m -parallel 8 -v ./test/ssh-host/
+        # the runner has CPUs (SE6 added Alpine and the pull's cases). Every
+        # top-level test is parallel too, so -parallel caps the containers
+        # running at once across the whole suite. Locally (8 CPUs) the suite
+        # took 967 s in sequence at -parallel 8, 714 s with every test
+        # parallel, and 497 s at -parallel 16 with TestBadValuesRefused
+        # sharded, using ~1.8 cores on average (2026-11-01).
+        run: go test -tags sshhost -count=1 -timeout 60m -parallel 16 -v ./test/ssh-host/

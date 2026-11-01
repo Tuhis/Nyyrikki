@@ -11,6 +11,11 @@
 // The systemd cases (session kill, docs/07 M18) need a privileged
 // container; set NYYRIKKI_SSHHOST_NO_SYSTEMD=1 to skip them.
 //
+// Every test, and every distribution within it, runs in parallel, each
+// in containers of its own; -parallel caps how many run at once (CI uses
+// 16: the containers mostly wait). Run in sequence, the tests took ~18
+// minutes on CI for ~10 minutes of their longest cases (2026-11-01).
+//
 // Failures and signals are injected by replacing a command inside the
 // container with a shim (installShim), never by anything the script reads:
 // the script has no test seam.
