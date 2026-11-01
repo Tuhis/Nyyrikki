@@ -230,7 +230,7 @@ Applied after the visibility flip:
 | **PB3** | Signed releases, SBOM and provenance, install.md verification | G4 |
 | **PB4** | Coverage gate and canary | G5 |
 | **PB5** | Quickstart, the e2e setup shared with it | G6 |
-| **PB6** | Renovate `gomodTidy` | G7 |
+| **PB6** | Renovate `gomodTidy` (lands with PB1: one line) | G7 |
 | **PB7** | Repository settings, by the owner | G2, G8 |
 
 Ordering: PB1 first, since it carries this doc. PB2–PB6 are

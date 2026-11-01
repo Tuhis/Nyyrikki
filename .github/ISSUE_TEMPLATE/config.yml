@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Tuhis/Nyyrikki/security/advisories/new
+    about: Report privately through a GitHub Security Advisory, never as an issue. See SECURITY.md for what to include.
+  - name: Setting up Nyyrikki
+    url: https://github.com/Tuhis/Nyyrikki/blob/main/docs/setup/README.md
+    about: Keycloak, the Telegram bot, the Helm chart, signing agents in, and SSH hosts.

@@ -1,0 +1,6 @@
+# Build output: CI builds into bin/, the release into dist/.
+/bin/
+/dist/
+# Coverage profiles from local runs.
+*.coverprofile
+cover.out

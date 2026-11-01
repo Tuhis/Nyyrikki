@@ -11,10 +11,26 @@ on a best-effort basis.
 
 ## Reporting a vulnerability
 
-Don't open an issue or a pull request. Contact the maintainer privately,
-and include what you found, how to reproduce it and what it lets an
-attacker do. You'll get an acknowledgement, and the fix will be
-coordinated with you before anything is disclosed.
+Don't open an issue, a pull request or a discussion. Report it through
+**GitHub private vulnerability reporting**: the **Security → Report a
+vulnerability** button on the repository, which opens a
+[private advisory](https://github.com/Tuhis/Nyyrikki/security/advisories/new)
+that only you and the maintainer can see. If the button isn't there
+yet, wait for it rather than disclose publicly (docs/09 D2).
+
+Include what you can:
+
+- the version (`nyyrikki version`, or the image digest) and the target
+  type (Kubernetes, SSH);
+- what you found and what it lets an attacker do, in terms of the
+  invariants and the attackers below;
+- how to reproduce it: a request, a Telegram update, a config or a log
+  excerpt is enough. Working exploit code isn't needed.
+
+You'll get an acknowledgement, and the fix will be coordinated with you
+before anything is disclosed. A request that runs without an approval
+that covers it is the most serious kind of report there is, and is
+handled first.
 
 ## Threat model
 
