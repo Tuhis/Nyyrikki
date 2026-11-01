@@ -230,6 +230,11 @@ spec:
 				{"-n", namespace, "get", "pods", "-o", "wide"},
 				{"-n", namespace, "describe", "pods"},
 				{"-n", namespace, "logs", "deploy/nyyrikki-nyyrikki", "--tail=200"},
+				// The workload pod, and the node's state: box timing out
+				// at Ready showed nothing of why (#50).
+				{"-n", workNS, "describe", "pods"},
+				{"get", "events", "-A", "--sort-by=.lastTimestamp"},
+				{"describe", "nodes"},
 			} {
 				out, _ := exec.Command("kubectl", append([]string{"--kubeconfig", e.kubeconfig}, args...)...).CombinedOutput()
 				t.Logf("kubectl %v:\n%s", args, out)
