@@ -31,7 +31,7 @@ chart assuming the owner's environment.
 |---|---|---|---|
 | M1 | `gcr.io/distroless/static-debian12:nonroot` runs a static Go binary as UID 65532 without a shell | distroless README, 2026-10-26 | Confirmed |
 | M2 | A projected ServiceAccount token is mounted at `/var/run/secrets/kubernetes.io/serviceaccount/token` and refreshed by the kubelet; a Secret mounted as a volume is updated in place when the Secret changes (not with `subPath`) | kubernetes.io "Configure Service Accounts for Pods", "Secrets" | Confirmed. D4 |
-| M3 | GitHub artifact attestations are available for this private repository | **Not yet measured.** PK4 | — |
+| M3 | GitHub artifact attestations are available for this private repository | **Not yet measured.** PK4. *Settled 2026-11-01 by [docs/09](09-public-release.md) D4 (M5)*: GitHub docs, "Using artifact attestations" | No: they need GitHub Enterprise Cloud while the repository is private. Releases are signed key-less with cosign instead, which needs no plan (D6) |
 
 ## 3. Owner decisions
 
@@ -46,7 +46,7 @@ None new. docs/01 OD2, OD7, OD10, OD11 apply.
 | D3 | **RBAC on the cluster Nyyrikki runs in**: a ClusterRole with only `impersonate` on `users` and `groups`, `resourceNames` set to the human's Kubernetes user and groups from the values, bound to Nyyrikki's ServiceAccount. For a remote cluster, `deploy/remote-target/` holds the same role plus a ServiceAccount and a long-lived token Secret to apply there; the token is copied into a Secret in Nyyrikki's namespace. | docs/01 D15, INV-05. |
 | D4 | **Rotation**: every credential is a mounted file read on use (docs/02 D2, docs/04 D9, docs/05 D10), so replacing a Secret's value is the rotation; no restart is needed. The in-cluster token is rotated by the kubelet (M2). | One mechanism for every credential. |
 | D5 | **The NetworkPolicy** admits `:8443` from the namespaces listed in values (default: all) and `:8081` from anywhere (it serves no data), and denies all other ingress. Egress is open by default, with a values option to restrict it to DNS, the authorization server, Telegram and the API servers. | docs/01 D10; SECURITY.md deployment requirements. |
-| D6 | **Releases**: release-please on `main` opens the release PR; on release, a workflow builds the image (pushed by digest and by version tag) and the CLI for linux and darwin, amd64 and arm64, with SHA256SUMS, and packages the chart with the same version. *Revised 2026-10-28 (owner decision, deploying on the owner's cluster)*: the chart is also pushed to `oci://ghcr.io/tuhis/charts/nyyrikki`, so a GitOps controller such as Flux can install it by version from an OCI `HelmRepository`; the release asset stays. | docs/01 D23. |
+| D6 | **Releases**: release-please on `main` opens the release PR; on release, a workflow builds the image (pushed by digest and by version tag) and the CLI for linux and darwin, amd64 and arm64, with SHA256SUMS, and packages the chart with the same version. *Revised 2026-10-28 (owner decision, deploying on the owner's cluster)*: the chart is also pushed to `oci://ghcr.io/tuhis/charts/nyyrikki`, so a GitOps controller such as Flux can install it by version from an OCI `HelmRepository`; the release asset stays. *Revised 2026-11-01 by [docs/09](09-public-release.md) D4, settling M3*: the release is signed key-less with cosign (Sigstore, the workflow's GitHub OIDC token): the image and the OCI chart by digest, and `SHA256SUMS` as a blob, its bundle `SHA256SUMS.sigstore.json` a release asset. The image carries BuildKit's SBOM and max provenance. The job verifies every signature against the release workflow's identity on `main` before it uploads an asset or edits the notes, and stops otherwise. GitHub artifact attestations need Enterprise Cloud while the repository is private. | docs/01 D23. |
 | D7 | **Setup documentation** in `docs/setup/`: Keycloak (realm, CLI client with the device grant and "Require DPoP bound tokens", the audience scope, DCR policies, introspection client, session lengths, no `offline_access`; *revised 2026-10-30, docs/01 OD17*: offline sessions for MCP harnesses, capped, and how to revoke them), Telegram (BotFather, `/start` to learn the user ID, 2-Step Verification and passcode), install, enrolling agents (`nyyrikki login`, `nyyrikki login --mcp` with `.mcp.json`, the harness's own OAuth sign-in), and the deployment requirements of SECURITY.md. | docs/01 §5.4; SECURITY.md deployment requirements. |
 
 ### Rejected alternatives
@@ -108,7 +108,10 @@ mounted, `rbac.impersonate` (users, groups), `networkPolicy`, `image`,
 ## 9. Risks and open questions
 
 - **Attestations** (M3) may not be available on the plan; then releases
-  ship SHA256SUMS only.
+  ship SHA256SUMS only. *Resolved 2026-11-01 by [docs/09](09-public-release.md)
+  D4*: they aren't, while the repository is private (they need GitHub
+  Enterprise Cloud); releases are signed key-less with cosign instead
+  (D6).
 
 ## 10. How it was implemented (2026-10-27)
 
@@ -121,7 +124,13 @@ mounted, `rbac.impersonate` (users, groups), `networkPolicy`, `image`,
   both cases.
 - The image is about 95 MB, mostly kubectl's code (docs/04 M9).
 - M3 (attestations) is not measured yet; the release workflow publishes
-  SHA256SUMS.
+  SHA256SUMS. *Superseded 2026-11-01 by [docs/09](09-public-release.md)
+  D4 (PB3)*: M3 is settled by key-less signing, since artifact
+  attestations need Enterprise Cloud while the repository is private.
+  The release job signs the image and the OCI chart by digest and
+  `SHA256SUMS` as a blob, verifies each in the job, and only then
+  uploads the assets and edits the notes; `docs/setup/install.md`
+  "Verifying a release" has the same commands for users.
 
 ## 11. Post-implementation review (YYYY-MM-DD)
 
