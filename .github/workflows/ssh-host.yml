@@ -1,19 +1,22 @@
 name: SSH host setup
 
-# docs/07 G8, G9, G13: the SSH host setup script run in Debian, Ubuntu and
-# Rocky containers (test/ssh-host), on changes to it and nightly.
+# docs/07 G8, G9, G13 and docs/08 G4, G5, G13: the SSH host setup script,
+# its trust pull and its enrollment, run in Debian, Ubuntu, Rocky and Alpine
+# containers (test/ssh-host), on changes to them and nightly.
 on:
   push:
     branches: [main]
     paths:
       - "deploy/ssh-host/**"
       - "test/ssh-host/**"
+      - "internal/hostsetup/**"
       - "docs/setup/ssh-hosts.md"
       - ".github/workflows/ssh-host.yml"
   pull_request:
     paths:
       - "deploy/ssh-host/**"
       - "test/ssh-host/**"
+      - "internal/hostsetup/**"
       - "docs/setup/ssh-hosts.md"
       - ".github/workflows/ssh-host.yml"
   schedule:
@@ -40,4 +43,6 @@ jobs:
           go-version: "1.26.x"
           check-latest: true
       - name: Setup script in containers
-        run: go test -tags sshhost -count=1 -timeout 60m -v ./test/ssh-host/
+        # The cases are containers, mostly waiting: run more at once than
+        # the runner has CPUs (SE6 added Alpine and the pull's cases).
+        run: go test -tags sshhost -count=1 -timeout 60m -parallel 8 -v ./test/ssh-host/

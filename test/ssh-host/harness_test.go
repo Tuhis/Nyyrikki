@@ -1,8 +1,10 @@
 //go:build sshhost
 
 // Package sshhost_test runs deploy/ssh-host/nyyrikki-host-setup.sh in
-// Debian, Ubuntu and Rocky containers and checks docs/07 G8, G9 and the
-// script's side of G13 (docs/07 §5.7, SH5). It needs docker:
+// Debian, Ubuntu, Rocky and Alpine containers and checks docs/07 G8, G9
+// and the script's side of G13 (docs/07 §5.7, SH5), and docs/08 G4, G5
+// and G13 (the trust pull, its schedule, enrollment; SE6). It needs
+// docker:
 //
 //	go test -tags sshhost -count=1 -timeout 60m ./test/ssh-host/
 //
@@ -23,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -39,17 +42,25 @@ type distro struct {
 	sshService string
 }
 
+// Each image has cron and curl, so the setup installs the trust pull's
+// schedule (docs/08 D5): cron.d on Debian, Ubuntu (cron) and Rocky
+// (cronie), periodic on Alpine (BusyBox crond, M3).
 var distros = []distro{
-	{name: "debian", base: "debian:trixie", install: aptInstall("")},
-	{name: "ubuntu", base: "ubuntu:24.04", install: aptInstall("")},
+	{name: "debian", base: "debian:trixie", install: aptInstall("cron curl ca-certificates")},
+	{name: "ubuntu", base: "ubuntu:24.04", install: aptInstall("cron curl ca-certificates")},
 	// rockylinux/rockylinux:10 needs x86-64-v3, which not every CI runner has.
-	{name: "rocky", base: "rockylinux:9", install: "dnf install -y -q openssh-server openssh-clients sudo procps-ng util-linux >/dev/null && dnf clean all >/dev/null"},
+	// The image's curl-minimal is the curl.
+	{name: "rocky", base: "rockylinux:9", install: "dnf install -y -q openssh-server openssh-clients sudo procps-ng util-linux cronie >/dev/null && dnf clean all >/dev/null"},
+	// Alpine 3.22's sshd_config starts with the Include line, as the
+	// script requires (docs/07 M14). shadow for useradd, findutils,
+	// runuser and util-linux-misc (script) for the harness itself.
+	{name: "alpine", base: "alpine:3.22", install: "apk add -q --no-cache openssh sudo shadow curl findutils runuser util-linux-misc >/dev/null"},
 }
 
 var debianSystemd = distro{
 	name:       "debian-systemd",
 	base:       "debian:trixie",
-	install:    aptInstall("systemd systemd-sysv dbus libpam-systemd"),
+	install:    aptInstall("systemd systemd-sysv dbus libpam-systemd cron curl ca-certificates"),
 	systemd:    true,
 	sshService: "ssh",
 }
@@ -106,16 +117,21 @@ func body(t *testing.T) string {
 	return string(b)
 }
 
-// values are a target's data lines (docs/07 D16).
+// values are a target's data lines (docs/07 D16, docs/08 D13).
 type values struct {
 	target  string
 	humans  []string
 	caKeys  []string
 	sources []string
 	sudo    bool
+	signers []string
+	revoked []string
+	issued  string
+	url     string
 }
 
-// lines are the data lines Nyyrikki serves for v, END included.
+// lines are the data lines Nyyrikki serves for v, END included: docs/07
+// D16's, then docs/08 D13's.
 func (v values) lines() []string {
 	var l []string
 	l = append(l, "TARGET="+v.target)
@@ -129,8 +145,21 @@ func (v values) lines() []string {
 		l = append(l, "SOURCE="+s)
 	}
 	l = append(l, fmt.Sprintf("SUDO=%t", v.sudo))
+	for _, k := range v.signers {
+		l = append(l, "SIGNER_KEY="+k)
+	}
+	for _, k := range v.revoked {
+		l = append(l, "REVOKED_CA_KEY="+k)
+	}
+	l = append(l, "ISSUED="+v.issued, "URL="+v.url)
 	return append(l, fmt.Sprintf("END=%d", len(l)))
 }
+
+// fakeURL is the URL data line of the fake Nyyrikki each host can run
+// (fake_test.go).
+const fakeURL = "https://127.0.0.1:8443"
+
+func nowMillis() string { return strconv.FormatInt(time.Now().UnixMilli(), 10) }
 
 // served builds the served form: body, data lines, terminator, then extra
 // (which must never run).
@@ -152,6 +181,9 @@ type host struct {
 	d  distro
 	id string
 	ca string // the test CA's public key, "ssh-ed25519 <base64>"
+	// issued is the ISSUED of the host's default values: fixed per host,
+	// so a re-run with them is the same script, as on a real host.
+	issued string
 }
 
 // newHost starts a container with sshd running, a test CA, a user key, a
@@ -171,7 +203,7 @@ func newHost(t *testing.T, d distro) *host {
 	if err != nil {
 		t.Fatalf("docker run: %v\n%s", err, out)
 	}
-	h := &host{t: t, d: d, id: strings.TrimSpace(string(out))}
+	h := &host{t: t, d: d, id: strings.TrimSpace(string(out)), issued: nowMillis()}
 	t.Cleanup(func() {
 		if t.Failed() && os.Getenv("NYYRIKKI_SSHHOST_KEEP") != "" {
 			t.Logf("kept container %s", h.id)
@@ -327,7 +359,7 @@ func shellQuote(s string) string {
 // values on a systemd host.
 func (h *host) snapshot() string {
 	h.t.Helper()
-	cmd := `P="/etc/ssh /etc/sudoers /etc/sudoers.d /etc/systemd /home /var/mail /var/spool/mail /etc/pam.d"
+	cmd := `P="/etc/ssh /etc/sudoers /etc/sudoers.d /etc/systemd /home /var/mail /var/spool/mail /etc/pam.d /etc/cron.d /etc/periodic"
 A="/etc/passwd /etc/group /etc/shadow /etc/gshadow /etc/subuid /etc/subgid"
 # alice's home: logins write into it (pam_motd on Ubuntu).
 find $P $A -xdev -path /home/alice -prune -o -printf '%p %y %m %u %g\n' 2>/dev/null | sort
@@ -402,6 +434,10 @@ if [ -s "$r" ]; then
 		;;
 	esac
 fi
+# A BusyBox applet decides what it is by its name, which .real isn't.
+if [ -L "$0.real" ] && [ "$(readlink -f "$0.real")" = /bin/busybox ]; then
+	exec /bin/busybox "$n" "$@"
+fi
 exec "$0.real" "$@"
 `
 	h.put("/nyshim/shim", shim)
@@ -467,7 +503,8 @@ func (h *host) accountExists(a string) bool {
 }
 
 func (h *host) values(humans ...string) values {
-	return values{target: "db-1", humans: humans, caKeys: []string{h.ca}, sources: []string{"127.0.0.1/32", "::1/128"}, sudo: true}
+	return values{target: "db-1", humans: humans, caKeys: []string{h.ca}, sources: []string{"127.0.0.1/32", "::1/128"}, sudo: true,
+		signers: []string{h.ca}, issued: h.issued, url: fakeURL}
 }
 
 // forEachDistro runs f in parallel for each distribution.
@@ -488,9 +525,12 @@ func needSystemd(t *testing.T) {
 }
 
 // manualFiles reads docs/setup/ssh-hosts.md's listing: each fenced block
-// after a `<!-- file: PATH MODE -->` line, and the data lines block (the
-// one ending in the terminator).
-func manualFiles(t *testing.T) (files map[string][2]string, data []string) {
+// after a `<!-- file: PATH MODE -->` line; each block after a
+// `<!-- file-from-script: PATH MODE -->` line, whose first line is the
+// command that extracts the file from the setup script into the
+// directory it runs in (fromScript); and the data lines block (the one
+// ending in the terminator).
+func manualFiles(t *testing.T) (files map[string][2]string, fromScript map[string][2]string, data []string) {
 	t.Helper()
 	f, err := os.Open(filepath.Join("..", "..", "docs", "setup", "ssh-hosts.md"))
 	if err != nil {
@@ -498,8 +538,9 @@ func manualFiles(t *testing.T) (files map[string][2]string, data []string) {
 	}
 	defer f.Close()
 	files = map[string][2]string{}
-	marker := regexp.MustCompile(`^<!-- file: (\S+) (0[0-7]{3}) -->$`)
-	var path, mode string
+	fromScript = map[string][2]string{}
+	marker := regexp.MustCompile(`^<!-- (file|file-from-script): (\S+) (0[0-7]{3}) -->$`)
+	var kind, path, mode string
 	var block []string
 	inBlock, want := false, false
 	sc := bufio.NewScanner(f)
@@ -508,23 +549,26 @@ func manualFiles(t *testing.T) (files map[string][2]string, data []string) {
 		switch {
 		case !inBlock && marker.MatchString(l):
 			m := marker.FindStringSubmatch(l)
-			path, mode, want = m[1], m[2], true
+			kind, path, mode, want = m[1], m[2], m[3], true
 		case !inBlock && strings.HasPrefix(l, "```"):
 			inBlock, block = true, nil
 		case inBlock && l == "```":
 			inBlock = false
-			if want {
+			switch {
+			case want && kind == "file":
 				files[path] = [2]string{mode, strings.Join(block, "\n") + "\n"}
-				want = false
-			} else if len(block) > 0 && block[len(block)-1] == "NYYRIKKI_VALUES_END" {
+			case want:
+				fromScript[path] = [2]string{mode, block[0]}
+			case len(block) > 0 && block[len(block)-1] == "NYYRIKKI_VALUES_END":
 				data = block[:len(block)-1]
 			}
+			want = false
 		case inBlock:
 			block = append(block, l)
 		}
 	}
-	if len(files) == 0 || data == nil {
-		t.Fatal("docs/setup/ssh-hosts.md: no file listing or no data lines block found")
+	if len(files) == 0 || len(fromScript) == 0 || data == nil {
+		t.Fatal("docs/setup/ssh-hosts.md: no file listing, no file taken from the script, or no data lines block found")
 	}
-	return files, data
+	return files, fromScript, data
 }
