@@ -90,7 +90,7 @@ Answer by: 12:05:00 UTC
 - **Pass-through, not a tool catalogue.** The agent sends a `kubectl`
   command line or a shell command; the approver sees it as it will run.
 - **One-off approvals and time-boxed elevations** of at most 30 minutes,
-  bound to one agent sign-in and carried as a secret handle.
+  bound to one agent and carried as a secret handle.
 - **Acts as the human.** On Kubernetes through impersonation, capped at
   the human's own rights. On SSH hosts, as a local account per human
   that only Nyyrikki's short-lived certificates can log in to, with root

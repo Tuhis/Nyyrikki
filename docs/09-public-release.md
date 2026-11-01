@@ -41,7 +41,7 @@ leaves out its sheer size, which `CLAUDE.md` warns against.
 - A website, a demo deployment or a hosted instance.
 - macOS for the quickstart. Docker Desktop doesn't route the host to
   container addresses, which the quickstart's issuer URL relies on
-  (see §5.5). Linux only, said plainly.
+  (see §5.6). Linux only, said plainly.
 - Rewriting git history. It was scanned and is clean (M1).
 
 ## 2. Measured and verified before writing
@@ -70,7 +70,7 @@ leaves out its sheer size, which `CLAUDE.md` warns against.
 | D3 | **Licence notices are generated at build time, not committed.** The image holds the licence texts of every module compiled into `nyyrikkid` under `/usr/share/doc/nyyrikki/licenses`, made by `go-licenses save` in the build stage. A release adds `nyyrikki-licenses.tar.gz`, the same for the CLI. *Revises docs/06 D1 and D6.* | MIT, BSD and Apache-2.0 require the notices with binaries. A committed file drifts on every Renovate bump (`gawk` needed a post-upgrade task and a CI check to keep up); a generated one can't. |
 | D4 | **Releases are signed key-less with cosign**: the image by digest, the OCI chart by digest, and `SHA256SUMS` as a blob (`SHA256SUMS.sigstore.json`). The image also carries BuildKit's SBOM and provenance attestations. The release job verifies each signature against this repository's release workflow identity before it uploads anything, and fails otherwise. The setup docs show how to verify. *Settles docs/06 M3.* | Ties an artifact to the workflow that made it, with no key to keep (M5). Verifying in the job catches a signature that was never made, the "configured but doesn't reach production" failure. |
 | D5 | **A coverage gate** in `scripts/gates.sh`: cross-package total coverage (`-coverpkg=./...`) must not fall below the floor in `coverage-floor.txt`, set to the measured value rounded down to a whole percent, less one point. *Revised 2026-11-01 (building PB4)*: the point is margin for statements covered or not depending on timing; five runs measured 83.02–83.07%, so the floor is 82. Raising it is a commit. It has a canary, like every gate. | Coverage that falls unseen is how untested branches build up; a single total floor is simple enough to keep honest. Per-package floors were rejected (below). |
-| D6 | **A local quickstart on Linux**: `dev/quickstart.sh up` builds a kind cluster, Keycloak and Nyyrikki from the checkout, and uses a **real Telegram bot** the user made with BotFather, then prints how to sign in and run a first request. `dev/quickstart.sh down` removes it all. The setup shares its code with the e2e test, so the e2e keeps it working. | The only way to see Nyyrikki today is a real deployment. A fake approver would show the wrong thing and put an approval surface on the user's machine, which `CLAUDE.md` forbids. |
+| D6 | **A local quickstart on Linux**: `dev/quickstart.sh up` builds a kind cluster, Keycloak and Nyyrikki from the checkout, and uses a **real Telegram bot** the user made with BotFather, then prints how to sign in and run a first request. `dev/quickstart.sh down` removes it all. The setup shares its code with the e2e test, so the e2e keeps it working. *Revised 2026-11-01 (review of #51)*: **the agent runs in a pod inside the kind cluster**, holding only its Nyyrikki sign-in; the host holds the bot token (in the cluster's Secret) and kind's admin kubeconfig, so it is the human's machine and no agent runs there. `dev/quickstart.sh agent` opens a shell in that pod. | The only way to see Nyyrikki today is a real deployment. A fake approver would show the wrong thing and put an approval surface on the user's machine, which `CLAUDE.md` forbids. |
 | D7 | **Renovate runs `go mod tidy` after updates.** | Keeps the `tidy` gate green on dependency PRs. |
 | D8 | **Repository settings when the repository goes public** (§5.7) are recorded here and applied by the owner. | They need admin rights the coding agent doesn't hold, and they're part of being ready. |
 
@@ -155,10 +155,21 @@ take twice as long. The canary is a tiny module under
 - `dev/quickstart.sh up` checks for `docker`, `kind`, `helm`, `kubectl`
   and Go, asks for the bot token (read without echo) and the user's
   Telegram ID (docs/setup/telegram.md), and runs the Go program. The
-  bot token goes into the cluster's Secret and a `0600` file under
-  `dev/.quickstart/`, which is git-ignored, and is never printed.
-- It prints the `nyyrikki login` command with `--ca` for the stack's
-  CA, the Keycloak user's name and password, and a first
+  bot token goes only into the cluster's Secret: it is never written to
+  a file on the host and never printed. Other state (the CA, kind's
+  kubeconfig) lives under `dev/.quickstart/`, which is git-ignored.
+- **The agent's machine is a pod in the cluster**, `nyyrikki-agent` in
+  a namespace of its own, holding the `nyyrikki` CLI and the stack's
+  CA, with no ServiceAccount token mounted and no rights in the
+  cluster. `dev/quickstart.sh agent` opens a shell in it. The host is
+  the human's: it holds kind's admin kubeconfig, which can read the
+  bot token's Secret and is itself a target-admin credential, so
+  `CLAUDE.md`'s rule (no bot token and no admin credential on the
+  machine the agent runs on) holds only if no agent runs on the host.
+  The script and the docs say so.
+- It prints, for the agent's shell, the `nyyrikki login` command with
+  `--ca-file` for the stack's CA, then the Keycloak user's name and
+  password for the human to enter in the browser, and a first
   `nyyrikki run` against the kind cluster.
 - The issuer is Keycloak at its docker-network address (as the e2e),
   which the host reaches on Linux. macOS is out (§1).
@@ -190,13 +201,17 @@ Applied after the visibility flip:
 - **No new trust boundary in the product.** PB1–PB5 don't change
   `nyyrikkid`'s code paths. PB5 adds test and development code that
   isn't in the image.
-- **The quickstart holds a real bot token** on the user's machine,
-  which is also where a test agent would run. That is acceptable only
-  because the quickstart is for trying Nyyrikki, and its output says
-  so: a bot token on the agent's machine lets that agent read the bot's
-  updates and answer as the bot, though not tap for the approver. It
-  must not be the bot of a real deployment. The docs and the script say
-  this before asking for the token.
+- **The quickstart holds a real bot token**, in the kind cluster's
+  Secret, readable with the host's admin kubeconfig. With the token, an
+  agent could call `getUpdates` and take the approver's callbacks
+  before Nyyrikki's long poll sees them, and answer as the bot. So the
+  agent never runs on the host: it runs in the agent pod (§5.6), which
+  holds only its Nyyrikki sign-in and has no rights in the cluster.
+  *Revised 2026-11-01 (review of #51)*: the first draft let a test
+  agent run on the host and called that acceptable; it isn't, by
+  `CLAUDE.md`'s rule. The bot must still be one made for trying
+  Nyyrikki, not a real deployment's, and the script says so before
+  asking for the token.
 - **Signing adds `id-token: write`** to the release job, which already
   pushes the image. The OIDC token is used only by cosign in that job.
   Sigstore's public log records the repository and workflow names (M5),
@@ -217,7 +232,7 @@ Applied after the visibility flip:
 | G3 The image and the CLI release carry their dependencies' licence texts | CI `image` job checks the directory; the release job fails if the archive is empty |
 | G4 Every release artifact is signed by this repository's release workflow, and the release fails if a signature can't be verified | The release job's verify steps; the owner runs install.md's verify commands on the next release (manual) |
 | G5 Coverage can't fall below its floor unseen | The `coverage` gate in CI; `gates-selftest` shows it fails on its canary |
-| G6 Someone with a Linux machine and a Telegram bot can try Nyyrikki with one command, and remove it with another | The e2e runs the shared setup on every PR; the quickstart is run up to `nyyrikki targets` without a bot by the implementer, and end to end with a real bot by the owner (manual) |
+| G6 Someone with a Linux machine and a Telegram bot can try Nyyrikki with one command, with the agent in a pod that holds nothing but its sign-in, and remove it with another | The e2e runs the shared setup on every PR that touches `test/e2e/`, the shared setup, `dev/quickstart/` or `e2e.yml` (its path filter), and nightly; the quickstart is run up to `nyyrikki targets` without a bot by the implementer, and end to end with a real bot by the owner (manual) |
 | G7 Renovate's Go PRs are tidy | The next Renovate Go PR passes the `tidy` gate |
 | G8 The settings of §5.7 are in place | The owner, after the flip (manual) |
 
