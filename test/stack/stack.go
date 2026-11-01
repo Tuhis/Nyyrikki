@@ -228,7 +228,14 @@ func WriteFile(dir, name string, b []byte, mode os.FileMode) (string, error) {
 // under way when its client died. Measured 2026-11-01: kind create
 // cluster ended by SIGTERM within half a second, and its node container
 // appeared about four seconds later, never started.
-const teardownSettle = 12 * time.Second
+var teardownSettle = 12 * time.Second
+
+// teardownBound is the most Teardown takes, and teardownPoll how often it
+// looks. Variables for the tests.
+var (
+	teardownBound = 90 * time.Second
+	teardownPoll  = 2 * time.Second
+)
 
 // kindConfig is the cluster's: the API server also runs the admission
 // plugin DenyServiceExternalIPs, so that the human's edit rights can't
@@ -248,61 +255,105 @@ kubeadmConfigPatches:
 // Teardown removes everything a stack named cfg.Name makes, and nothing
 // else. It ignores what isn't there, and cfg.Context: it is what runs
 // after a Ctrl-C. It repeats until nothing of the stack has been seen for
-// teardownSettle, for at most a minute and a half.
+// teardownSettle, for at most teardownBound. A check that fails (docker
+// or kind not answering) counts as something seen: it proves nothing is
+// gone.
 func Teardown(cfg Config) {
 	start := time.Now()
 	lastSeen := start
+	var lastErr error
 	for {
-		if cfg.teardownOnce() {
+		found, err := cfg.teardownOnce()
+		if err != nil {
+			lastErr = err
+		}
+		if found {
 			lastSeen = time.Now()
 		}
 		if time.Since(lastSeen) >= teardownSettle {
 			return
 		}
-		if time.Since(start) > 90*time.Second {
-			cfg.logf("could not remove all of %s; see docker ps -a and docker network ls", cfg.Name)
+		if time.Since(start) > teardownBound {
+			if lastErr != nil {
+				cfg.logf("could not remove all of %s; see docker ps -a and docker network ls (last error: %v)", cfg.Name, lastErr)
+			} else {
+				cfg.logf("could not remove all of %s; see docker ps -a and docker network ls", cfg.Name)
+			}
 			return
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(teardownPoll)
 	}
 }
 
-// teardownOnce removes what it finds of the stack, and reports whether it
-// found anything.
-func (c Config) teardownOnce() bool {
-	found := false
+// teardownOnce removes what it finds of the stack. It reports whether it
+// found anything, or couldn't tell (with the error).
+func (c Config) teardownOnce() (found bool, err error) {
 	// kind's own view: the stack's kubeconfig, so kind leaves the user's
 	// (~/.kube/config, $KUBECONFIG) alone. A missing file is fine.
-	if out, _ := Detached("kind", "get", "clusters").Output(); strings.Contains("\n"+string(out), "\n"+c.Cluster()+"\n") {
+	out, kerr := stdout(Detached("kind", "get", "clusters"))
+	switch {
+	case kerr != nil:
+		found, err = true, kerr
+	case strings.Contains("\n"+out, "\n"+c.Cluster()+"\n"):
 		found = true
 		Detached("kind", "delete", "cluster", "--name", c.Cluster(), "--kubeconfig", filepath.Join(c.Dir, "kubeconfig")).Run()
 	}
-	if left := c.containers(); len(left) > 0 {
+	left, cerr := c.containers()
+	if cerr != nil {
+		found, err = true, cerr
+	}
+	if len(left) > 0 {
 		found = true
 		Detached("docker", append([]string{"rm", "-f"}, left...)...).Run()
 	}
-	if Detached("docker", "network", "inspect", c.Network()).Run() == nil {
+	// Gone only on docker's own answer that it is.
+	var stderr bytes.Buffer
+	inspect := Detached("docker", "network", "inspect", c.Network())
+	inspect.Stderr = &stderr
+	switch ierr := inspect.Run(); {
+	case ierr == nil:
 		found = true
 		Detached("docker", "network", "rm", c.Network()).Run()
+	case !notFound(stderr.String()):
+		found, err = true, fmt.Errorf("docker network inspect: %v: %s", ierr, strings.TrimSpace(stderr.String()))
 	}
-	return found
+	return found, err
+}
+
+// stdout runs cmd and returns its stdout; stderr, which may hold
+// warnings, goes only into the error.
+func stdout(cmd *exec.Cmd) (string, error) {
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return string(out), fmt.Errorf("%s: %v: %s", strings.Join(cmd.Args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return string(out), nil
+}
+
+// notFound reports whether docker's answer says the object doesn't exist.
+func notFound(answer string) bool {
+	a := strings.ToLower(answer)
+	return strings.Contains(a, "not found") || strings.Contains(a, "no such")
 }
 
 // containers lists the IDs of the stack's containers that exist: kind's
 // nodes (by kind's label), Keycloak and the caller's extra ones.
-func (c Config) containers() []string {
-	args := []string{"ps", "-aq", "--filter", "label=io.x-k8s.kind.cluster=" + c.Cluster()}
-	var ids []string
-	add := func(out []byte) {
-		ids = append(ids, strings.Fields(string(out))...)
-	}
-	out, _ := Detached("docker", args...).Output()
-	add(out)
+func (c Config) containers() ([]string, error) {
+	filters := []string{"label=io.x-k8s.kind.cluster=" + c.Cluster()}
 	for _, n := range append([]string{c.KeycloakContainer()}, c.ExtraContainers...) {
-		out, _ := Detached("docker", "ps", "-aq", "--filter", "name=^/"+n+"$").Output()
-		add(out)
+		filters = append(filters, "name=^/"+n+"$")
 	}
-	return ids
+	var ids []string
+	for _, f := range filters {
+		out, err := stdout(Detached("docker", "ps", "-aq", "--filter", f))
+		if err != nil {
+			return ids, err
+		}
+		ids = append(ids, strings.Fields(out)...)
+	}
+	return ids, nil
 }
 
 // Detached is a command in a process group of its own, so that a Ctrl-C
