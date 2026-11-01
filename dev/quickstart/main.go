@@ -164,8 +164,13 @@ func up(args []string) (err error) {
 	var s *stack.Stack
 	// Whatever fails from here on, nothing stays behind, unless asked to
 	// keep it for a look.
+	// stopSignals is set once signals are caught (below). It runs last,
+	// after the cleanup: stopping cancels the context, which must not
+	// make a failure look like an interrupt.
+	stopSignals := func() {}
 	interrupted := func() bool { return cfg.Context != nil && cfg.Context.Err() != nil }
 	defer func() {
+		defer stopSignals()
 		if err == nil {
 			return
 		}
@@ -200,7 +205,7 @@ func up(args []string) (err error) {
 	// one is caught too, and the cleanup's commands run in a process group
 	// of their own, out of the terminal's reach.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	stopSignals = stop
 	cfg.Context = ctx
 
 	if err := os.MkdirAll(state, 0o700); err != nil {
