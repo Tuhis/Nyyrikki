@@ -243,8 +243,15 @@ func TestDPoPRejected(t *testing.T) {
 	if _, code := f.do(t, req{scheme: "DPoP", token: tok, proofs: []string{replayed}}); code != 200 {
 		t.Fatalf("first use of proof: %d", code)
 	}
+	// RFC 9449 §4.2: a proof is a JWT, so compact serialization only.
+	parsed, err := jose.ParseSignedCompact(good(), []jose.SignatureAlgorithm{jose.ES256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonSerialized := parsed.FullSerialize()
 	cases := map[string]req{
 		"no proof":              {scheme: "DPoP", token: tok},
+		"JSON serialization":    {scheme: "DPoP", token: tok, proofs: []string{jsonSerialized}},
 		"bound token as Bearer": {scheme: "Bearer", token: tok, proofs: []string{good()}},
 		"other azp as Bearer":   {scheme: "Bearer", token: other},
 		"two proofs":            {scheme: "DPoP", token: tok, proofs: []string{good(), good()}},
