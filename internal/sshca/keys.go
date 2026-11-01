@@ -96,6 +96,7 @@ type Set struct {
 	HostCA     ssh.Signer // nil when absent
 	trusted    []ssh.PublicKey
 	signers    []ssh.PublicKey
+	revoked    []ssh.PublicKey
 }
 
 // Trusted is the set of user CA keys hosts trust for logins, in order:
@@ -108,6 +109,10 @@ func (s *Set) Trusted() []ssh.PublicKey { return append([]ssh.PublicKey(nil), s.
 // always a subset of Trusted.
 func (s *Set) Signers() []ssh.PublicKey { return append([]ssh.PublicKey(nil), s.signers...) }
 
+// Revoked is ssh.revoked_user_ca_keys, the keys hosts must refuse
+// (docs/08 D3), as this Set was derived with.
+func (s *Set) Revoked() []ssh.PublicKey { return append([]ssh.PublicKey(nil), s.revoked...) }
+
 // Load reads every key file. Any failure is a *codes.Error with
 // codes.Unavailable; nothing in it holds key material.
 func (k *Keys) Load() (*Set, error) {
@@ -119,7 +124,7 @@ func (k *Keys) Load() (*Set, error) {
 		return nil, codes.WithDetail(codes.Unavailable, DetailUserCARevoked,
 			"the SSH user CA key is listed in ssh.revoked_user_ca_keys")
 	}
-	s := &Set{UserCA: user, NextUserCA: next, HostCA: host}
+	s := &Set{UserCA: user, NextUserCA: next, HostCA: host, revoked: append([]ssh.PublicKey(nil), k.o.Revoked...)}
 	derived := []ssh.PublicKey{user.PublicKey()}
 	if next != nil {
 		derived = append(derived, next.PublicKey())

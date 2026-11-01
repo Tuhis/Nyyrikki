@@ -1,8 +1,10 @@
 // Package hostsetup serves GET /hosts/<target>/setup.sh (docs/07 D16,
 // OD3): the host setup script, byte for byte the file in the repo,
-// followed by data lines built from config. It needs no token, since a
-// host has none. It reads the CA key files only to derive the public
-// keys hosts trust (docs/08 D1), and serves nothing of a private key.
+// followed by data lines built from config; and GET /hosts/<target>/trust
+// (docs/08 D4): the trust bundle hosts pull, the same kind of data lines
+// signed by user-ca. Neither needs a token, since a host has none. The CA
+// key files are read to derive the public keys hosts trust (docs/08 D1)
+// and to sign the bundle; nothing of a private key is served.
 package hostsetup
 
 import (
@@ -14,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +57,64 @@ func CheckBody(body []byte) error {
 	return nil
 }
 
+// lines collects data lines in docs/07 D16's grammar. The first error
+// sticks; every value is checked before it is added, so nothing the host
+// would refuse is ever served.
+type lines struct {
+	l   []string
+	err error
+}
+
+func (b *lines) add(name, value string) {
+	if b.err != nil {
+		return
+	}
+	if strings.ContainsAny(value, "\n\r\x00") {
+		b.err = fmt.Errorf("hostsetup: %s holds a line break", name)
+		return
+	}
+	b.l = append(b.l, name+"="+value)
+}
+
+// key adds a user CA key in the data lines' form, type and base64 only,
+// after the same format checks as a configured key.
+func (b *lines) key(name string, pk ssh.PublicKey) {
+	if b.err != nil {
+		return
+	}
+	line := sshca.AuthorizedKey(pk)
+	if _, err := config.ParseUserCAKey(line); err != nil {
+		b.err = fmt.Errorf("hostsetup: %s: %w", name, err)
+		return
+	}
+	b.add(name, line)
+}
+
+func (b *lines) humans(t *config.Target) {
+	for _, h := range t.Humans {
+		if b.err != nil {
+			return
+		}
+		if !config.IsSlug(h) || len(h) > config.MaxSSHHumanID {
+			b.err = fmt.Errorf("hostsetup: human %q can't have an SSH account", h)
+			return
+		}
+		b.add("HUMAN", h)
+	}
+}
+
+// end appends END, counting the lines before it.
+func (b *lines) end() {
+	b.add("END", strconv.Itoa(len(b.l)))
+}
+
+func (b *lines) bytes() ([]byte, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+	return []byte(strings.Join(b.l, "\n") + "\n"), nil
+}
+
 // DataLines builds the data lines for target t (docs/07 D16): every
 // value from config, each in a format config validation already checked
 // and the script checks again, and one CA_KEY per key of trusted, the
@@ -62,63 +123,101 @@ func DataLines(c *config.Config, t *config.Target, trusted []ssh.PublicKey) ([]b
 	if t == nil || t.SSH == nil {
 		return nil, errors.New("hostsetup: not an SSH target")
 	}
-	var lines []string
-	add := func(name, value string) error {
-		if strings.ContainsAny(value, "\n\r\x00") {
-			return fmt.Errorf("hostsetup: %s holds a line break", name)
-		}
-		lines = append(lines, name+"="+value)
-		return nil
-	}
-	if err := add("TARGET", t.Name); err != nil {
-		return nil, err
-	}
-	for _, h := range t.Humans {
-		if !config.IsSlug(h) || len(h) > config.MaxSSHHumanID {
-			return nil, fmt.Errorf("hostsetup: human %q can't have an SSH account", h)
-		}
-		if err := add("HUMAN", h); err != nil {
-			return nil, err
-		}
-	}
+	var b lines
+	b.add("TARGET", t.Name)
+	b.humans(t)
 	if len(trusted) == 0 {
 		return nil, errors.New("hostsetup: no trusted user CA key")
 	}
 	for _, pk := range trusted {
-		// Type and base64 only, and the same format checks as a
-		// configured key: a key the script would refuse is never served.
-		line := sshca.AuthorizedKey(pk)
-		if _, err := config.ParseUserCAKey(line); err != nil {
-			return nil, err
-		}
-		if err := add("CA_KEY", line); err != nil {
-			return nil, err
-		}
+		b.key("CA_KEY", pk)
 	}
 	for _, a := range c.SSH.SourceAddresses {
 		p, err := config.ParseSourceAddress(a)
 		if err != nil {
 			return nil, err
 		}
-		if err := add("SOURCE", p.String()); err != nil {
-			return nil, err
-		}
+		b.add("SOURCE", p.String())
 	}
-	if err := add("SUDO", strconv.FormatBool(t.SSH.Sudo)); err != nil {
-		return nil, err
-	}
-	n := len(lines)
-	lines = append(lines, "END="+strconv.Itoa(n), Terminator)
-	return []byte(strings.Join(lines, "\n") + "\n"), nil
+	b.add("SUDO", strconv.FormatBool(t.SSH.Sudo))
+	b.end()
+	b.l = append(b.l, Terminator)
+	return b.bytes()
 }
 
-// Handler serves the setup script.
+// SignatureLine separates a trust bundle's data lines from its signature
+// (docs/08 D4).
+const SignatureLine = "NYYRIKKI_SIGNATURE"
+
+// TrustLines builds the data lines of target t's trust bundle (docs/08
+// D4), in order: TARGET; one CA_KEY per trusted key; one SIGNER_KEY per
+// signer; one REVOKED_CA_KEY per revoked key; one HUMAN per human; SUDO;
+// ISSUED in Unix milliseconds; END counting the lines before it. Every
+// value comes from config and the key files, never from the request.
+func TrustLines(t *config.Target, set *sshca.Set, issued time.Time) ([]byte, error) {
+	if t == nil || t.SSH == nil {
+		return nil, errors.New("hostsetup: not an SSH target")
+	}
+	trusted, signers := set.Trusted(), set.Signers()
+	if len(trusted) == 0 || len(signers) == 0 {
+		return nil, errors.New("hostsetup: no trusted user CA key or no signer")
+	}
+	for _, s := range signers {
+		// SIGNER_KEY is always a subset of CA_KEY (docs/08 D4); a host
+		// refuses a bundle where it isn't (D5).
+		if !slices.ContainsFunc(trusted, func(p ssh.PublicKey) bool { return bytes.Equal(p.Marshal(), s.Marshal()) }) {
+			return nil, errors.New("hostsetup: a signer is not a trusted key")
+		}
+	}
+	var b lines
+	b.add("TARGET", t.Name)
+	for _, pk := range trusted {
+		b.key("CA_KEY", pk)
+	}
+	for _, pk := range signers {
+		b.key("SIGNER_KEY", pk)
+	}
+	for _, pk := range set.Revoked() {
+		b.key("REVOKED_CA_KEY", pk)
+	}
+	b.humans(t)
+	b.add("SUDO", strconv.FormatBool(t.SSH.Sudo))
+	b.add("ISSUED", strconv.FormatInt(issued.UnixMilli(), 10))
+	b.end()
+	return b.bytes()
+}
+
+// TrustBundle is target t's trust bundle (docs/08 D4): TrustLines, the
+// SignatureLine, then an SSHSIG signature by user-ca in namespace
+// nyyrikki-trust@v1 over every byte before the SignatureLine.
+func TrustBundle(t *config.Target, set *sshca.Set, issued time.Time) ([]byte, error) {
+	data, err := TrustLines(t, set, issued)
+	if err != nil {
+		return nil, err
+	}
+	// Only a SIGNER_KEY signs (D4): user-ca, which Load never returns
+	// revoked, so it is always one.
+	if !slices.ContainsFunc(set.Signers(), func(p ssh.PublicKey) bool {
+		return bytes.Equal(p.Marshal(), set.UserCA.PublicKey().Marshal())
+	}) {
+		return nil, errors.New("hostsetup: user-ca is not a signer")
+	}
+	sig, err := sshca.SignSSHSIG(set.UserCA, sshca.TrustNamespace, data)
+	if err != nil {
+		return nil, err
+	}
+	out := append(data, SignatureLine+"\n"...)
+	return append(out, sig...), nil
+}
+
+// Handler serves the setup script and the trust bundle.
 type Handler struct {
 	cfg   *config.Config
 	body  []byte
 	keys  *sshca.Keys
 	audit audit.Appender
 	log   *slog.Logger
+	now   func() time.Time
 }
 
 // New returns the handler. body is the embedded script; it is checked
@@ -134,10 +233,17 @@ func New(cfg *config.Config, body []byte, keys *sshca.Keys, a audit.Appender, lo
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{cfg: cfg, body: bytes.Clone(body), keys: keys, audit: a, log: logger}, nil
+	return &Handler{cfg: cfg, body: bytes.Clone(body), keys: keys, audit: a, log: logger, now: time.Now}, nil
 }
 
-var pathPattern = regexp.MustCompile(`^/hosts/([^/]+)/setup\.sh$`)
+// The paths under Prefix: /hosts/<target>/setup.sh (docs/07 D16) and
+// /hosts/<target>/trust (docs/08 D4), with the same rules.
+const (
+	pathSetup = "setup.sh"
+	pathTrust = "trust"
+)
+
+var pathPattern = regexp.MustCompile(`^/hosts/([^/]+)/(setup\.sh|trust)$`)
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -147,8 +253,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "only GET", http.StatusMethodNotAllowed)
 		return
 	}
-	// docs/07 D16: the path takes no parameters; nothing in the request
-	// may change what the script does.
+	// docs/07 D16: the paths take no parameters; nothing in the request
+	// may change what is served.
 	if r.URL.RawQuery != "" || r.URL.ForceQuery {
 		http.Error(w, "no query string", http.StatusBadRequest)
 		return
@@ -162,39 +268,78 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if t == nil {
 		// The same answer for an unknown, a Kubernetes and a malformed
-		// name.
+		// name, on either path.
 		http.NotFound(w, r)
 		return
 	}
+	what := "setup script"
+	if m[2] == pathTrust {
+		what = "trust bundle"
+	}
 	// docs/08 D1, D3: a broken key file or a revoked user-ca serves
-	// nothing, so no host is set up to trust the wrong keys.
+	// nothing and signs nothing, so no host is set up to trust, or pulls,
+	// the wrong keys.
 	set, err := h.keys.Load()
 	if err != nil {
 		detail := codes.DetailOf(err)
 		if detail == "" {
 			detail = "unavailable"
 		}
-		h.log.Error("the SSH CA keys are unavailable; setup script not served", "target", t.Name, "detail", detail)
+		h.log.Error("the SSH CA keys are unavailable; "+what+" not served", "target", t.Name, "detail", detail)
 		http.Error(w, "unavailable: "+detail, http.StatusServiceUnavailable)
 		return
 	}
-	data, err := DataLines(h.cfg, t, set.Trusted())
-	if err != nil {
-		h.log.Error("building the setup script's data lines failed", "target", t.Name, "err", err)
-		http.Error(w, "unavailable", http.StatusInternalServerError)
+	client, _, _ := net.SplitHostPort(r.RemoteAddr)
+	var out [][]byte
+	var rec audit.Record
+	contentType := "text/x-shellscript; charset=utf-8"
+	switch m[2] {
+	case pathSetup:
+		data, err := DataLines(h.cfg, t, set.Trusted())
+		if err != nil {
+			h.log.Error("building the setup script's data lines failed", "target", t.Name, "err", err)
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		out = [][]byte{h.body, data}
+		rec = audit.Record{Kind: codes.KindHostSetupServed, Targets: []string{t.Name}, Detail: "client " + client}
+	case pathTrust:
+		issued := h.now()
+		bundle, err := TrustBundle(t, set, issued)
+		if err != nil {
+			h.log.Error("building the trust bundle failed", "target", t.Name, "err", err)
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		out = [][]byte{bundle}
+		rec = audit.Record{Kind: codes.KindHostTrustServed, Targets: []string{t.Name},
+			Detail: "client " + client + " issued " + strconv.FormatInt(issued.UnixMilli(), 10) +
+				" ca_keys " + fingerprints(set.Trusted()) + " signer_keys " + fingerprints(set.Signers())}
+		contentType = "text/plain; charset=utf-8"
+	default:
+		http.NotFound(w, r)
 		return
 	}
-	client, _, _ := net.SplitHostPort(r.RemoteAddr)
-	rec := audit.Record{Kind: codes.KindHostSetupServed, Targets: []string{t.Name}, Detail: "client " + client}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
 	defer cancel()
 	if err := h.audit.Append(ctx, rec); err != nil {
-		// Every fetch is audited (docs/07 D16): no record, no script.
-		h.log.Error("audit write failed; setup script not served", "target", t.Name, "err", err)
+		// Every fetch is audited (docs/07 D16, docs/08 D4): no record,
+		// nothing served.
+		h.log.Error("audit write failed; "+what+" not served", "target", t.Name, "err", err)
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
-	_, _ = w.Write(h.body)
-	_, _ = w.Write(data)
+	w.Header().Set("Content-Type", contentType)
+	for _, b := range out {
+		_, _ = w.Write(b)
+	}
+}
+
+// fingerprints are the keys' SHA256 fingerprints, comma-separated.
+func fingerprints(keys []ssh.PublicKey) string {
+	fps := make([]string, len(keys))
+	for i, k := range keys {
+		fps[i] = ssh.FingerprintSHA256(k)
+	}
+	return strings.Join(fps, ",")
 }

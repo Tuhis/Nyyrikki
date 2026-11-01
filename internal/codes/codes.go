@@ -123,6 +123,9 @@ const (
 	KindStreamAttached     = "stream_attached"
 	KindDependencyFailed   = "dependency_failed"
 	KindHostSetupServed    = "host_setup_served"
+	// KindHostTrustServed: a fetch of an SSH host's trust bundle
+	// (docs/08 D4).
+	KindHostTrustServed = "host_trust_served"
 	// KindSSHCAWarning: an extra trusted key equals a derived one
 	// (docs/08 D14).
 	KindSSHCAWarning = "ssh_ca_warning"

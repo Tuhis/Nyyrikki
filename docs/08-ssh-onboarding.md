@@ -595,6 +595,39 @@ Where SE4 differs from, or settles what D9 and D10 leave open:
   pinned-target rule of the first item, and showing the failed check's
   detail.
 
+### SE3 (2026-11-01)
+
+Where SE3 settles what D4 leaves open:
+
+- **One handler for both paths.** `/hosts/<target>/trust` is served by
+  the `setup.sh` handler (`internal/hostsetup`), with one path pattern,
+  so the method, query and `404` rules are the same code; the `404` body
+  is the same for either path. Like `setup.sh`, the path exists only when
+  there is an SSH target.
+- **The body** is the data lines in D4's order, `END=<count>`, the line
+  `NYYRIKKI_SIGNATURE`, then the armored signature, ending in a newline;
+  there is no `NYYRIKKI_VALUES_END` (the bundle is never a heredoc), and
+  no `SOURCE` line, since D4 lists none and the pull never changes
+  `from=` (D5). `Content-Type: text/plain; charset=utf-8`,
+  `Cache-Control: no-store`. Keys are type and base64 only, and each
+  passes `config.ParseUserCAKey` before it is served, as `setup.sh`'s do.
+  `REVOKED_CA_KEY`s come from the loader's own revoked list
+  (`sshca.Set.Revoked`), the one it derives the trusted set with.
+- **Order of work per fetch**: load the keys (any failure is `503
+  unavailable: <detail>`, nothing built or signed), build the lines, sign
+  with `user-ca` (refused unless it is a `SIGNER_KEY`), audit, then
+  write. A failed audit write is `503` and serves nothing, as for
+  `setup.sh`. The signer (`sshca.SignSSHSIG`) signs only what the
+  handler built; nothing from the request reaches it.
+- **Audit**: `host_trust_served` with the target, and `detail`
+  `client <addr> issued <ms> ca_keys <fp,…> signer_keys <fp,…>`
+  (docs/03 §5.1).
+- **`test/ssh-host`** verifies a served bundle with the `ssh-keygen` of
+  Debian, Ubuntu and Rocky (`TestTrustBundleOnHost`); Alpine comes with
+  SE6's image. The docs/01 D10 path list is asserted by
+  `TestUnauthenticated`, now naming both `/hosts/` paths; docs/01's
+  dated note stays SE6's (§8).
+
 ## 11. Post-implementation review (YYYY-MM-DD)
 
 <!-- Added at close-out. -->

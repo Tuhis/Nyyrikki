@@ -85,6 +85,11 @@ once per host check before an SSH approval prompt: `code` `unavailable`
 and the check's `detail` when it failed, otherwise `detail`
 `session_kill` or `no_session_kill`, what the approver is shown.
 
+*Extended 2026-11-01 by [docs/08](08-ssh-onboarding.md) D4 (SE3)*:
+`host_trust_served` (the target, and in `detail` the client address,
+the bundle's `ISSUED` and the fingerprints of its `CA_KEY`s and
+`SIGNER_KEY`s), once per fetch of an SSH host's trust bundle.
+
 ### 5.2 Schema
 
 ```sql
