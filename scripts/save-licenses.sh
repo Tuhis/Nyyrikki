@@ -25,7 +25,11 @@ cp LICENSE "$out/github.com/Tuhis/Nyyrikki/LICENSE"
 
 # The go-sdk, if PKG uses it: its LICENSE is the file pinned in
 # scripts/pinned-licenses, which names every licence it is under.
-if go list -deps "$pkg" | grep -q '^github.com/modelcontextprotocol/go-sdk/'; then
+# The whole list first: piped into grep -q, go list can die of SIGPIPE
+# after the match, and under pipefail that reads as "not used" (review
+# of #52). A failing go list stops the script here.
+deps=$(go list -deps "$pkg")
+if grep -q '^github.com/modelcontextprotocol/go-sdk/' <<<"$deps"; then
   dir=$(go list -m -f '{{.Dir}}' github.com/modelcontextprotocol/go-sdk)
   [ -s "$dir/LICENSE" ] || { echo "go-sdk LICENSE missing in $dir" >&2; exit 1; }
   mkdir -p "$out/github.com/modelcontextprotocol/go-sdk"

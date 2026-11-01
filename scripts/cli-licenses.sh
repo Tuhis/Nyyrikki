@@ -18,4 +18,10 @@ done; done
 tar -czf "$out" -C "$work" licenses
 n=$(tar -tzf "$out" | grep -vc '/$' || true)
 [ "$n" -gt 3 ] || { echo "$out holds only $n files" >&2; exit 1; }
+# The licences the CLI always needs, by name: a count alone missed a
+# skipped go-sdk licence (review of #52).
+list=$(tar -tzf "$out")
+for f in github.com/Tuhis/Nyyrikki/LICENSE github.com/modelcontextprotocol/go-sdk/LICENSE go/LICENSE; do
+  grep -qx "licenses/$f" <<<"$list" || { echo "$out lacks $f" >&2; exit 1; }
+done
 echo "packed $n licence files into $out"
