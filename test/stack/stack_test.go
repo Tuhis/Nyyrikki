@@ -173,3 +173,42 @@ func TestCancelKillsTheGroupAfterTheGrace(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+// A command that hangs (a wedged docker daemon) doesn't hold Teardown
+// past its bound, and is ended, children and all.
+func TestTeardownBoundIsReal(t *testing.T) {
+	pids := filepath.Join(t.TempDir(), "pids")
+	stubs(t, map[string]string{
+		"docker": `echo $$ >> ` + pids + `; exec sleep 300`,
+		"kind":   `exit 0`,
+	})
+	shortTeardown(t, 300*time.Millisecond, 2*time.Second)
+	t.Cleanup(func() {
+		b, _ := os.ReadFile(pids)
+		for _, f := range strings.Fields(string(b)) {
+			if pid, err := strconv.Atoi(f); err == nil {
+				syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+	var logged []string
+	cfg := Config{Name: "nyyrikki-stub", Dir: t.TempDir(), Logf: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }}
+	done := make(chan struct{})
+	start := time.Now()
+	go func() { Teardown(cfg); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Teardown hung on a docker that hangs, far past its 2 s bound")
+	}
+	t.Logf("Teardown returned after %v", time.Since(start).Round(100*time.Millisecond))
+	if len(logged) == 0 || !strings.Contains(logged[len(logged)-1], "could not remove all of nyyrikki-stub") {
+		t.Errorf("Teardown said %q", logged)
+	}
+	b, _ := os.ReadFile(pids)
+	for _, f := range strings.Fields(string(b)) {
+		if pid, _ := strconv.Atoi(f); pid > 0 && alive(pid) {
+			t.Errorf("the hung docker %d still runs after Teardown", pid)
+		}
+	}
+}

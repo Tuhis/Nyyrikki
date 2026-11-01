@@ -189,6 +189,11 @@ var stopGrace = 10 * time.Second
 // stops the group's SIGKILL, so the group's number, free again once the
 // group is gone, can't be killed by mistake after its reuse.
 func command(ctx context.Context, name string, args ...string) (cmd *exec.Cmd, waited func()) {
+	return commandGrace(ctx, stopGrace, name, args...)
+}
+
+// commandGrace is command with its own grace period.
+func commandGrace(ctx context.Context, grace time.Duration, name string, args ...string) (cmd *exec.Cmd, waited func()) {
 	cmd = exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var (
@@ -196,7 +201,6 @@ func command(ctx context.Context, name string, args ...string) (cmd *exec.Cmd, w
 		done bool
 		kill *time.Timer
 	)
-	grace := stopGrace
 	cmd.Cancel = func() error {
 		pgid := cmd.Process.Pid
 		mu.Lock()
@@ -271,6 +275,8 @@ var teardownSettle = 12 * time.Second
 var (
 	teardownBound = 90 * time.Second
 	teardownPoll  = 2 * time.Second
+	// teardownGrace is a teardown command's, once the bound is reached.
+	teardownGrace = 2 * time.Second
 )
 
 // kindConfig is the cluster's: the API server also runs the admission
@@ -294,12 +300,18 @@ kubeadmConfigPatches:
 // teardownSettle, for at most teardownBound. A check that fails (docker
 // or kind not answering) counts as something seen: it proves nothing is
 // gone.
+//
+// The bound is real: every command runs under a deadline at it, in a
+// process group of its own (so the terminal's Ctrl-C doesn't reach it),
+// and is ended with its group when the deadline passes.
 func Teardown(cfg Config) {
 	start := time.Now()
+	ctx, cancel := context.WithDeadline(context.Background(), start.Add(teardownBound))
+	defer cancel()
 	lastSeen := start
 	var lastErr error
 	for {
-		found, err := cfg.teardownOnce()
+		found, err := cfg.teardownOnce(ctx)
 		if err != nil {
 			lastErr = err
 		}
@@ -323,35 +335,37 @@ func Teardown(cfg Config) {
 
 // teardownOnce removes what it finds of the stack. It reports whether it
 // found anything, or couldn't tell (with the error).
-func (c Config) teardownOnce() (found bool, err error) {
+func (c Config) teardownOnce(ctx context.Context) (found bool, err error) {
+	run := func(name string, args ...string) (string, error) {
+		cmd, waited := commandGrace(ctx, teardownGrace, name, args...)
+		defer waited()
+		return stdout(cmd)
+	}
 	// kind's own view: the stack's kubeconfig, so kind leaves the user's
 	// (~/.kube/config, $KUBECONFIG) alone. A missing file is fine.
-	out, kerr := stdout(Detached("kind", "get", "clusters"))
+	out, kerr := run("kind", "get", "clusters")
 	switch {
 	case kerr != nil:
 		found, err = true, kerr
 	case strings.Contains("\n"+out, "\n"+c.Cluster()+"\n"):
 		found = true
-		Detached("kind", "delete", "cluster", "--name", c.Cluster(), "--kubeconfig", filepath.Join(c.Dir, "kubeconfig")).Run()
+		run("kind", "delete", "cluster", "--name", c.Cluster(), "--kubeconfig", filepath.Join(c.Dir, "kubeconfig"))
 	}
-	left, cerr := c.containers()
+	left, cerr := c.containers(run)
 	if cerr != nil {
 		found, err = true, cerr
 	}
 	if len(left) > 0 {
 		found = true
-		Detached("docker", append([]string{"rm", "-f"}, left...)...).Run()
+		run("docker", append([]string{"rm", "-f"}, left...)...)
 	}
 	// Gone only on docker's own answer that it is.
-	var stderr bytes.Buffer
-	inspect := Detached("docker", "network", "inspect", c.Network())
-	inspect.Stderr = &stderr
-	switch ierr := inspect.Run(); {
+	switch _, ierr := run("docker", "network", "inspect", c.Network()); {
 	case ierr == nil:
 		found = true
-		Detached("docker", "network", "rm", c.Network()).Run()
-	case !notFound(stderr.String()):
-		found, err = true, fmt.Errorf("docker network inspect: %v: %s", ierr, strings.TrimSpace(stderr.String()))
+		run("docker", "network", "rm", c.Network())
+	case !notFound(ierr.Error()):
+		found, err = true, ierr
 	}
 	return found, err
 }
@@ -376,14 +390,14 @@ func notFound(answer string) bool {
 
 // containers lists the IDs of the stack's containers that exist: kind's
 // nodes (by kind's label), Keycloak and the caller's extra ones.
-func (c Config) containers() ([]string, error) {
+func (c Config) containers(run func(string, ...string) (string, error)) ([]string, error) {
 	filters := []string{"label=io.x-k8s.kind.cluster=" + c.Cluster()}
 	for _, n := range append([]string{c.KeycloakContainer()}, c.ExtraContainers...) {
 		filters = append(filters, "name=^/"+n+"$")
 	}
 	var ids []string
 	for _, f := range filters {
-		out, err := stdout(Detached("docker", "ps", "-aq", "--filter", f))
+		out, err := run("docker", "ps", "-aq", "--filter", f)
 		if err != nil {
 			return ids, err
 		}
