@@ -491,6 +491,9 @@ func (c *Config) Validate() error {
 		for _, e := range validateSSH(&c.SSH) {
 			bad("ssh: %v", e)
 		}
+		if _, err := HostURL(c.Server.CanonicalURL); err != nil {
+			bad("server.canonical_url %v", err)
+		}
 	} else if !reflectZeroSSH(&c.SSH) {
 		bad("ssh is set, but no target is an SSH target")
 	}

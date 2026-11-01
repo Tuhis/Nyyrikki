@@ -89,6 +89,9 @@ func TestSSHInvalid(t *testing.T) {
 		"next is user-ca":    {caKey, caKey + "  next_user_ca_key_file: /etc/nyyrikki/ssh/user-ca\n"},
 		"host CA is user-ca": {caKey, caKey + "  host_ca_key_file: /etc/nyyrikki/ssh/user-ca\n"},
 		"host CA is next":    {caKey, caKey + "  next_user_ca_key_file: /n\n  host_ca_key_file: /n\n"},
+		// docs/08 D13: the URL data line's format, which the script checks.
+		"canonical host with underscore": {"canonical_url: https://nyyrikki.example.com", "canonical_url: https://ny_rikki.example.com"},
+		"canonical port too long":        {"canonical_url: https://nyyrikki.example.com", "canonical_url: https://nyyrikki.example.com:123456"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

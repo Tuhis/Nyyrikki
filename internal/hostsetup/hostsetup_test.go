@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Tuhis/Nyyrikki/internal/audit"
 	"github.com/Tuhis/Nyyrikki/internal/codes"
@@ -111,6 +113,7 @@ func TestHostSetupEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.now = func() time.Time { return time.UnixMilli(1793491200123) }
 	w := get(t, h, http.MethodGet, "/hosts/db-1/setup.sh")
 	if w.Code != 200 {
 		t.Fatalf("status %d", w.Code)
@@ -119,11 +122,13 @@ func TestHostSetupEndpoint(t *testing.T) {
 	if !strings.HasPrefix(got, body) {
 		t.Fatal("the body is not the script as built in")
 	}
-	// docs/08 D1: the derived key first, then the extra configured one.
+	// docs/08 D1: the derived key first, then the extra configured one;
+	// user-ca is the only signer (D4); D13's ISSUED and URL last.
 	want := "TARGET=db-1\nHUMAN=owner\n" +
 		"CA_KEY=" + derived + "\n" +
 		"CA_KEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtQUDaOXFoxZXKtrCeRHnmb3cZC5ezAuP4rsLVI1r7Y\n" +
-		"SOURCE=203.0.113.10/32\nSUDO=true\nEND=6\n" + Terminator + "\n"
+		"SIGNER_KEY=" + derived + "\n" +
+		"SOURCE=203.0.113.10/32\nSUDO=true\nISSUED=1793491200123\nURL=https://nyyrikki.example.com\nEND=9\n" + Terminator + "\n"
 	if data := strings.TrimPrefix(got, body); data != want {
 		t.Fatalf("data lines:\n%s\nwant:\n%s", data, want)
 	}
@@ -280,5 +285,94 @@ func TestHostSetupEndpointCAKeys(t *testing.T) {
 				t.Fatalf("audited as served: %+v", a.recs)
 			}
 		})
+	}
+}
+
+// TestHostSetupDataLinesSE6 covers docs/08 D13's data lines: SIGNER_KEY
+// for pub(user-ca) and a staged key, never a revoked one, and always a
+// subset of CA_KEY; REVOKED_CA_KEY per revoked key; ISSUED the server's
+// time in Unix milliseconds; URL the canonical URL without its slash.
+// What the script would refuse is never served.
+func TestHostSetupDataLinesSE6(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(t)
+	cfg.Server.CanonicalURL = "https://nyyrikki.example.com:8443/"
+	user, userLine := keyFile(t, dir, "user-ca")
+	next, nextLine := keyFile(t, dir, "user-ca-next")
+	_, revLine := keyFile(t, dir, "old")
+	at := time.UnixMilli(1793491200123)
+	lines := func(c *config.Config, f sshca.Files) map[string][]string {
+		t.Helper()
+		set, err := keysFor(t, c, f).Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		tg, _ := c.TargetByName("db-1")
+		b, err := DataLines(c, tg, set, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := map[string][]string{}
+		for _, l := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+			if l == Terminator {
+				continue
+			}
+			k, v, _ := strings.Cut(l, "=")
+			m[k] = append(m[k], v)
+		}
+		return m
+	}
+	c := *cfg
+	c.SSH.RevokedUserCAKeys = []string{revLine}
+	m := lines(&c, sshca.Files{UserCA: user, NextUserCA: next})
+	if got := strings.Join(m["SIGNER_KEY"], "|"); got != userLine+"|"+nextLine {
+		t.Errorf("SIGNER_KEY %q", got)
+	}
+	for _, s := range m["SIGNER_KEY"] {
+		if !slices.Contains(m["CA_KEY"], s) {
+			t.Errorf("signer %s is not a CA_KEY", s)
+		}
+	}
+	if got := strings.Join(m["REVOKED_CA_KEY"], "|"); got != revLine {
+		t.Errorf("REVOKED_CA_KEY %q", got)
+	}
+	if got := strings.Join(m["ISSUED"], "|"); got != "1793491200123" {
+		t.Errorf("ISSUED %q", got)
+	}
+	if got := strings.Join(m["URL"], "|"); got != "https://nyyrikki.example.com:8443" {
+		t.Errorf("URL %q", got)
+	}
+	// A revoked staged key is neither trusted nor a signer (D4).
+	c.SSH.RevokedUserCAKeys = []string{nextLine}
+	m = lines(&c, sshca.Files{UserCA: user, NextUserCA: next})
+	if strings.Join(m["SIGNER_KEY"], "|") != userLine || slices.Contains(m["CA_KEY"], nextLine) || strings.Join(m["REVOKED_CA_KEY"], "|") != nextLine {
+		t.Errorf("a revoked staged key: %v", m)
+	}
+
+	// Refused rather than served: a canonical URL the script would refuse,
+	// and a clock ISSUED can't express.
+	set, err := keysFor(t, cfg, sshca.Files{UserCA: user}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg, _ := cfg.TargetByName("db-1")
+	for _, u := range []string{"https://nyyrikki.example.com/x", "https://user@nyyrikki.example.com", "http://nyyrikki.example.com", "https://ny_rikki.example.com", "https://a.example.com:123456", "https://" + strings.Repeat("a", 200)} {
+		c := *cfg
+		c.Server.CanonicalURL = u
+		if _, err := DataLines(&c, tg, set, at); err == nil {
+			t.Errorf("served URL %q", u)
+		}
+	}
+	for _, u := range []string{"https://10.0.0.1:30443", "https://[2001:db8::1]:8443", "https://nyyrikki.example.com/"} {
+		c := *cfg
+		c.Server.CanonicalURL = u
+		if _, err := DataLines(&c, tg, set, at); err != nil {
+			t.Errorf("refused URL %q: %v", u, err)
+		}
+	}
+	for _, ts := range []time.Time{time.UnixMilli(999999999999), time.UnixMilli(10000000000000), time.UnixMilli(-1)} {
+		if _, err := DataLines(cfg, tg, set, ts); err == nil {
+			t.Errorf("served ISSUED for %d", ts.UnixMilli())
+		}
 	}
 }
