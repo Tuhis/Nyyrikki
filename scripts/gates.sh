@@ -19,6 +19,21 @@ gate() {
       staticcheck) staticcheck ./... ;;
       tidy)        go mod tidy -diff ;;
       test)        go test -race -count=1 ./... ;;
+      coverage)    # Cross-package total against coverage-floor.txt (docs/09 D5).
+                   # No -race: the test gate has it. Fails closed: a floor that
+                   # isn't a whole number from 1 to 100, an empty profile or an
+                   # unparseable total all fail.
+                   floor=$(cat coverage-floor.txt 2>/dev/null) || { echo "coverage: no coverage-floor.txt"; exit 1; }
+                   [[ $floor =~ ^[0-9]+$ ]] && [ "$floor" -ge 1 ] && [ "$floor" -le 100 ] \
+                     || { echo "coverage: coverage-floor.txt must be a whole percent from 1 to 100, not '$floor'"; exit 1; }
+                   prof=$(mktemp); trap 'rm -f "$prof"' EXIT
+                   go test -count=1 -coverpkg=./... -coverprofile="$prof" ./...
+                   [ "$(grep -vc '^mode:' "$prof")" -gt 0 ] || { echo "coverage: the profile has no blocks"; exit 1; }
+                   total=$(go tool cover -func="$prof" | awk '$1 == "total:" { print $NF }')
+                   [[ $total =~ ^[0-9]+(\.[0-9]+)?%$ ]] || { echo "coverage: could not read the total from '$total'"; exit 1; }
+                   echo "coverage: total ${total}, floor ${floor}%"
+                   awk -v t="${total%\%}" -v f="$floor" 'BEGIN { exit !(t + 0 >= f + 0) }' \
+                     || { echo "coverage: total ${total} is below the floor ${floor}%"; exit 1; } ;;
       vuln)        govulncheck ./... ;;
       licenses)    go-licenses check ./... --allowed_licenses="$LICENSES" "${LICENSE_IGNORE[@]}"
                    [ "$dir" != . ] || scripts/check-pinned-licenses.sh ;;
@@ -40,6 +55,6 @@ gate() {
 }
 
 if [ $# -gt 0 ]; then gate "$@"; exit; fi
-for g in fmt vet staticcheck tidy test vuln licenses secrets chart pinning; do
+for g in fmt vet staticcheck tidy test coverage vuln licenses secrets chart pinning; do
   echo "== $g"; gate "$g"
 done

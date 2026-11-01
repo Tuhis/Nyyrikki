@@ -80,6 +80,7 @@ exactly one authoritative home.
 ```sh
 scripts/gates.sh            # every gate
 scripts/gates.sh test       # one gate
+scripts/gates.sh coverage   # total coverage against coverage-floor.txt
 scripts/gates-selftest.sh   # every gate fails on its canary
 ```
 
@@ -89,6 +90,11 @@ minutes (it creates a kind cluster and a Keycloak container):
 ```sh
 go test -tags e2e -timeout 40m -v ./test/e2e/
 ```
+
+The `coverage` gate prints the total and the floor. If your change
+raises the total a whole point past `coverage-floor.txt`, raise the floor
+in a commit; never lower it without saying why in the PR
+(`CODE-REVIEW.md` §Gates).
 
 The tools and their versions are listed in `CODE-REVIEW.md` §Gates; install
 them with `go install` at those versions. The chart gate also needs
