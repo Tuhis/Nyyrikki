@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"net/url"
@@ -87,7 +88,7 @@ CREATE INDEX IF NOT EXISTS approvals_group ON approvals(group_id) WHERE group_id
 // Foreign keys are off on that one connection while the table is
 // replaced (elevations and approval_host_facts refer to it), and checked
 // before the commit; any failure rolls back and leaves the old table.
-func migrateApprovals(ctx context.Context, db *sql.DB) error {
+func migrateApprovals(ctx context.Context, db *sql.DB) (err error) {
 	var def string
 	if err := db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'approvals'").Scan(&def); err != nil {
 		return err
@@ -104,8 +105,17 @@ func migrateApprovals(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	// The connection goes back to the pool afterwards: foreign keys on
-	// again whatever happened.
-	defer conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA foreign_keys = ON")
+	// again whatever happened. If that fails, the connection is discarded
+	// rather than pooled without foreign keys, and Open fails (round 1 of
+	// #47).
+	defer func() {
+		if _, ferr := conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA foreign_keys = ON"); ferr != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			if err == nil {
+				err = fmt.Errorf("restore foreign keys after the approvals rebuild: %w", ferr)
+			}
+		}
+	}()
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -126,7 +136,12 @@ func migrateApprovals(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	broken := rows.Next()
+	rerr := rows.Err()
 	rows.Close()
+	if rerr != nil {
+		// An iteration error is not "nothing broken" (round 1 of #47).
+		return rerr
+	}
 	if broken {
 		return errors.New("foreign keys broken by the rebuild")
 	}

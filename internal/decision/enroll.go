@@ -72,11 +72,13 @@ func (p *Point) DecideEnroll(ctx context.Context, r EnrollRequest, issue func(ct
 			approvers = append(approvers, groupApprover{h.ID, h.TelegramUserID})
 		}
 	}
-	if len(approvers) == 0 {
-		return deny(codes.WithDetail(codes.Unavailable, "no_approver", "the target has no human to approve its enrollment"))
-	}
+	// The request is audited before any denial, as everywhere else (round
+	// 1 of #47).
 	if err := p.audit.Append(ctx, rec); err != nil {
 		return codes.Wrap(codes.Unavailable, err, "audit log unavailable")
+	}
+	if len(approvers) == 0 {
+		return deny(codes.WithDetail(codes.Unavailable, "no_approver", "the target has no human to approve its enrollment"))
 	}
 	if !p.asker.Healthy() {
 		return deny(codes.New(codes.Unavailable, "the approval channel is unavailable"))
@@ -122,8 +124,13 @@ func (p *Point) DecideEnroll(ctx context.Context, r EnrollRequest, issue func(ct
 			ClientAddr: r.ClientAddr, TokenIssued: r.TokenIssued, ExpiresAt: expires,
 		})
 		if err != nil {
-			// Fail closed: every copy already sent is edited to say so.
-			p.settle(group, statePending, stateFailed, nil)
+			// Fail closed: every copy already sent is edited to say so. A
+			// tap may already have approved the group while later copies
+			// were being sent; nothing is issued then either, so mark it
+			// failed too, which edits the stale copies (round 1 of #47).
+			if !p.settle(group, statePending, stateFailed, nil) {
+				p.settle(group, stateApproved, stateFailed, nil)
+			}
 			if codes.Of(err) == codes.InvalidRequest {
 				return deny(err)
 			}
