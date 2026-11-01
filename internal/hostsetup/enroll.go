@@ -34,6 +34,8 @@ const (
 	AuthScheme = "Nyyrikki-Enroll"
 	// maxEnrollBody bounds the enrollment's data lines (docs/08 §6).
 	maxEnrollBody = 4 << 10
+	// enrollBodyTimeout bounds the read of an enrollment body (round 1 of #47).
+	enrollBodyTimeout = 30 * time.Second
 )
 
 // Token refusals, each a 401 and an audit detail (docs/08 D6, G6). A
@@ -231,12 +233,19 @@ func clientAddr(remote string) string {
 }
 
 // claim moves the token from one stage to the next, atomically; it
-// reports false if the token wasn't in stage from (0: never seen). It
-// also drops tokens past their expiry, which are refused before this.
-func (e *Enroll) claim(t Token, from, to int, cert *ssh.Certificate) (*ssh.Certificate, bool) {
+// reports false if the token wasn't in stage from (0: never seen), and
+// expired true if the token's life has ended, which it checks first: a
+// client sending its body slowly can pass begin's expiry check and reach
+// this after expiry, when the sweep below has already dropped an earlier
+// use, so "never seen" would wrongly hold (round 1 of #47). It then drops
+// tokens past their expiry.
+func (e *Enroll) claim(t Token, from, to int, cert *ssh.Certificate) (prev *ssh.Certificate, ok, expired bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := e.c.Now()
+	if !now.Before(t.Expires) {
+		return nil, false, true
+	}
 	for k, u := range e.tokens {
 		if !now.Before(u.expires) {
 			delete(e.tokens, k)
@@ -248,13 +257,13 @@ func (e *Enroll) claim(t Token, from, to int, cert *ssh.Certificate) (*ssh.Certi
 		cur = u.stage
 	}
 	if cur != from {
-		return nil, false
+		return nil, false, false
 	}
 	if u == nil {
 		u = &tokenUse{expires: t.Expires}
 		e.tokens[t.Random] = u
 	}
-	prev := u.cert
+	prev = u.cert
 	u.stage = to
 	if cert != nil {
 		u.cert = cert
@@ -262,7 +271,7 @@ func (e *Enroll) claim(t Token, from, to int, cert *ssh.Certificate) (*ssh.Certi
 	if to == stageUsed {
 		u.cert = nil
 	}
-	return prev, true
+	return prev, true, false
 }
 
 func (e *Enroll) serveEnroll(w http.ResponseWriter, r *http.Request) {
@@ -271,6 +280,10 @@ func (e *Enroll) serveEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rec := audit.Record{Targets: []string{q.target.Name}, ClientAddr: q.client, TokenSHA256: q.token.SHA256()}
+	// Bound how long a client may take over its body; the claim below
+	// refuses an expired token whatever the deadline (round 1 of #47).
+	// Not every ResponseWriter supports deadlines, so the error is ignored.
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(enrollBodyTimeout))
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxEnrollBody))
 	if err != nil {
 		e.refuse(w, r, rec, http.StatusBadRequest, detailBadBody)
@@ -282,10 +295,23 @@ func (e *Enroll) serveEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rec.HostKey = ssh.FingerprintSHA256(hostKey)
+	// A revoked host key would be refused on every run (docs/08 D9):
+	// refuse it before anyone is asked, without using the token up
+	// (round 1 of #47).
+	for _, k := range e.c.Config.SSH.RevokedHostKeys {
+		if pk, err := config.ParsePublicKey(k); err == nil && bytes.Equal(pk.Marshal(), hostKey.Marshal()) {
+			e.refuse(w, r, rec, http.StatusBadRequest, "host_key_revoked")
+			return
+		}
+	}
 	// One enrollment per token (docs/08 D6), claimed before anyone is
 	// asked.
-	if _, ok := e.claim(q.token, 0, stageEnrolling, nil); !ok {
-		e.refuse(w, r, rec, http.StatusUnauthorized, detailTokenUsed)
+	if _, ok, expired := e.claim(q.token, 0, stageEnrolling, nil); !ok {
+		detail := detailTokenUsed
+		if expired {
+			detail = detailTokenExpired
+		}
+		e.refuse(w, r, rec, http.StatusUnauthorized, detail)
 		return
 	}
 	host, _, err := config.SplitAddress(q.target.SSH.Address)
@@ -433,9 +459,13 @@ func (e *Enroll) serveCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// After an approved enrollment only, once (docs/08 D7).
-	cert, ok := e.claim(q.token, stageEnrolled, stageUsed, nil)
+	cert, ok, expired := e.claim(q.token, stageEnrolled, stageUsed, nil)
 	if !ok || cert == nil {
-		e.refuse(w, r, rec, http.StatusUnauthorized, detailTokenUsed)
+		detail := detailTokenUsed
+		if expired {
+			detail = detailTokenExpired
+		}
+		e.refuse(w, r, rec, http.StatusUnauthorized, detail)
 		return
 	}
 	rec.HostKey = ssh.FingerprintSHA256(cert.Key)

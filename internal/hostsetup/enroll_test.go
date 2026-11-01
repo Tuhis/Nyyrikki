@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -559,5 +560,62 @@ func TestEnrollCallerGone(t *testing.T) {
 	<-done
 	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "CERT") {
 		t.Fatalf("status %d %q", w.Code, w.Body.String())
+	}
+}
+
+// slowBody runs fn when it is first read, as a client sending its body
+// slowly lets time pass between the token check and the claim.
+type slowBody struct {
+	r  io.Reader
+	fn func()
+}
+
+func (b *slowBody) Read(p []byte) (int, error) {
+	if b.fn != nil {
+		b.fn()
+		b.fn = nil
+	}
+	return b.r.Read(p)
+}
+
+// A token whose expiry passes while its body is read can't start a second
+// enrollment, or a first one: the claim refuses an expired token instead
+// of sweeping the earlier use away (round 1 of #47).
+func TestEnrollTokenExpiresDuringBody(t *testing.T) {
+	env := newEnrollEnv(t)
+	tok := env.mint(t, "db-1", env.now)
+	if w := env.post(t, "/hosts/db-1/enroll", AuthScheme+" "+tok, enrollBody(newHostKey(t), false)); w.Code != 200 {
+		t.Fatalf("first enrollment: %d %s", w.Code, w.Body.String())
+	}
+	fresh := env.mint(t, "db-1", env.now) // never used
+	for _, tc := range []struct{ name, tok string }{{"replayed", tok}, {"first use", fresh}} {
+		start := env.now
+		r := httptest.NewRequest(http.MethodPost, "/hosts/db-1/enroll", &slowBody{
+			r: strings.NewReader(enrollBody(newHostKey(t), false)), fn: func() { env.now = start.Add(TokenLife + time.Hour) }})
+		r.Header.Set("Authorization", AuthScheme+" "+tc.tok)
+		r.RemoteAddr = "198.51.100.7:40000"
+		w := httptest.NewRecorder()
+		env.mux.ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized || env.dec.prompts() != 1 || env.lastDetail() != detailTokenExpired {
+			t.Fatalf("%s: %d %q, prompts %d, detail %q", tc.name, w.Code, w.Body.String(), env.dec.prompts(), env.lastDetail())
+		}
+		env.now = start
+	}
+}
+
+// A host key listed in ssh.revoked_host_keys is refused before anyone is
+// asked, since the verifier would refuse it on every run anyway; the token
+// isn't used up (round 1 of #47).
+func TestEnrollRevokedHostKey(t *testing.T) {
+	env := newEnrollEnv(t)
+	hk := newHostKey(t)
+	env.cfg.SSH.RevokedHostKeys = []string{sshca.AuthorizedKey(hk)}
+	tok := env.mint(t, "db-1", env.now)
+	w := env.post(t, "/hosts/db-1/enroll", AuthScheme+" "+tok, enrollBody(hk, false))
+	if w.Code != http.StatusBadRequest || env.dec.prompts() != 0 || env.lastDetail() != "host_key_revoked" {
+		t.Fatalf("revoked key: %d %q, prompts %d, detail %q", w.Code, w.Body.String(), env.dec.prompts(), env.lastDetail())
+	}
+	if w := env.post(t, "/hosts/db-1/enroll", AuthScheme+" "+tok, enrollBody(newHostKey(t), false)); w.Code != 200 || env.dec.prompts() != 1 {
+		t.Fatalf("the token was used up: %d %q", w.Code, w.Body.String())
 	}
 }
