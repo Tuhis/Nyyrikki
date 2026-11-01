@@ -76,7 +76,7 @@ Agent: Claude Code (name claimed by the client)
 key ab12cd34, signed in 2026-10-26 11:00:00 UTC
 
 Request:
-kubectl delete pod web-0 --namespace=shop
+kubectl delete --namespace=shop pod web-0
 
 Agent's claim (unverified):
 │ web-0 is stuck in CrashLoopBackOff
