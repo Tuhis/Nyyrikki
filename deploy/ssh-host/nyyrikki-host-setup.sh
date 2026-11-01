@@ -92,6 +92,7 @@ ny_init() {
 	NY_ENROLLING=0
 	NY_CERT_ON=0
 	NY_CERT_PENDING=0
+	NY_CERT_PREV=0
 	NY_LOCKED=0
 	NY_SCHED=none
 	NY_SCHED_WHY=
@@ -300,6 +301,10 @@ is_secs() {
 # line break (it is one data line), so grep sees it whole.
 is_url() {
 	[ "${#1}" -le 200 ] || return 1
+	# grep -x matches per line: a value with a line break in it must not
+	# pass on one good line (round 1 of #50).
+	case $1 in *'
+'*) return 1 ;; esac
 	printf '%s\n' "$1" | grep -E -x -q 'https://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?'
 }
 
@@ -1108,6 +1113,10 @@ is_secs() {
 
 is_url() {
 	[ "${#1}" -le 200 ] || return 1
+	# grep -x matches per line: a value with a line break in it must not
+	# pass on one good line (round 1 of #50).
+	case $1 in *'
+'*) return 1 ;; esac
 	printf '%s\n' "$1" | grep -E -x -q 'https://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?'
 }
 
@@ -1592,6 +1601,12 @@ ny_detect_schedule() {
 			busybox*) continue ;;
 			esac
 			NY_SCHED=cron.d
+			# Installed isn't running: on a systemd host, say so when no
+			# cron unit is enabled (round 1 of #50).
+			if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1 &&
+				! systemctl is-enabled --quiet cron.service crond.service cronie.service 2>/dev/null; then
+				NY_SCHED_WHY="warning: no cron unit is enabled (systemctl enable --now cron or crond), so nothing runs the pull yet"
+			fi
 			return 0
 		done
 	fi
@@ -1754,6 +1769,7 @@ ny_check() {
 		0 | 1) ;;
 		*) die "refused: $NY_KRL isn't a valid key revocation list: $ny_fp" ;;
 		esac
+		ny_krl_trusted
 	fi
 
 	# The accounts list.
@@ -1837,6 +1853,32 @@ ny_take_away() {
 # (docs/08 D13). Like the rest of step 2, a rollback leaves it: the
 # values no longer trust those keys. Step 3 writes a missing list with
 # them included.
+# ny_krl_trusted refuses when the host's revocation list lists a key this
+# script's values trust (a CA_KEY or SIGNER_KEY). The list only grows, and
+# a bundle signed by a leaked key could have added the staged key to it:
+# without this, the leak recovery's re-run (docs/08 §5.4) would succeed
+# and leave the host refusing every Nyyrikki login (round 1 of #50). The
+# list isn't rebuilt here, since that would drop revocations added by hand.
+ny_krl_trusted() {
+	ny_kt_bad=
+	for ny_kt_k in $NY_CA_B64 $NY_SIGNER_B64; do
+		printf 'ssh-ed25519 %s\n' "$ny_kt_k" >"$NY_WORK/kt.pub" || die "can't write to $NY_WORK"
+		ssh-keygen -Q -f "$NY_KRL" "$NY_WORK/kt.pub" >/dev/null 2>&1
+		case $? in
+		0) ;;
+		1)
+			ny_kt_fp=$(ssh-keygen -l -f "$NY_WORK/kt.pub" | cut -d' ' -f2) || die "can't read a CA key"
+			case " $ny_kt_bad " in
+			*" $ny_kt_fp "*) ;;
+			*) ny_kt_bad="${ny_kt_bad:+$ny_kt_bad }$ny_kt_fp" ;;
+			esac
+			;;
+		*) die "refused: can't read $NY_KRL" ;;
+		esac
+	done
+	[ -z "$ny_kt_bad" ] || die "refused: $NY_KRL, the host's revocation list, lists a key this script trusts: $ny_kt_bad. A revoked key, or one a leaked key revoked through a bundle, stays revoked until the list is rebuilt: rebuild it from the revoked keys only (ssh-keygen -k -f $NY_KRL <each revoked public key>; see docs/setup/ssh-hosts.md), then run this again"
+}
+
 ny_revoke() {
 	[ -f "$NY_KRL" ] && [ -n "$NY_REVOKED_B64" ] || return 0
 	: >"$NY_WORK/revoke.pub" || die "can't write to $NY_WORK"
@@ -2208,21 +2250,31 @@ ny_enroll_abort() {
 	NY_ENROLLING=0
 	if [ "$NY_CERT_PENDING" = 1 ]; then
 		NY_CERT_PENDING=0
-		NY_CERT_ON=0
-		warn "removing the host certificate this run installed, and its HostCertificate line"
-		rm -f -- "$NY_HOSTCERT" || warn "can't remove $NY_HOSTCERT"
+		if [ "$NY_CERT_PREV" = 1 ] && ny_put_now "$NY_WORK/prev-cert.pub" "$NY_HOSTCERT" 0644; then
+			# The host was enrolled before this run: put its working
+			# certificate back rather than leave it unenrolled.
+			warn "restoring the earlier host certificate in place of the one this run installed"
+		else
+			NY_CERT_ON=0
+			warn "removing the host certificate this run installed, and its HostCertificate line"
+			rm -f -- "$NY_HOSTCERT" || warn "can't remove $NY_HOSTCERT"
+		fi
 		# shellcheck disable=SC2086 # account names are slugs
 		if ny_gen_sshd "$NY_WORK/sshd" $NY_ACCOUNTS && ny_put_now "$NY_WORK/sshd" "$NY_SSHD" 0644; then
 			if "$NY_SSHD_BIN" -t; then
 				ny_reload_sshd || warn "reloading sshd failed"
 			else
-				warn "sshd -t fails without the certificate too; sshd was not reloaded"
+				warn "sshd -t fails after undoing the certificate change too; sshd was not reloaded"
 			fi
 		else
 			warn "can't rewrite $NY_SSHD without HostCertificate"
 		fi
 	fi
-	warn "The enrollment failed. The host is set up (steps 1 to 9), and Nyyrikki refuses it until it is enrolled or its keys are pinned. Run the setup again with a new token (nyyrikkid enroll-token $NY_TARGET)."
+	if [ "$NY_CERT_ON" = 1 ]; then
+		warn "The enrollment failed. The host is set up (steps 1 to 9) and keeps its earlier certificate. To enroll it again, run the setup with a new token (nyyrikkid enroll-token $NY_TARGET)."
+	else
+		warn "The enrollment failed. The host is set up (steps 1 to 9), and Nyyrikki refuses it until it is enrolled or its keys are pinned. Run the setup again with a new token (nyyrikkid enroll-token $NY_TARGET)."
+	fi
 	ny_cleanup
 	exit 1
 }
@@ -2305,6 +2357,12 @@ ny_enroll() {
 	esac
 
 	# Install it, then the drop-in that names it, and check them with sshd.
+	# A re-enrollment keeps the earlier certificate to put back if this
+	# one fails (round 1 of #50).
+	if [ -f "$NY_HOSTCERT" ]; then
+		cp -- "$NY_HOSTCERT" "$NY_WORK/prev-cert.pub" || die "can't keep a copy of $NY_HOSTCERT"
+		NY_CERT_PREV=1
+	fi
 	NY_CERT_PENDING=1
 	ny_put_now "$NY_WORK/cert.pub" "$NY_HOSTCERT" 0644 || die "can't write $NY_HOSTCERT"
 	NY_CERT_ON=1
@@ -2378,6 +2436,9 @@ ny_status_keys() {
 	while IFS= read -r ny_sk_l; do
 		printf '%s\n' "$ny_sk_l" >"$NY_WORK/s.pub" 2>/dev/null || continue
 		ny_sk_fp=$(ssh-keygen -l -f "$NY_WORK/s.pub" 2>/dev/null) || ny_sk_fp="(doesn't parse)"
+		if [ -f "$NY_KRL" ] && ! ssh-keygen -Q -f "$NY_KRL" "$NY_WORK/s.pub" >/dev/null 2>&1; then
+			ny_sk_fp="$ny_sk_fp  REVOKED by $NY_KRL"
+		fi
 		say "    $ny_sk_fp"
 	done <"$2"
 }
@@ -2401,6 +2462,16 @@ ny_status() {
 	fi
 	ny_status_keys "trusted user CA keys ($NY_CA)" "$NY_CA"
 	ny_status_keys "bundle signers ($NY_SIGNERS)" "$NY_SIGNERS"
+	# This script's own keys, against the host's revocation list (round 1
+	# of #50): a run would refuse them.
+	if [ -f "$NY_KRL" ]; then
+		for ny_sk_k in $NY_CA_B64 $NY_SIGNER_B64; do
+			printf 'ssh-ed25519 %s\n' "$ny_sk_k" >"$NY_WORK/s.pub" 2>/dev/null || continue
+			if ! ssh-keygen -Q -f "$NY_KRL" "$NY_WORK/s.pub" >/dev/null 2>&1; then
+				say "this script trusts $(ssh-keygen -l -f "$NY_WORK/s.pub" 2>/dev/null | cut -d' ' -f2), which $NY_KRL lists: REVOKED; a setup run refuses it"
+			fi
+		done
+	fi
 	if [ -f "$NY_CRON" ]; then
 		say "pull: cron.d ($NY_CRON)"
 	elif [ -f "$NY_PERIODIC" ]; then
@@ -2410,6 +2481,12 @@ ny_status() {
 	fi
 	if [ -f "$NY_PULLCONF" ]; then
 		say "pull from: $(sed -n 's/^URL=//p' "$NY_PULLCONF" | head -n 1 | tr -c ' -~\n' '?')$([ -f "$NY_SERVERCA" ] && printf ', trusting %s' "$NY_SERVERCA")"
+		ny_st_t=$(sed -n 's/^TARGET=//p' "$NY_PULLCONF" | head -n 1 | tr -c ' -~\n' '?')
+		if [ "$ny_st_t" = "$NY_TARGET" ]; then
+			say "pull target: $ny_st_t"
+		else
+			say "pull target: $ny_st_t, NOT this script's target $NY_TARGET: the host was set up for another target"
+		fi
 	fi
 	if [ -f "$NY_STATE" ] && ny_read_state "$NY_STATE"; then
 		ny_clock

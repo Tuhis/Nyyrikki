@@ -131,8 +131,15 @@ func TestSetupAndLogin(t *testing.T) {
 		if out, code := h.certLogin("owner", "db-1", "true"); code == 0 {
 			t.Fatalf("a certificate of a revoked CA logged in: %q", out)
 		}
-		// A re-run keeps the revocation list (§5.6 "after a leak", step 2).
-		h.mustSetup(v)
+		// A re-run whose values still trust the revoked CA is refused, and
+		// the revocation list stays (docs/08 D13, round 1 of #50: a key the
+		// values trust that the list names would leave the host refusing
+		// Nyyrikki).
+		revoked := h.snapshot()
+		if r := h.setup(v); r.code == 0 || !strings.Contains(r.err, "revocation list") {
+			t.Fatalf("a re-run trusting a revoked CA: %s", r)
+		}
+		h.sameAs(revoked, "a re-run refused for the revocation list")
 		if q := h.must("ssh-keygen -Q -f /etc/ssh/nyyrikki/revoked.krl /root/ca.pub || true"); !strings.Contains(q, "REVOKED") {
 			t.Fatalf("a re-run replaced the revocation list: %q", q)
 		}

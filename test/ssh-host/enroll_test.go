@@ -237,6 +237,26 @@ func TestEnroll(t *testing.T) {
 			t.Fatal("a refused check removed the certificate")
 		}
 
+		// A re-enrollment whose new certificate sshd refuses puts the
+		// earlier, working one back instead of deleting it (round 1 of #50).
+		h.answer("check", 0, []byte("OK=ny-owner\nEND=1\n"))
+		prev := h.must("cat " + hostCertPath)
+		h.installShim("sshd", "-t", "fail", 2, false)
+		r = h.run(script, enroll...)
+		if !h.shimHit("sshd") {
+			t.Fatalf("the sshd shim never fired: %s", r)
+		}
+		h.clearShim("sshd")
+		if r.code == 0 || !strings.Contains(r.err, "restoring the earlier host certificate") {
+			t.Fatalf("a failed re-enrollment: %s", r)
+		}
+		if !h.exists(hostCertPath) || h.must("cat "+hostCertPath) != prev || !h.certBeforeMatch() {
+			t.Fatal("a failed re-enrollment didn't put the earlier certificate back")
+		}
+		if out, code := h.verifiedLogin(caLine); code != 0 {
+			t.Fatalf("after a failed re-enrollment, the host doesn't verify: %q", out)
+		}
+
 		// Ctrl-C while waiting: no certificate change, the host stays set up.
 		h.answer("check", 0, []byte("OK=ny-owner\nEND=1\n"))
 		before := h.snapshot()

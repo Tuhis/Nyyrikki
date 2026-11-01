@@ -572,3 +572,35 @@ func TestLock(t *testing.T) {
 		}
 	})
 }
+
+// TestKRLListsTrustedKey: a key the values trust (a CA_KEY or SIGNER_KEY)
+// that the host's revocation list already lists is refused in step 1,
+// --reset-pull-state included, naming the key and the remedy, and
+// --status flags it. Otherwise the leak recovery of docs/08 §5.4 could
+// "succeed" on a host whose KRL a leaked key had made list the staged key,
+// leaving it refusing every Nyyrikki login (round 1 of #50).
+func TestKRLListsTrustedKey(t *testing.T) {
+	forEachDistro(t, func(t *testing.T, d distro) {
+		h := newHost(t, d)
+		ca := h.defaultCA()
+		next := h.newCAKey("next")
+		v := h.values("owner")
+		h.mustSetup(v)
+		h.put("/root/next.pub", next.line+"\n")
+		h.must("ssh-keygen -q -k -u -f /etc/ssh/nyyrikki/revoked.krl /root/next.pub")
+		staged := v
+		staged.caKeys, staged.signers = []string{ca.line, next.line}, []string{ca.line, next.line}
+		fp := strings.TrimSpace(h.must("ssh-keygen -l -f /root/next.pub | cut -d' ' -f2"))
+		before := h.snapshot()
+		for _, args := range [][]string{nil, {"--reset-pull-state"}} {
+			r := h.setup(staged, args...)
+			if r.code == 0 || !strings.Contains(r.err, "revocation list") || !strings.Contains(r.err, fp) {
+				t.Fatalf("setup %v with a trusted key in the KRL: %s", args, r)
+			}
+		}
+		h.sameAs(before, "a refused setup")
+		if r := h.setup(staged, "--status"); !strings.Contains(r.out, "REVOKED") || !strings.Contains(r.out, fp) {
+			t.Fatalf("--status doesn't flag it: %s", r)
+		}
+	})
+}
