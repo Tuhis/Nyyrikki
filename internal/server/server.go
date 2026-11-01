@@ -58,35 +58,6 @@ type Options struct {
 	SSHDial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
-// newSSHKeys builds the CA key loader of docs/08 D1 from the ssh block:
-// the three key files, the extra trusted keys and the revoked ones.
-func newSSHKeys(cfg *config.Config, aw audit.Appender, log *slog.Logger) (*sshca.Keys, error) {
-	o := sshca.Options{
-		Files: sshca.Files{
-			UserCA:     cfg.SSH.UserCAKeyFile,
-			NextUserCA: cfg.SSH.NextUserCAKeyFile,
-			HostCA:     cfg.SSH.HostCAKeyFile,
-		},
-		Audit:  aw,
-		Logger: log,
-	}
-	for _, k := range cfg.SSH.UserCAPublicKeys {
-		pk, err := config.ParseUserCAKey(k)
-		if err != nil {
-			return nil, err
-		}
-		o.Extra = append(o.Extra, pk)
-	}
-	for _, k := range cfg.SSH.RevokedUserCAKeys {
-		pk, err := config.ParseUserCAKey(k)
-		if err != nil {
-			return nil, err
-		}
-		o.Revoked = append(o.Revoked, pk)
-	}
-	return sshca.New(o), nil
-}
-
 // newSSHRunner builds the SSH runner from the ssh block and the SSH
 // targets (docs/07 §5.5); nil when there are none. keys are the CA keys
 // of docs/08 D1.
@@ -216,7 +187,7 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 		return err
 	}
 
-	sshKeys, err := newSSHKeys(cfg, aw, log)
+	sshKeys, err := sshca.FromConfig(cfg.SSH, aw, log)
 	if err != nil {
 		return err
 	}
@@ -291,6 +262,15 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 			return err
 		}
 		mux.Handle(hostsetup.Prefix, setup)
+		// docs/08 D7: enrollment, behind its own token (D6) and an
+		// approval; POST only.
+		enroll, err := hostsetup.NewEnroll(hostsetup.EnrollConfig{
+			Config: cfg, Keys: sshKeys, Decision: point, Prober: sshRunner, Audit: aw, Logger: log, Now: o.Now,
+		})
+		if err != nil {
+			return err
+		}
+		enroll.Register(mux)
 	}
 	prm := protectedResourceMetadata(cfg)
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", prm)

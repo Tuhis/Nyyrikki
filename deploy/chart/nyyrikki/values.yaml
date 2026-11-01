@@ -85,6 +85,10 @@ ssh:
   # required as soon as one SSH target exists.
   sourceAddresses: []
   connectTimeout: 10s
+  # How long a host certificate issued by an enrollment is valid
+  # (docs/08 D8): five years by default, at most 87600h. Nothing renews
+  # it; list the host's key in revokedHostKeys to stop trusting it.
+  hostCertValidity: 43800h
   # Host CA public keys trusted for every SSH target, besides each
   # target's own hostCAs (docs/08 D9).
   hostCAs: []
