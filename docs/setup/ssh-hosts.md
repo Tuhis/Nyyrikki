@@ -2,7 +2,7 @@
 
 Nyyrikki runs commands on a Linux host as `ny-<human>`, an account
 that only its short-lived certificates can reach
-([docs/07](../07-ssh-target.md)). The host needs OpenSSH 9.0 or newer,
+([docs/07](../07-ssh-target.md)). The host needs OpenSSH 8.9 or newer,
 and its `/etc/ssh/sshd_config` must start with
 `Include /etc/ssh/sshd_config.d/*.conf` (Debian 12+, Ubuntu 22.04+,
 RHEL 9+ and Alpine 3.22 ship it that way).
@@ -316,7 +316,7 @@ Options (with `curl | sudo sh`, pass them as `sudo sh -s -- --dry-run`):
 ### What it does
 
 1. **Checks**, and stops without changing anything if one fails: run as
-   root; OpenSSH 9.0 or newer; the `Include` line comes first in
+   root; OpenSSH 8.9 or newer; the `Include` line comes first in
    `sshd_config`; `sshd -t` passes; no sshd configuration but Nyyrikki's
    sets `TrustedUserCAKeys`, `AuthorizedPrincipalsFile` or
    `RevokedKeys`; on a systemd host, no logind configuration but
@@ -348,12 +348,12 @@ Options (with `curl | sudo sh`, pass them as `sudo sh -s -- --dry-run`):
    user (a `systemd --user` left after logind restarted), use
    `systemctl stop user@<uid>.service`; the message names both.
 6. **Grants sudo**, if the target has `sudo: true`.
-7. **Session kill**: on a Debian 13 or newer host where systemd is PID 1
-   and sshd's PAM stack reaches `pam_systemd`, makes logind stop a
-   `ny-*` account's session when its connection closes, so that a cut
-   run's processes, root ones under sudo included, are gone within
-   seconds. Other distributions report `session_kill: false` until this
-   has been measured on them.
+7. **Session kill**: on a Debian 13 or newer, or Ubuntu 22.04 or newer,
+   host where systemd is PID 1 and sshd's PAM stack reaches
+   `pam_systemd`, makes logind stop a `ny-*` account's session when its
+   connection closes, so that a cut run's processes, root ones under
+   sudo included, are gone within seconds. Other distributions report
+   `session_kill: false` until this has been measured on them.
 8. **Installs the trust pull** (next section): `pull.sh`, `pull.conf`,
    the `--cacert` file, and a schedule where a cron runs it.
 9. **Prints** `pull: cron.d`, `periodic` or `none`, then the
@@ -671,8 +671,8 @@ ny-owner ALL=(ALL) NOPASSWD: ALL
 ```
 
 Session kill, only on a host where it was measured (Debian 13 or newer,
-systemd as PID 1, `UsePAM yes`, `pam_systemd` in sshd's PAM session
-stack) and where no other logind file sets these values. `KillOnlyUsers`
+Ubuntu 22.04 or newer, systemd as PID 1, `UsePAM yes`, `pam_systemd` in
+sshd's PAM session stack) and where no other logind file sets these values. `KillOnlyUsers`
 lists every account, space-separated:
 
 <!-- file: /etc/systemd/logind.conf.d/50-nyyrikki.conf 0644 -->

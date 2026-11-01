@@ -1,5 +1,5 @@
 #!/bin/sh
-# Nyyrikki host setup: prepares a Linux host with OpenSSH >= 9.0 as an SSH
+# Nyyrikki host setup: prepares a Linux host with OpenSSH >= 8.9 as an SSH
 # target of Nyyrikki (docs/07-ssh-target.md, section 5.7; D3, D4, D7, D11,
 # D15, D16), installs the trust pull and enrolls the host
 # (docs/08-ssh-onboarding.md D5, D7, D13). The manual steps it automates are
@@ -807,6 +807,17 @@ ny_distro_measured() {
 		'' | *[!0-9]*) return 1 ;;
 		esac
 		[ "$ny_ver" -ge 13 ]
+		;;
+	ubuntu)
+		# YY.MM, as 22.04: exactly one dot between digits.
+		case $ny_ver in
+		*.*.* | *[!0-9.]* | .* | *.) return 1 ;;
+		*.*) ;;
+		*) return 1 ;;
+		esac
+		ny_vmaj=${ny_ver%%.*}
+		ny_vmin=${ny_ver#*.}
+		[ "$ny_vmaj" -gt 22 ] || { [ "$ny_vmaj" -eq 22 ] && [ "$ny_vmin" -ge 4 ]; }
 		;;
 	*) return 1 ;;
 	esac
@@ -1657,6 +1668,7 @@ ny_check() {
 	for ny_t in ssh-keygen getent useradd userdel pgrep awk sed cut tr stat mktemp; do
 		command -v "$ny_t" >/dev/null 2>&1 || die "refused: $ny_t not found"
 	done
+	# OpenSSH before 9.x has no -V, but names its version in the usage error.
 	ny_v=$("$NY_SSHD_BIN" -V 2>&1) || :
 	case $ny_v in
 	*OpenSSH_*) ;;
@@ -1664,11 +1676,14 @@ ny_check() {
 	esac
 	ny_v=$(printf '%s\n' "$ny_v" | sed -n 's/.*OpenSSH_\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2/p' | head -n 1)
 	ny_major=${ny_v%% *}
-	case $ny_major in
-	'' | *[!0-9]*) die "refused: can't tell the OpenSSH version" ;;
+	ny_minor=${ny_v#* }
+	case $ny_major/$ny_minor in
+	/* | */ | *[!0-9/]*) die "refused: can't tell the OpenSSH version" ;;
 	esac
-	[ "$ny_major" -ge 9 ] || die "refused: OpenSSH $ny_major is older than 9.0"
-	say "check: OpenSSH $ny_major.${ny_v#* }"
+	if [ "$ny_major" -lt 8 ] || { [ "$ny_major" -eq 8 ] && [ "$ny_minor" -lt 9 ]; }; then
+		die "refused: OpenSSH $ny_major.$ny_minor is older than 8.9"
+	fi
+	say "check: OpenSSH $ny_major.$ny_minor"
 
 	ny_first=$(awk '{ sub(/#.*/, "") } NF { print; exit }' /etc/ssh/sshd_config 2>/dev/null) || ny_first=
 	ny_ok=0

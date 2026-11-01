@@ -1,10 +1,10 @@
 //go:build sshhost
 
 // Package sshhost_test runs deploy/ssh-host/nyyrikki-host-setup.sh in
-// Debian, Ubuntu, Rocky and Alpine containers and checks docs/07 G8, G9
-// and the script's side of G13 (docs/07 §5.7, SH5), and docs/08 G4, G5
-// and G13 (the trust pull, its schedule, enrollment; SE6). It needs
-// docker:
+// Debian, Ubuntu (24.04 and 22.04), Rocky and Alpine containers and
+// checks docs/07 G8, G9 and the script's side of G13 (docs/07 §5.7,
+// SH5), and docs/08 G4, G5 and G13 (the trust pull, its schedule,
+// enrollment; SE6). It needs docker:
 //
 //	go test -tags sshhost -count=1 -timeout 60m ./test/ssh-host/
 //
@@ -48,6 +48,9 @@ type distro struct {
 var distros = []distro{
 	{name: "debian", base: "debian:trixie", install: aptInstall("cron curl ca-certificates")},
 	{name: "ubuntu", base: "ubuntu:24.04", install: aptInstall("cron curl ca-certificates")},
+	// Ubuntu 22.04 has OpenSSH 8.9p1, the oldest the script accepts
+	// (docs/07 §5.7 step 1).
+	{name: "ubuntu2204", base: "ubuntu:22.04", install: aptInstall("cron curl ca-certificates")},
 	// rockylinux/rockylinux:10 needs x86-64-v3, which not every CI runner has.
 	// The image's curl-minimal is the curl.
 	{name: "rocky", base: "rockylinux:9", install: "dnf install -y -q openssh-server openssh-clients sudo procps-ng util-linux cronie >/dev/null && dnf clean all >/dev/null"},
@@ -57,12 +60,23 @@ var distros = []distro{
 	{name: "alpine", base: "alpine:3.22", install: "apk add -q --no-cache openssh sudo shadow curl findutils runuser util-linux-misc >/dev/null"},
 }
 
-var debianSystemd = distro{
-	name:       "debian-systemd",
-	base:       "debian:trixie",
-	install:    aptInstall("systemd systemd-sysv dbus libpam-systemd cron curl ca-certificates"),
-	systemd:    true,
-	sshService: "ssh",
+// systemdDistros are the distributions where session kill counts as
+// measured (docs/07 M18), each with systemd as PID 1 in a privileged
+// container.
+var systemdDistros = []distro{
+	systemdDistro("debian-systemd", "debian:trixie"),
+	systemdDistro("ubuntu-systemd", "ubuntu:24.04"),
+	systemdDistro("ubuntu2204-systemd", "ubuntu:22.04"),
+}
+
+func systemdDistro(name, base string) distro {
+	return distro{
+		name:       name,
+		base:       base,
+		install:    aptInstall("systemd systemd-sysv dbus libpam-systemd cron curl ca-certificates"),
+		systemd:    true,
+		sshService: "ssh",
+	}
 }
 
 func aptInstall(extra string) string {
@@ -240,7 +254,9 @@ func (h *host) waitSystemd() {
 	h.t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		out, _, _ := h.exec("systemctl is-system-running 2>/dev/null; systemctl is-active ssh.service", "")
+		// Ubuntu 24.04 starts sshd from ssh.socket on the first connection,
+		// so ssh.service is inactive until then; startSSHD starts it.
+		out, _, _ := h.exec("systemctl is-system-running 2>/dev/null; systemctl is-active ssh.service ssh.socket", "")
 		if (strings.HasPrefix(out, "running") || strings.HasPrefix(out, "degraded")) && strings.Contains(out, "\nactive") {
 			return
 		}
@@ -510,6 +526,17 @@ func (h *host) values(humans ...string) values {
 // forEachDistro runs f in parallel for each distribution.
 func forEachDistro(t *testing.T, f func(t *testing.T, d distro)) {
 	for _, d := range distros {
+		t.Run(d.name, func(t *testing.T) {
+			t.Parallel()
+			f(t, d)
+		})
+	}
+}
+
+// forEachSystemdDistro runs f in parallel for each of systemdDistros.
+func forEachSystemdDistro(t *testing.T, f func(t *testing.T, d distro)) {
+	needSystemd(t)
+	for _, d := range systemdDistros {
 		t.Run(d.name, func(t *testing.T) {
 			t.Parallel()
 			f(t, d)

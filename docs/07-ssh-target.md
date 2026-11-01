@@ -2,7 +2,8 @@
 
 **Status**: drafted 2026-10-29. Owner decisions OD1–OD6 taken the same
 day. Approved 2026-10-30, when the PR that added it (#25) merged.
-SH1–SH6 implemented 2026-10-30 (§10). Status lives in
+SH1–SH6 implemented 2026-10-30 (§10). OD7 (OpenSSH 8.9, Ubuntu 22.04)
+taken 2026-11-01. Status lives in
 [`ROADMAP.md`](../ROADMAP.md).
 
 Chunks **SH1–SH6** (`SH` = SSH; unused).
@@ -61,8 +62,10 @@ to it.
 - **Password or keyboard-interactive login**, on either side.
 - **Recording what is typed in an interactive session.** The approver
   approves the session (OD4).
-- **Hosts other than Linux with OpenSSH ≥ 9.0.** No network devices, no
-  Windows, no Dropbear.
+- **Hosts other than Linux with OpenSSH ≥ 8.9.** No network devices, no
+  Windows, no Dropbear. *Revised 2026-11-01 by OD7*: the floor was 9.0,
+  a round number with no feature behind it, which refused Ubuntu 22.04
+  (OpenSSH 8.9p1).
 - **Undoing what a command started.** A command can start work that
   outlives any cut by putting it outside its session: a service
   (`systemctl start`, `systemd-run`), a timer or a cron job, or, on a
@@ -92,11 +95,11 @@ container. SH5 turns the same checks into `test/ssh-host`.
 | M11 | A `signal` request with `TERM` stops the command, including through `sudo` and for `a; b`; `KILL` stops a plain command and `a; b`, but under `sudo` it kills only sudo and leaves the root child running | Go probe: `Session.Signal`, then `ps` | Confirmed. D11: `TERM` first |
 | M12 | sshd logs the certificate's key ID and serial on login (`… ED25519-CERT SHA256:… ID nyyrikki:<id> (serial N) CA ED25519 …`) | sshd log at `LogLevel VERBOSE` | Confirmed, as `docs/measured.md` SSH M4. D5 |
 | M13 | `ssh` joins its command arguments with single spaces and sends one string, which the remote user's shell interprets | ssh(1); OpenSSH `ssh.c` | Re-read; confirmed. D1 |
-| M14 | Debian 12+, Ubuntu 22.04+ and RHEL 9+ ship `Include /etc/ssh/sshd_config.d/*.conf` as the first line of `sshd_config` other than comments, so a drop-in's settings win over the main file's for keywords where the first value counts | read `sshd_config` | Confirmed on Debian 13 (OpenSSH 10.0p2), 2026-10-29. *Measured 2026-10-30 by `test/ssh-host` (`TestMeasureM14`)*: confirmed on Ubuntu 24.04 (OpenSSH 9.6p1) and Rocky 9 (OpenSSH 9.9p1, whose own drop-in is `50-redhat.conf`, which sorts after Nyyrikki's `50-nyyrikki.conf`); the script's `sshd -T` check still guards each value |
+| M14 | Debian 12+, Ubuntu 22.04+ and RHEL 9+ ship `Include /etc/ssh/sshd_config.d/*.conf` as the first line of `sshd_config` other than comments, so a drop-in's settings win over the main file's for keywords where the first value counts | read `sshd_config` | Confirmed on Debian 13 (OpenSSH 10.0p2), 2026-10-29. *Measured 2026-10-30 by `test/ssh-host` (`TestMeasureM14`)*: confirmed on Ubuntu 24.04 (OpenSSH 9.6p1) and Rocky 9 (OpenSSH 9.9p1, whose own drop-in is `50-redhat.conf`, which sorts after Nyyrikki's `50-nyyrikki.conf`); the script's `sshd -T` check still guards each value. *Measured 2026-11-01 by `test/ssh-host` (`TestMeasureM14`, OD7)*: confirmed on Ubuntu 22.04 (OpenSSH 8.9p1) |
 | M15 | RHEL-family sudo with `Defaults requiretty` refuses a command without a TTY unless `!requiretty` applies to the user | sudoers(5) | **Not yet measured**. SH5 *Measured 2026-10-30 by `test/ssh-host` (`TestMeasureM15`)*: the default sudoers of Rocky 9, Ubuntu 24.04 and Debian 13 has no `requiretty`; the script writes `Defaults:ny-<human> !requiretty` anyway (D7), and `sudo -n id -u` without a TTY prints `0` on all three (`TestSetupAndLogin`) |
 | M16 | `AuthorizedKeysFile none` in the `Match User` block does **not** turn off a global `AuthorizedKeysCommand` (as EC2 Instance Connect images set): a plain key the command returns logs in to the Nyyrikki account. Adding `AuthenticationMethods publickey`, `AuthorizedKeysCommand none`, `KbdInteractiveAuthentication no`, `HostbasedAuthentication no` and `GSSAPIAuthentication no` to the block refuses it, certificates still work, and `sshd -T -C user=<account>,…` shows each value. On a build without GSSAPI (Alpine's), `GSSAPIAuthentication` logs "Unsupported option" and `sshd -t` still passes | global `AuthorizedKeysCommand` that prints the client's key; plain key and certificate with each block, 2026-10-29 (review of #25) | Confirmed. D3, §5.7 step 3 |
 | M17 | `ssh-keygen -k -u -f <file>` refuses a zero-byte file ("KRL file has invalid magic number"), though sshd accepts one as `RevokedKeys`. `ssh-keygen -k -f <file>` with no keys writes a valid empty KRL (44 bytes) that sshd accepts and `-u` then extends; `ssh-keygen -Q` reports the added key as revoked | as stated, 2026-10-29 (review of #25) | Confirmed. §5.6, §5.7 step 3 |
-| M18 | On a systemd host whose sshd uses PAM with `pam_systemd` (Debian 13: systemd 257, OpenSSH 10.0p2, sudo 1.9.16p2), a command run through sudo stays in the SSH session's scope (`session-N.scope`), root processes included: sudo's PAM stack doesn't move it. By default the scope outlives the connection ("logged out. Waiting for processes to exit"), and a sudo command that ignores `TERM` keeps running. With logind's `KillUserProcesses=yes` and `KillOnlyUsers=ny-owner`, closing the connection stops the scope: `TERM` to every process in it, then `KILL` after the scope's `TimeoutStopSec` (gone after 92 s by default; after 6 s with a `session-.scope.d` drop-in setting `TimeoutStopSec=5s`). A `setsid nohup` process started under sudo is gone too. `KillOnlyUsers` without `KillUserProcesses=yes` kills nothing | Debian 13 container running systemd; Go probe started `sudo -n sh -c 'trap "" TERM HUP INT; …'` and closed the connection; `ps` and the journal, 2026-10-29 (review of #25) | Confirmed on Debian 13. **Not yet measured** on Ubuntu and Rocky: on RHEL-family hosts `/etc/pam.d/sudo` includes `system-auth`, whose session part calls `pam_systemd`, which might move sudo's child into a session of its own (root's, which logind excludes by default), though `pam_systemd` normally declines to start a session for a process already in one. SH5 measures both; until a distribution is measured, the script reports `session_kill: false` there (§5.7 step 7). D11 |
+| M18 | On a systemd host whose sshd uses PAM with `pam_systemd` (Debian 13: systemd 257, OpenSSH 10.0p2, sudo 1.9.16p2), a command run through sudo stays in the SSH session's scope (`session-N.scope`), root processes included: sudo's PAM stack doesn't move it. By default the scope outlives the connection ("logged out. Waiting for processes to exit"), and a sudo command that ignores `TERM` keeps running. With logind's `KillUserProcesses=yes` and `KillOnlyUsers=ny-owner`, closing the connection stops the scope: `TERM` to every process in it, then `KILL` after the scope's `TimeoutStopSec` (gone after 92 s by default; after 6 s with a `session-.scope.d` drop-in setting `TimeoutStopSec=5s`). A `setsid nohup` process started under sudo is gone too. `KillOnlyUsers` without `KillUserProcesses=yes` kills nothing | Debian 13 container running systemd; Go probe started `sudo -n sh -c 'trap "" TERM HUP INT; …'` and closed the connection; `ps` and the journal, 2026-10-29 (review of #25) | Confirmed on Debian 13. **Not yet measured** on Ubuntu and Rocky: on RHEL-family hosts `/etc/pam.d/sudo` includes `system-auth`, whose session part calls `pam_systemd`, which might move sudo's child into a session of its own (root's, which logind excludes by default), though `pam_systemd` normally declines to start a session for a process already in one. SH5 measures both; until a distribution is measured, the script reports `session_kill: false` there (§5.7 step 7). D11. *Measured 2026-11-01 by `test/ssh-host` (`TestSessionKill`, OD7)*: confirmed on Ubuntu 22.04 (systemd 249, OpenSSH 8.9p1, sudo 1.9.9) and Ubuntu 24.04 in privileged systemd containers: a cut session's root sudo process that ignores `TERM`, and the `setsid` one it started, are gone about 5 s after the connection closes, as on Debian. Session kill now counts as measured on Debian 13+ and Ubuntu 22.04+; Rocky is still not measured |
 | M19 | sshd's `StrictModes` refuses a group- or world-writable principals file or directory ("bad ownership or modes"), and the login then fails as "Certificate does not contain an authorized principal" | a principals file written with umask 0 | Confirmed. §5.7: the script sets `umask 022` and explicit modes |
 | M20 | `AuthorizedKeysCommand none` without `AuthorizedKeysCommandUser` logs `error: No user for AuthorizedKeysCommand specified, skipping` on every login; adding `AuthorizedKeysCommandUser nobody` silences it | Debian 13, as stated | Confirmed. D3 |
 | M21 | With `ClientAliveInterval 5` and `ClientAliveCountMax 3` in the `Match User` block, a network partition ends the session on the host ("Timeout, client not responding") about 15 s in, and with session kill (M18) a sudo command that ignores `TERM` was gone 23 s into the partition, and one writing output continuously 20 s in. On a healthy link an idle session held by the Go client lasted 40 s without a timeout: `x/crypto/ssh` answers sshd's `keepalive@openssh.com` requests (it replies `false` to requests it doesn't handle, and sshd counts any reply). Without them, sshd waits for TCP keepalive (about 2 h on Linux by default) | Debian 13 container with session kill; `docker network disconnect` while the probe held the session open, 2026-10-29 (review of #25) | Confirmed. D3, D11 |
@@ -114,6 +117,7 @@ container. SH5 turns the same checks into `test/ssh-host`.
 | OD4 | Interactive sessions (`-t`: a login shell, or a command with a PTY) under a one-off approval, or only under an elevation? Approving one is approving "anything on this host, as this account, for a while", and a one-off run has no "End now" (docs/05 D7). | **Allowed under a one-off approval, with an "End now" button on the message of every interactive run, SSH and kubectl alike** (owner, 2026-10-29). The session lasts at most `run.max_interactive` and is cut when it ends, when what covers it ends, or when the approver taps "End now" (D17). Considered: one-off without "End now" (as kubectl had: up to 30 minutes, possibly of root, that the approver can't stop); elevation-only (an honest window with "End now" already, at the cost of two calls); no interactive SSH runs. |
 | OD5 | Local port forwarding (`ssh -L`), for example to reach a database behind the host? | **Not offered at this time** (owner, 2026-10-29), like kubectl's `port-forward` (docs/04 D5). It would need a listener on the agent's machine and carry bytes the approver can't see, to whatever the host can reach. The setup refuses it on the host as well (`restrict`, M3), so adding it later is a decision on both sides. |
 | OD6 | stdin on Telegram. docs/04 D14 redacts secret values from kubectl stdin by structure; a host command's stdin has none. Show it as text, accepting that a secret sent on stdin reaches the Telegram chat, or show only its size and hash? | **Never shown as text: only its size and hash, with a warning. What the approver must read goes in the command** (owner, 2026-10-29: leaking secrets to Telegram would be bad). stdin is for data (`sudo tee /etc/app/env`); a script the approver should read is sent as part of the command string, for example as a heredoc, which is shown in full (D2). Since a command can run what it reads (`sh`, `bash -s`, `python3 -`, `tee x; sh x`), the message says so next to the size, and the approver denies a command that executes hidden input. The `run` tool's description and the CLI's help tell agents the same. |
+| OD7 | Which OpenSSH versions and distributions does the setup accept? The floor was OpenSSH 9.0, with no recorded reason, which refused Ubuntu 22.04 (8.9p1) although M14 named it. | **OpenSSH 8.9 or newer, and Ubuntu 22.04 is supported, session kill included** (owner, 2026-11-01). The evidence is measured, not read: the whole `test/ssh-host` suite, and session kill (M18), pass on Ubuntu 22.04 with OpenSSH 8.9p1, which CI now runs. The floor stays at the oldest version measured, not at the oldest that should work. Session kill counts as measured on Ubuntu 22.04 *and later*, since it was also measured on 24.04 in the same change (the author's call, within this decision; the owner may narrow it). |
 
 ## 4. Decisions
 
@@ -330,7 +334,8 @@ steps. From the start, it works under `umask 022` and gives every file
 it writes an explicit mode (0755 directories, 0644 files, 0440
 sudoers): sshd refuses a writable principals file (M19).
 
-1. Check: run as root; OpenSSH ≥ 9.0; `sshd_config`'s first effective
+1. Check: run as root; OpenSSH ≥ 8.9 (OD7; 9.0 until 2026-11-01);
+   `sshd_config`'s first effective
    line includes `/etc/ssh/sshd_config.d/*.conf` (M14); `sshd -T` shows
    no `TrustedUserCAKeys`, `AuthorizedPrincipalsFile` or `RevokedKeys`
    other than Nyyrikki's own; on a systemd host, no logind
@@ -699,7 +704,12 @@ can go in parallel; its endpoint needs SH1's config. SH6 needs all the others.
   shimming a command inside the container; the script has no test seam.
   Session kill (M18) is exercised on Debian only, in a privileged
   systemd container; on Ubuntu and Rocky the script reports
-  `session_kill: false` until M18 is measured there.
+  `session_kill: false` until M18 is measured there. *Revised 2026-11-01
+  (OD7)*: the harness also runs Ubuntu 22.04, and session kill is
+  exercised in privileged systemd containers of Debian 13, Ubuntu 24.04
+  and Ubuntu 22.04, each also checking that the release before the
+  oldest measured one (Debian 12, Ubuntu 21.10) gets
+  `session_kill: false`. Rocky still reports `session_kill: false`.
 - **The setup script differs from §5.7 in three fail-closed ways**
   (decided while writing it, 2026-10-30; the owner may revisit):
   a rollback restores every file *except* what step 2 took away, since
@@ -716,7 +726,19 @@ can go in parallel; its endpoint needs SH1's config. SH6 needs all the others.
   `sshd -T` shows Nyyrikki's own value first. A repeated `HUMAN`,
   `CA_KEY` or `SOURCE` line is refused. `--uninstall` only takes access
   away and doesn't roll back; a re-run continues it. Session kill counts
-  as measured on Debian 13 and later only.
+  as measured on Debian 13 and later only. *Revised 2026-11-01 (OD7)*:
+  and on Ubuntu 22.04 and later (`VERSION_ID` of the form `YY.MM`),
+  measured on 22.04 and 24.04.
+- **`sshd -V` is new in OpenSSH 9.x** (added 2026-11-01, OD7). OpenSSH
+  8.9's sshd refuses it ("unknown option -- V") but prints its version
+  in the usage message that follows, so the script's version check,
+  which reads `sshd -V 2>&1` and looks for `OpenSSH_`, works on both;
+  `TestMeasureM14` logs the line naming the version, not the first one.
+- **Ubuntu 24.04 starts sshd from `ssh.socket`** on the first connection
+  (added 2026-11-01, OD7), so `ssh.service` is inactive until then. The
+  script already reloads only an sshd unit that is active, and a sshd
+  started later reads the new configuration; the harness's systemd wait
+  accepts an active `ssh.socket`.
 - **The release** publishes the checksum of the script's body in the
   release notes; the script itself is not a release asset, since it is
   meant to come only from Nyyrikki (OD3).

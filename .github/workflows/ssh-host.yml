@@ -1,8 +1,9 @@
 name: SSH host setup
 
 # docs/07 G8, G9, G13 and docs/08 G4, G5, G13: the SSH host setup script,
-# its trust pull and its enrollment, run in Debian, Ubuntu, Rocky and Alpine
-# containers (test/ssh-host), on changes to them and nightly.
+# its trust pull and its enrollment, run in Debian, Ubuntu (24.04 and
+# 22.04), Rocky and Alpine containers, session kill in Debian and Ubuntu
+# systemd containers (test/ssh-host), on changes to them and nightly.
 on:
   push:
     branches: [main]

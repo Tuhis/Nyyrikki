@@ -394,6 +394,12 @@ func TestRefusedHostStates(t *testing.T) {
 		refused("an AuthorizedPrincipalsFile in a Match block", "printf 'Match User bob\\n\\tAuthorizedPrincipalsFile /etc/ssh/bob\\n' >> /etc/ssh/sshd_config", "sed -i '/^Match User bob/,$d' /etc/ssh/sshd_config", "AuthorizedPrincipalsFile")
 		refused("a broken sshd configuration", "echo 'NoSuchKeyword yes' > /etc/ssh/sshd_config.d/99-broken.conf", "rm /etc/ssh/sshd_config.d/99-broken.conf", "sshd -t")
 		refused("a group-writable /etc/ssh/nyyrikki", "mkdir -m 0775 /etc/ssh/nyyrikki", "rmdir /etc/ssh/nyyrikki", "writable")
+		// The version floor (docs/07 §5.7 step 1): sshd answers -V as an
+		// older OpenSSH would. Ubuntu 22.04's real 8.9p1 is the accepted
+		// edge.
+		for _, old := range []string{"8.8p1", "7.9p1"} {
+			refused("OpenSSH "+old, fakeSSHDVersion(old), "p=$(PATH=/usr/sbin:/usr/bin:/sbin:/bin command -v sshd) && mv $p.ver $p", "older than 8.9")
+		}
 
 		h.mustSetup(v)
 		// sshd -T shows Nyyrikki's value, which comes first; the other file
@@ -900,22 +906,24 @@ func TestManualPage(t *testing.T) {
 	forEachDistro(t, func(t *testing.T, d distro) {
 		check(t, newHost(t, d), false)
 	})
-	t.Run("debian-systemd", func(t *testing.T) {
-		needSystemd(t)
-		t.Parallel()
-		check(t, newHost(t, debianSystemd), true)
+	forEachSystemdDistro(t, func(t *testing.T, d distro) {
+		check(t, newHost(t, d), true)
 	})
 }
 
-// TestSessionKill, on Debian 13 with systemd as PID 1 (docs/07 M18): the
+// TestSessionKill, on each of systemdDistros (docs/07 M18): the
 // setup turns session kill on and reports it, a cut session's sudo
 // process that ignores TERM is gone, re-runs are idempotent and add new
 // accounts, a failed logind check and a signal in step 7 roll back, a
-// condition that no longer holds removes the drop-ins, another logind
-// file is refused, and --uninstall leaves nothing in effect (G8).
+// condition that no longer holds removes the drop-ins, as does an
+// unmeasured release, another logind file is refused, and --uninstall
+// leaves nothing in effect (G8).
 func TestSessionKill(t *testing.T) {
-	needSystemd(t)
-	h := newHost(t, debianSystemd)
+	forEachSystemdDistro(t, testSessionKill)
+}
+
+func testSessionKill(t *testing.T, d distro) {
+	h := newHost(t, d)
 	pristine := h.snapshot()
 	logind := func() string {
 		return h.must(`for p in KillUserProcesses KillOnlyUsers; do busctl get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager $p; done`)
@@ -1006,6 +1014,27 @@ echo $! > /root/ssh.pid`)
 			t.Fatalf("back on: %s", r)
 		}
 	})
+	// The release just before the oldest one where M18 was measured, on the
+	// same host: only the distribution check tells them apart.
+	t.Run("an unmeasured release turns it off", func(t *testing.T) {
+		h.must(`cp -a /etc/os-release /root/os-release.orig && cp -L /etc/os-release /root/os-release && . /root/os-release &&
+case $ID in debian) old=12 ;; ubuntu) old=21.10 ;; *) echo "no older release for $ID" >&2; exit 1 ;; esac &&
+rm /etc/os-release && sed "s/^VERSION_ID=.*/VERSION_ID=\"$old\"/" /root/os-release > /etc/os-release`)
+		r := h.mustSetup(v2)
+		h.must("rm /etc/os-release && mv /root/os-release.orig /etc/os-release && rm /root/os-release")
+		if !strings.Contains(r.out, "session_kill: false") || !strings.Contains(r.out, "isn't measured on this distribution") {
+			t.Fatalf("%s", r)
+		}
+		if h.exists("/etc/systemd/logind.conf.d/50-nyyrikki.conf") || h.exists("/etc/systemd/system/session-.scope.d/50-nyyrikki.conf") {
+			t.Fatal("the drop-ins are still there")
+		}
+		if got := logind(); got != "b false\nas 0\n" {
+			t.Fatalf("logind: %q", got)
+		}
+		if r := h.mustSetup(v2); !strings.Contains(r.out, "session_kill: true") {
+			t.Fatalf("back on: %s", r)
+		}
+	})
 
 	// After a login, the account's systemd --user stays for logind's
 	// UserStopDelaySec, and for good if logind restarted meanwhile (as the
@@ -1027,6 +1056,14 @@ echo $! > /root/ssh.pid`)
 	}
 }
 
+// fakeSSHDVersion returns the command that makes sshd answer -V as
+// OpenSSH ver does, and run as itself otherwise; the real binary waits at
+// sshd.ver.
+func fakeSSHDVersion(ver string) string {
+	return fmt.Sprintf(`p=$(PATH=/usr/sbin:/usr/bin:/sbin:/bin command -v sshd) && mv $p $p.ver &&
+printf '#!/bin/sh\ncase "$1" in -V) echo "OpenSSH_%s, OpenSSL 3.0.2 15 Mar 2022" >&2; exit 0 ;; esac\nexec %%s.ver "$@"\n' "$p" > $p && chmod 0755 $p`, ver)
+}
+
 func waitFor(t *testing.T, d time.Duration, what string, f func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(d)
@@ -1044,7 +1081,9 @@ func TestMeasureM14(t *testing.T) {
 	forEachDistro(t, func(t *testing.T, d distro) {
 		h := newHost(t, d)
 		first := strings.TrimSpace(h.must(`awk '{ sub(/#.*/, "") } NF { print; exit }' /etc/ssh/sshd_config`))
-		ver := strings.TrimSpace(h.must("sshd -V 2>&1 | head -n 1"))
+		// OpenSSH before 9.x has no -V, but names its version in the usage
+		// error.
+		ver := strings.TrimSpace(h.must("sshd -V 2>&1 | grep -m 1 OpenSSH_"))
 		dropins := strings.TrimSpace(h.must("ls /etc/ssh/sshd_config.d/"))
 		t.Logf("M14 %s (%s): first effective line %q; drop-ins: %q", d.base, ver, first, dropins)
 		if first != "Include /etc/ssh/sshd_config.d/*.conf" {
