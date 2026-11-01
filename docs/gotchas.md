@@ -241,6 +241,11 @@ the doc.
 
 **Tooling and dependencies**
 
+- **SQLite can't change a table's `CHECK` constraint in place.**
+  `CREATE TABLE IF NOT EXISTS` leaves an existing table as it was, so a
+  new allowed value needs the table rebuilt, with foreign keys off on
+  that one connection and `PRAGMA foreign_key_check` before the commit.
+  ([docs/08](08-ssh-onboarding.md) §10, SE5)
 - **A `pre-install` hook can't create an object the chart also
   templates**: Helm checks for conflicts before hooks run, then fails
   the first install with "already exists". And a Helm-owned Secret

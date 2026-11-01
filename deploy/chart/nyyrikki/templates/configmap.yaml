@@ -61,6 +61,7 @@
   "revoked_user_ca_keys" (.Values.ssh.revokedUserCAKeys | default list)
   "source_addresses" .Values.ssh.sourceAddresses
   "connect_timeout" .Values.ssh.connectTimeout
+  "host_cert_validity" .Values.ssh.hostCertValidity
   "host_cas" (.Values.ssh.hostCAs | default list)
   "revoked_host_keys" (.Values.ssh.revokedHostKeys | default list)
   "defaults" (dict "sudo" (dig "defaults" "sudo" false .Values.ssh))) -}}

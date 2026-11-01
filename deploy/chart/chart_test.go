@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 
@@ -240,6 +241,7 @@ var sshSet = []string{
 	"--set", "targets[2].ssh.sudo=true", "--set", "targets[2].ssh.sessionKill=true",
 	"--set", "ssh.revokedUserCAKeys[0]=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
 	"--set", "ssh.sourceAddresses[0]=203.0.113.10/32", "--set", "ssh.connectTimeout=7s",
+	"--set", "ssh.hostCertValidity=8760h",
 	"--set", "secrets.sshCA.name=my-ca",
 }
 
@@ -276,7 +278,8 @@ func TestChartSSHTarget(t *testing.T) {
 	}
 	if c.SSH.UserCAKeyFile != "/etc/nyyrikki/ssh/user-ca" || c.SSH.NextUserCAKeyFile != "/etc/nyyrikki/ssh/user-ca-next" ||
 		c.SSH.HostCAKeyFile != "/etc/nyyrikki/ssh/host-ca" || len(c.SSH.UserCAPublicKeys) != 1 || len(c.SSH.RevokedUserCAKeys) != 1 ||
-		c.SSH.SourceAddresses[0] != "203.0.113.10/32" || c.SSH.ConnectTimeout.D().String() != "7s" {
+		c.SSH.SourceAddresses[0] != "203.0.113.10/32" || c.SSH.ConnectTimeout.D().String() != "7s" ||
+		c.SSH.HostCertValidity.D() != 8760*time.Hour {
 		t.Fatalf("ssh %+v", c.SSH)
 	}
 	vol := caVolume(t, objs)
@@ -298,8 +301,9 @@ func TestChartSSHTarget(t *testing.T) {
 	objs = render(t, "--set", "targets[2].name=db-1", "--set", "targets[2].ssh.address=db-1.example.com:22",
 		"--set", "ssh.sourceAddresses[0]=203.0.113.10/32")
 	src = kind(objs, "ConfigMap")[0]["data"].(map[string]any)["config.yaml"].(string)
-	if c, err := config.Parse([]byte(src)); err != nil || len(c.SSH.UserCAPublicKeys) != 0 || len(c.SSH.RevokedUserCAKeys) != 0 {
-		t.Fatalf("config without extra keys refused: %v\n%s", err, src)
+	if c, err := config.Parse([]byte(src)); err != nil || len(c.SSH.UserCAPublicKeys) != 0 || len(c.SSH.RevokedUserCAKeys) != 0 ||
+		c.SSH.HostCertValidity.D() != config.DefaultHostCertValidity {
+		t.Fatalf("config without extra keys refused, or host_cert_validity not the default: %v\n%s", err, src)
 	}
 	if vol := caVolume(t, objs); vol == nil || vol["secretName"] != "nyyrikki-ssh-ca" {
 		t.Fatalf("default CA volume %v", vol)

@@ -168,7 +168,18 @@ type SSH struct {
 	// Defaults apply to SSH targets that don't set the value
 	// (docs/08 D11).
 	Defaults SSHDefaults `yaml:"defaults"`
+	// HostCertValidity is how long a host certificate issued by an
+	// enrollment is valid (docs/08 D8): DefaultHostCertValidity unless
+	// set, at most MaxHostCertValidity.
+	HostCertValidity Duration `yaml:"host_cert_validity"`
 }
+
+// The host certificate's lifetime (docs/08 D8): five years by default,
+// ten at most.
+const (
+	DefaultHostCertValidity = 43800 * time.Hour
+	MaxHostCertValidity     = 87600 * time.Hour
+)
 
 // SSHDefaults are the values an SSH target takes when it doesn't set
 // them (docs/08 D11).
@@ -316,7 +327,7 @@ func Defaults() *Config {
 			MaxOutput:      ByteSize(1 << 20),
 		},
 		Telegram: Telegram{APIURL: "https://api.telegram.org"},
-		SSH:      SSH{ConnectTimeout: Duration(10 * time.Second)},
+		SSH:      SSH{ConnectTimeout: Duration(10 * time.Second), HostCertValidity: Duration(DefaultHostCertValidity)},
 	}
 }
 
@@ -499,7 +510,8 @@ func (c *Config) hasSSH() bool {
 func reflectZeroSSH(s *SSH) bool {
 	return s.UserCAKeyFile == "" && s.NextUserCAKeyFile == "" && s.HostCAKeyFile == "" &&
 		len(s.UserCAPublicKeys) == 0 && len(s.RevokedUserCAKeys) == 0 && len(s.SourceAddresses) == 0 &&
-		len(s.HostCAs) == 0 && len(s.RevokedHostKeys) == 0 && s.Defaults == (SSHDefaults{})
+		len(s.HostCAs) == 0 && len(s.RevokedHostKeys) == 0 && s.Defaults == (SSHDefaults{}) &&
+		s.HostCertValidity.D() == DefaultHostCertValidity
 }
 
 // MCPURL is the canonical URL of /mcp.

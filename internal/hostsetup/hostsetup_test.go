@@ -23,12 +23,14 @@ type recAudit struct {
 	mu   sync.Mutex
 	recs []audit.Record
 	fail bool
+	// failKind, if set, fails only writes of that kind.
+	failKind string
 }
 
 func (a *recAudit) Append(_ context.Context, r audit.Record) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.fail {
+	if a.fail || (a.failKind != "" && r.Kind == a.failKind) {
 		return errors.New("down")
 	}
 	a.recs = append(a.recs, r)

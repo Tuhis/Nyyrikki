@@ -29,6 +29,14 @@ func TestSSHValid(t *testing.T) {
 	if c.SSH.ConnectTimeout.D() != 10*time.Second || SSHAccount("owner") != "ny-owner" {
 		t.Fatal("defaults")
 	}
+	// docs/08 D8: five years unless set.
+	if c.SSH.HostCertValidity.D() != 43800*time.Hour {
+		t.Fatalf("host_cert_validity default %v", c.SSH.HostCertValidity.D())
+	}
+	src0 := strings.Replace(valid(t), "  source_addresses: [203.0.113.10/32]\n", "  source_addresses: [203.0.113.10/32]\n  host_cert_validity: 87600h\n", 1)
+	if c, err := Parse([]byte(src0)); err != nil || c.SSH.HostCertValidity.D() != 87600*time.Hour {
+		t.Fatalf("host_cert_validity at the maximum: %v", err)
+	}
 	// Empty host_keys and host_cas are valid, so the setup script can be
 	// served first (docs/07 §5.5).
 	src := strings.Replace(valid(t), "      host_keys:\n        - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n", "", 1)
@@ -70,8 +78,11 @@ func TestSSHInvalid(t *testing.T) {
 		"bad host":            {"address: db-1.example.com:22", "address: \"db 1:22\""},
 		"bad host key":        {"        - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl", "        - not-a-key"},
 		"connect timeout":     {"  source_addresses: [203.0.113.10/32]\n", "  source_addresses: [203.0.113.10/32]\n  connect_timeout: 5m\n"},
-		"both types":          {"    ssh:\n      address", "    kubernetes:\n      in_cluster: true\n    ssh:\n      address"},
-		"unknown ssh field":   {"      sudo: true", "      sudo: true\n      port_forward: true"},
+		// docs/08 D8: at most ten years, and positive.
+		"host cert too long": {"  source_addresses: [203.0.113.10/32]\n", "  source_addresses: [203.0.113.10/32]\n  host_cert_validity: 87601h\n"},
+		"host cert zero":     {"  source_addresses: [203.0.113.10/32]\n", "  source_addresses: [203.0.113.10/32]\n  host_cert_validity: 0s\n"},
+		"both types":         {"    ssh:\n      address", "    kubernetes:\n      in_cluster: true\n    ssh:\n      address"},
+		"unknown ssh field":  {"      sudo: true", "      sudo: true\n      port_forward: true"},
 		// docs/08 D1, D3.
 		"RSA revoked key":    {caKey, caKey + "  revoked_user_ca_keys: [\"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC7\"]\n"},
 		"revoked not a key":  {caKey, caKey + "  revoked_user_ca_keys: [x]\n"},

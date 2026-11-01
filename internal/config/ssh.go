@@ -54,6 +54,9 @@ func validateSSH(s *SSH) []error {
 	if d := s.ConnectTimeout.D(); d <= 0 || d > time.Minute {
 		bad("connect_timeout must be positive and at most 1m")
 	}
+	if d := s.HostCertValidity.D(); d <= 0 || d > MaxHostCertValidity {
+		bad("host_cert_validity must be positive and at most 87600h")
+	}
 	for i, k := range s.HostCAs {
 		if err := checkHostCA(k); err != nil {
 			bad("host_cas[%d]: %v", i, err)

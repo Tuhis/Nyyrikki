@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/Tuhis/Nyyrikki/internal/config"
+	"github.com/Tuhis/Nyyrikki/internal/hostsetup"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl"
 	"github.com/Tuhis/Nyyrikki/internal/server"
 	"github.com/Tuhis/Nyyrikki/internal/sshcacmd"
@@ -30,6 +31,11 @@ func main() {
 	// server runs.
 	if len(os.Args) > 1 && os.Args[1] == "ssh-ca" {
 		os.Exit(sshcacmd.Main(os.Args[2:], sshcacmd.Env{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Client: sshcacmd.InCluster}))
+	}
+	// A one-time host enrollment token (docs/08 D6), run with kubectl
+	// exec in the pod, so it reads the server's config and CA keys.
+	if len(os.Args) > 1 && os.Args[1] == "enroll-token" {
+		os.Exit(hostsetup.TokenCommand{Stdout: os.Stdout, Stderr: os.Stderr}.Main(os.Args[2:]))
 	}
 	os.Exit(run())
 }

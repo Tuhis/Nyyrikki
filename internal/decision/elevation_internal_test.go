@@ -18,6 +18,7 @@ type nopAsker struct{}
 
 func (nopAsker) AskRun(context.Context, approval.RunPrompt) error             { return nil }
 func (nopAsker) AskElevation(context.Context, approval.ElevationPrompt) error { return nil }
+func (nopAsker) AskEnroll(context.Context, approval.EnrollPrompt) error       { return nil }
 func (nopAsker) Settle(context.Context, string, approval.Outcome) error       { return nil }
 func (nopAsker) Healthy() bool                                                { return true }
 

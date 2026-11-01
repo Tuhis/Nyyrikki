@@ -7,11 +7,13 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite" // the pure-Go driver (docs/01 D11)
 )
@@ -40,18 +42,25 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: schema: %w", err)
 	}
+	if err := migrateApprovals(ctx, db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: migrating approvals: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, indexes); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: indexes: %w", err)
+	}
 	return db, nil
 }
 
-const schema = `
-CREATE TABLE IF NOT EXISTS meta (
-  key TEXT PRIMARY KEY,
-  value BLOB NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS approvals (
+// approvalsColumns is the approvals table. An approval is a one-off
+// run, an elevation, or a host enrollment (docs/08 D7). An enrollment
+// asks every human of its target, one row each, sharing group_id: the
+// first valid tap settles every row of the group at once (docs/08 §5.2).
+// group_id is NULL for runs and elevations.
+const approvalsColumns = `
   id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN ('run', 'elevation')),
+  kind TEXT NOT NULL CHECK (kind IN ('run', 'elevation', 'enroll')),
   state TEXT NOT NULL,
   human TEXT NOT NULL,
   agent_key TEXT NOT NULL,
@@ -61,8 +70,91 @@ CREATE TABLE IF NOT EXISTS approvals (
   duration_ms INTEGER,
   created_ms INTEGER NOT NULL,
   expires_ms INTEGER NOT NULL,
-  settled_ms INTEGER
+  settled_ms INTEGER,
+  group_id TEXT
+`
+
+// oldApprovalsColumns are the columns of the table before enrollment
+// (docs/08 SE5), copied by migrateApprovals.
+const oldApprovalsColumns = `id, kind, state, human, agent_key, approver_id, targets, digest, duration_ms, created_ms, expires_ms, settled_ms`
+
+const indexes = `
+CREATE INDEX IF NOT EXISTS approvals_group ON approvals(group_id) WHERE group_id IS NOT NULL;
+`
+
+// migrateApprovals rebuilds an approvals table made before enrollment
+// existed, whose CHECK allows only run and elevation, as SQLite's
+// documented twelve steps do: SQLite can't change a CHECK in place.
+// Foreign keys are off on that one connection while the table is
+// replaced (elevations and approval_host_facts refer to it), and checked
+// before the commit; any failure rolls back and leaves the old table.
+func migrateApprovals(ctx context.Context, db *sql.DB) (err error) {
+	var def string
+	if err := db.QueryRowContext(ctx, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'approvals'").Scan(&def); err != nil {
+		return err
+	}
+	if strings.Contains(def, "'enroll'") {
+		return nil
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return err
+	}
+	// The connection goes back to the pool afterwards: foreign keys on
+	// again whatever happened. If that fails, the connection is discarded
+	// rather than pooled without foreign keys, and Open fails (round 1 of
+	// #47).
+	defer func() {
+		if _, ferr := conn.ExecContext(context.WithoutCancel(ctx), "PRAGMA foreign_keys = ON"); ferr != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			if err == nil {
+				err = fmt.Errorf("restore foreign keys after the approvals rebuild: %w", ferr)
+			}
+		}
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		"CREATE TABLE approvals_new (" + approvalsColumns + ")",
+		"INSERT INTO approvals_new (" + oldApprovalsColumns + ") SELECT " + oldApprovalsColumns + " FROM approvals",
+		"DROP TABLE approvals",
+		"ALTER TABLE approvals_new RENAME TO approvals",
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return err
+	}
+	broken := rows.Next()
+	rerr := rows.Err()
+	rows.Close()
+	if rerr != nil {
+		// An iteration error is not "nothing broken" (round 1 of #47).
+		return rerr
+	}
+	if broken {
+		return errors.New("foreign keys broken by the rebuild")
+	}
+	return tx.Commit()
+}
+
+const schema = `
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value BLOB NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS approvals (` + approvalsColumns + `);
 
 CREATE TABLE IF NOT EXISTS elevations (
   id TEXT PRIMARY KEY,

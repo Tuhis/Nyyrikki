@@ -141,7 +141,7 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 		Reason: r.Reason, ExpiresAt: expires,
 	}
 	tj, _ := json.Marshal(targets)
-	state, err := p.ask(ctx, rec, id, "elevation", h.TelegramUserID, pr, string(tj), nil, dur, expires, factsJSON,
+	state, err := p.ask(ctx, rec, id, kindElevation, h.TelegramUserID, pr, string(tj), nil, dur, expires, factsJSON,
 		func(ctx context.Context) error { return p.asker.AskElevation(ctx, prompt) }, r.Progress)
 	if err != nil || state != stateApproved {
 		// A tap may still have approved it after ask gave up (its own

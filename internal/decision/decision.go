@@ -42,6 +42,13 @@ const (
 	ticketPrefix = "nyst_"
 )
 
+// Approval kinds: the approvals table's kind column.
+const (
+	kindRun       = "run"
+	kindElevation = "elevation"
+	kindEnroll    = "enroll" // a host enrollment (docs/08 D7)
+)
+
 // Approval and elevation states (docs/02 D8).
 const (
 	statePending   = "pending"
@@ -98,6 +105,9 @@ type Point struct {
 	// sessions are the live interactive runs under a one-off approval,
 	// by approval ID, which "End now" ends (docs/07 D17).
 	sessions map[string]*Grant
+	// settledBy is the human whose tap settled an approval, by approval
+	// ID, kept only while a call waits on it (enrollments, docs/08 §5.2).
+	settledBy map[string]string
 }
 
 // ErrEndedByApprover is the cause a grant's context ends with when the
@@ -143,6 +153,7 @@ func New(ctx context.Context, c Config) (*Point, error) {
 		tickets:    map[[32]byte]*ticket{},
 		handles:    map[string]string{},
 		sessions:   map[string]*Grant{},
+		settledBy:  map[string]string{},
 	}
 	if err := p.recover(ctx); err != nil {
 		cancel()
@@ -362,7 +373,7 @@ func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 		Reason:      r.Reason, ExpiresAt: expires,
 	}
 	targets, _ := json.Marshal([]string{r.Target})
-	state, err := p.ask(ctx, rec, id, "run", h.TelegramUserID, pr, string(targets), digest[:], 0, expires, "",
+	state, err := p.ask(ctx, rec, id, kindRun, h.TelegramUserID, pr, string(targets), digest[:], 0, expires, "",
 		func(ctx context.Context) error { return p.asker.AskRun(ctx, prompt) }, r.Progress)
 	if err != nil {
 		return nil, p.deny(ctx, rec, err)
@@ -555,6 +566,13 @@ func (p *Point) ask(ctx context.Context, rec audit.Record, id, kind string, appr
 		return "", codes.Wrap(codes.Unavailable, err, "the approver could not be asked")
 	}
 
+	return p.wait(ctx, id, ch, expires, progress), nil
+}
+
+// wait waits until exactly one of approve, deny, expire, withdraw or
+// fail settles approval id, whose waiter is ch, and returns the final
+// state.
+func (p *Point) wait(ctx context.Context, id string, ch chan string, expires time.Time, progress func(string)) string {
 	timer := time.NewTimer(time.Until(expires))
 	defer timer.Stop()
 	tick := time.NewTicker(progressInterval)
@@ -562,17 +580,17 @@ func (p *Point) ask(ctx context.Context, rec audit.Record, id, kind string, appr
 	for {
 		select {
 		case st := <-ch:
-			return st, nil
+			return st
 		case <-timer.C:
 			if p.settle(id, statePending, stateExpired, nil) {
-				return <-ch, nil
+				return <-ch
 			}
-			return p.finalState(id, ch), nil
+			return p.finalState(id, ch)
 		case <-ctx.Done():
 			if p.settle(id, statePending, stateWithdrawn, nil) {
-				return <-ch, nil
+				return <-ch
 			}
-			return p.finalState(id, ch), nil
+			return p.finalState(id, ch)
 		case <-tick.C:
 			if progress != nil {
 				progress("waiting for the approver")
@@ -587,16 +605,25 @@ func (p *Point) ask(ctx context.Context, rec audit.Record, id, kind string, appr
 // changes nothing and returns false (CODE-REVIEW.md: one event, one
 // authoritative signal).
 func (p *Point) settle(id, from, to string, inTx func(*sql.Tx) error) bool {
-	return p.settleThen(id, from, to, inTx, nil)
+	return p.settleCore(id, from, to, inTx, nil, "")
 }
 
 // settleThen is settle with afterCommit run by the winner after the commit
 // and before the waiter is notified, so that what the waiter is handed (a
 // live elevation) is in place when it wakes.
 func (p *Point) settleThen(id, from, to string, inTx func(*sql.Tx) error, afterCommit func()) bool {
+	return p.settleCore(id, from, to, inTx, afterCommit, "")
+}
+
+// settleCore is settleThen, with by the human whose tap settles it, if
+// any. An approval of a group (an enrollment's, docs/08 §5.2) is settled
+// with every other approval of its group, in one compare-and-set that
+// wins only if all of them were in state from; every copy of its prompt
+// is edited.
+func (p *Point) settleCore(id, from, to string, inTx func(*sql.Tx) error, afterCommit func(), by string) bool {
 	ctx, cancel := context.WithTimeout(p.base, 10*time.Second)
 	defer cancel()
-	ok, err := p.settleTx(ctx, id, from, to, inTx)
+	members, ok, err := p.settleTx(ctx, id, from, to, inTx)
 	if err != nil {
 		p.log.Error("settle failed", "approval", id, "to", to, "err", err)
 		if to == stateFailed || to == stateExpired || to == stateWithdrawn {
@@ -611,6 +638,15 @@ func (p *Point) settleThen(id, from, to string, inTx func(*sql.Tx) error, afterC
 	if afterCommit != nil {
 		afterCommit()
 	}
+	if by != "" {
+		p.mu.Lock()
+		for _, m := range members {
+			if _, waiting := p.waiters[m]; waiting {
+				p.settledBy[m] = by
+			}
+		}
+		p.mu.Unlock()
+	}
 	p.notify(id, to)
 	code := map[string]codes.Code{stateApproved: "", stateDenied: codes.Denied, stateExpired: codes.Expired,
 		stateWithdrawn: codes.Withdrawn, stateFailed: codes.Unavailable}[to]
@@ -621,20 +657,39 @@ func (p *Point) settleThen(id, from, to string, inTx func(*sql.Tx) error, afterC
 	// run once its grant exists, the elevation once it is live. Until then
 	// the chat must not claim more than happened.
 	if to != stateApproved {
-		go p.settlePrompt(id, approval.Outcome{Kind: kind, At: p.now()})
+		for _, m := range members {
+			go p.settlePrompt(m, approval.Outcome{Kind: kind, At: p.now(), By: by})
+		}
 	}
 	return true
 }
 
-func (p *Point) settleTx(ctx context.Context, id, from, to string, inTx func(*sql.Tx) error) (bool, error) {
+// settleTx does settle's compare-and-set and returns the approvals it
+// settled: id, or every approval of id's group.
+func (p *Point) settleTx(ctx context.Context, id, from, to string, inTx func(*sql.Tx) error) ([]string, bool, error) {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	defer tx.Rollback()
+	var group sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT group_id FROM approvals WHERE id = ?", id).Scan(&group); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	members := []string{id}
 	now := p.now().UnixMilli()
 	q := "UPDATE approvals SET state = ?, settled_ms = ? WHERE id = ? AND state = ?"
 	args := []any{to, now, id, from}
+	if group.Valid {
+		if members, err = groupMembers(ctx, tx, group.String); err != nil {
+			return nil, false, err
+		}
+		q = "UPDATE approvals SET state = ?, settled_ms = ? WHERE group_id = ? AND state = ?"
+		args = []any{to, now, group.String, from}
+	}
 	if to == stateApproved {
 		// An approval counts only before it expires (INV-04), checked in
 		// the same statement that settles it.
@@ -643,17 +698,42 @@ func (p *Point) settleTx(ctx context.Context, id, from, to string, inTx func(*sq
 	}
 	res, err := tx.ExecContext(ctx, q, args...)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
-	if n, err := res.RowsAffected(); err != nil || n != 1 {
-		return false, err
+	// Every approval of a group moves together, or none does: a tap that
+	// finds one already settled by another tap changes nothing.
+	if n, err := res.RowsAffected(); err != nil || n != int64(len(members)) {
+		return nil, false, err
 	}
 	if inTx != nil {
 		if err := inTx(tx); err != nil {
-			return false, err
+			return nil, false, err
 		}
 	}
-	return true, tx.Commit()
+	return members, true, tx.Commit()
+}
+
+func groupMembers(ctx context.Context, tx *sql.Tx, group string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT id FROM approvals WHERE group_id = ? ORDER BY id", group)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, errors.New("decision: an approval group without members")
+	}
+	return out, nil
 }
 
 // finalState returns the state an approval was settled to by someone
@@ -709,12 +789,12 @@ func (p *Point) settlePrompt(id string, o approval.Outcome) {
 // checks (docs/05 D4). It checks the approver and does the compare-and-set.
 func (p *Point) Resolve(ctx context.Context, id string, action approval.Action, approverID int64) (bool, error) {
 	var (
-		kind, state string
-		approver    int64
-		expiresMS   int64
+		kind, state, human string
+		approver           int64
+		expiresMS          int64
 	)
-	err := p.db.QueryRowContext(ctx, "SELECT kind, state, approver_id, expires_ms FROM approvals WHERE id = ?", id).
-		Scan(&kind, &state, &approver, &expiresMS)
+	err := p.db.QueryRowContext(ctx, "SELECT kind, state, human, approver_id, expires_ms FROM approvals WHERE id = ?", id).
+		Scan(&kind, &state, &human, &approver, &expiresMS)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -738,20 +818,28 @@ func (p *Point) Resolve(ctx context.Context, id string, action approval.Action, 
 		if !waiting {
 			return false, nil
 		}
-		if kind == "elevation" {
+		switch kind {
+		case kindElevation:
 			return p.approveElevation(id)
+		case kindEnroll:
+			// Every copy says who settled it (docs/08 §5.2).
+			return p.settleCore(id, statePending, stateApproved, nil, nil, human), nil
 		}
 		return p.settle(id, statePending, stateApproved, nil), nil
 	case approval.ActionDeny:
 		if state != statePending {
 			return false, nil
 		}
-		return p.settle(id, statePending, stateDenied, nil), nil
+		by := ""
+		if kind == kindEnroll {
+			by = human
+		}
+		return p.settleCore(id, statePending, stateDenied, nil, nil, by), nil
 	case approval.ActionEnd:
-		if kind == "run" {
+		if kind == kindRun {
 			return p.endSession(id), nil
 		}
-		if kind != "elevation" {
+		if kind != kindElevation {
 			return false, nil
 		}
 		var elevID string

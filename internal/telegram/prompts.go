@@ -23,6 +23,13 @@ func (b *Bot) AskElevation(ctx context.Context, p approval.ElevationPrompt) erro
 	return b.ask(ctx, p.ID, p.ApproverID, kindElevation, renderElevation(p))
 }
 
+// AskEnroll sends the enrollment prompt of docs/08 §5.2, with the same
+// contract as AskRun. It is stored as a one-off prompt: Approve and
+// Deny, then closed; it never goes live.
+func (b *Bot) AskEnroll(ctx context.Context, p approval.EnrollPrompt) error {
+	return b.ask(ctx, p.ID, p.ApproverID, kindRun, renderEnroll(p))
+}
+
 func (b *Bot) ask(ctx context.Context, id string, approverID int64, kind, body string) error {
 	// docs/05 D9: refused, not shortened, before anything else can happen.
 	if !fits(body) {
