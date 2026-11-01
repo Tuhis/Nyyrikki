@@ -173,11 +173,8 @@ These kinds of issue are always in scope:
   cap** (docs/01 OD17, owner decision 2026-10-30). Its tokens outlive the
   browser session it signed in through: signing out the owner's browser
   sessions doesn't end it. A stolen copy of its token store keeps
-  working until its client's consent is revoked or the cap passes.
-  Signing the owner out (Users → the owner → Sign out) stops further
-  refreshes, but a token already issued may stay active until it
-  expires, up to 5 minutes (observed in the e2e, docs/08 §10 SE6; not
-  yet measured precisely). What it buys an
+  working until its client's consent is revoked, the owner is signed out
+  (Users → the owner → Sign out), or the cap passes. What it buys an
   attacker alone is being an agent: listing targets and asking the approver; every
   privileged request still needs a tap (INV-01). Revoke a harness by
   removing its client's access (docs/setup/keycloak.md, Revoking an
@@ -186,9 +183,8 @@ These kinds of issue are always in scope:
   cap too** (docs/01 OD18, owner decision 2026-10-31), on the same terms.
   Its tokens stay DPoP-bound to the login's key, but the key is in the
   same login file, so a stolen copy of the file keeps working until that
-  login's offline session is ended or the cap passes. Signing the owner
-  out stops its refreshes, but its current token may stay active for up
-  to 5 minutes, as above. Revoke one login by ending its offline session
+  login's offline session is ended, the owner is signed out, or the cap
+  passes. Revoke one login by ending its offline session
   (docs/setup/keycloak.md, Revoking an agent).
 - **Responses are unredacted.** The response to an approved request
   reaches the agent as the target sent it, including any secret

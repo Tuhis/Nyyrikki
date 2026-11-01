@@ -347,12 +347,14 @@ func TestEndToEnd(t *testing.T) {
 	e.rotation(t, e.ssh, agent, next)
 
 	step(t, "a session ended in Keycloak is denied at once", func(t *testing.T) {
-		// A session-bound login of its own. The agent's login is an offline
-		// session (docs/01 OD18), which this sign-out doesn't end: its
-		// first token was the browser session's, so the step held only
-		// within that token's 5 minutes, which the steps above outlast
-		// since docs/08 SE6. Without offline_access, the login falls back
-		// to the browser session, as the OD18 step below checks.
+		// A session-bound login of its own, so the step sees exit 77
+		// (session_inactive) from a live token. The agent's login has
+		// outlasted its first access token's 5 minutes by now (docs/08
+		// SE6's steps), so its CLI would refresh first, have the offline
+		// refresh refused after the sign-out, and exit with that error
+		// instead: denied too, but not what this step checks. Without
+		// offline_access, the login falls back to the browser session, as
+		// the OD18 step below checks.
 		cl := e.adminClient(t, "nyyrikki-cli")
 		var scopes []struct{ ID, Name string }
 		if err := json.Unmarshal(e.admin(t, "GET", "/admin/realms/"+realm+"/client-scopes", nil), &scopes); err != nil {

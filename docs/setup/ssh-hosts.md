@@ -526,15 +526,21 @@ host since the stage, so its holder can do what a `user-ca` holder can):
 
    If the setup refuses because the host's revocation list lists a key
    the values trust (the leaked key can have revoked the staged one
-   through a bundle), rebuild the list from the keys that should be
-   revoked, the `ssh.revokedUserCAKeys` and any you added by hand, then
-   run the setup again:
+   through a bundle), rebuild the list, then run the setup again. The
+   re-run adds every `ssh.revokedUserCAKeys` back itself, so the new list
+   needs only the keys you revoked by hand, if any; with none, it starts
+   empty. `ssh-keygen -Q -l -f /etc/ssh/nyyrikki/revoked.krl` shows what
+   the list holds now. Hold the lock the setup and the pull take, so a
+   pull can't write the old list back meanwhile:
 
    ```sh
-   ssh-keygen -k -f /etc/ssh/nyyrikki/revoked.krl.new revoked-1.pub revoked-2.pub
-   chmod 0644 /etc/ssh/nyyrikki/revoked.krl.new
-   mv /etc/ssh/nyyrikki/revoked.krl.new /etc/ssh/nyyrikki/revoked.krl
+   sudo flock /run/nyyrikki-ssh.lock sh -c '
+     ssh-keygen -k -f /etc/ssh/nyyrikki/revoked.krl.new hand-revoked.pub &&
+     chmod 0644 /etc/ssh/nyyrikki/revoked.krl.new &&
+     mv /etc/ssh/nyyrikki/revoked.krl.new /etc/ssh/nyyrikki/revoked.krl'
    ```
+
+   (Leave out `hand-revoked.pub` to start empty.)
 
 The pull recovers a host from the revocation of extra keys, not from a
 leak of a key that was ever a signer. `--status` and the `logger` lines

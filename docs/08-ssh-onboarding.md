@@ -850,9 +850,14 @@ Where SE6 differs from, or settles what D5, D13, D14 and D15 leave open:
   installed and upgraded, renders no hook, makes no CA Secret, mounts
   the R10 Secret and leaves it byte for byte. The step "a session ended
   in Keycloak is denied at once" now uses a session-bound login of its
-  own: the agent's login is an offline session (docs/01 OD18), which an
-  admin sign-out doesn't end, and the step had held only while it ran
-  within the first access token's 5 minutes, which SE6's steps outlast.
+  own. The step asserted exit 77 (`session_inactive`) from the agent's
+  login; once SE6's steps outlast its first access token's 5 minutes,
+  the CLI refreshes first, the offline refresh is refused after the
+  sign-out, and the CLI exits with its refresh error instead: denied
+  either way, but not the exit the step checked. *Corrected 2026-11-01
+  (round 2 of #50)*: this first read that an admin sign-out doesn't end
+  an offline session, which `dcr_test.go` disproves (an offline token is
+  `session_inactive` at once after a sign-out).
   The e2e's timeouts went from 40 and 45 minutes to 50 and 55.
 - **Decided while implementing; the owner may revisit**: the lock; the
   removal of `server-ca.pem` by a run without `--cacert`; `pull.sh`
