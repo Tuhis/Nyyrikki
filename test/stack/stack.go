@@ -230,6 +230,21 @@ func WriteFile(dir, name string, b []byte, mode os.FileMode) (string, error) {
 // appeared about four seconds later, never started.
 const teardownSettle = 12 * time.Second
 
+// kindConfig is the cluster's: the API server also runs the admission
+// plugin DenyServiceExternalIPs, so that the human's edit rights can't
+// make a Service with externalIPs, which would take over traffic for any
+// address it names, the API server's included (CVE-2020-8554).
+// NodeRestriction is kubeadm's default, kept.
+const kindConfig = `kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    apiServer:
+      extraArgs:
+        enable-admission-plugins: NodeRestriction,DenyServiceExternalIPs
+`
+
 // Teardown removes everything a stack named cfg.Name makes, and nothing
 // else. It ignores what isn't there, and cfg.Context: it is what runs
 // after a Ctrl-C. It repeats until nothing of the stack has been seen for
@@ -322,8 +337,12 @@ func Create(cfg Config) (*Stack, error) {
 	if _, err := runEnv(cfg.ctx(), nil, "docker", "network", "create", "--subnet", cfg.Subnet, cfg.Network()); err != nil {
 		return s, err
 	}
+	kindFile, err := WriteFile(cfg.Dir, "kind.yaml", []byte(kindConfig), 0o600)
+	if err != nil {
+		return s, err
+	}
 	if _, err := runEnv(cfg.ctx(), []string{"KIND_EXPERIMENTAL_DOCKER_NETWORK=" + cfg.Network()},
-		"kind", "create", "cluster", "--name", cfg.Cluster(), "--kubeconfig", s.Kubeconfig, "--wait", "180s"); err != nil {
+		"kind", "create", "cluster", "--name", cfg.Cluster(), "--kubeconfig", s.Kubeconfig, "--config", kindFile, "--wait", "180s"); err != nil {
 		return s, err
 	}
 	out, err := runEnv(cfg.ctx(), nil, "docker", "inspect", "-f", `{{with index .NetworkSettings.Networks "`+cfg.Network()+`"}}{{.IPAddress}} {{.Gateway}}{{end}}`, cfg.Cluster()+"-control-plane")

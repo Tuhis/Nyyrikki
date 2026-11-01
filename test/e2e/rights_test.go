@@ -23,6 +23,16 @@ spec:
   volumes: [{name: host, hostPath: {path: /}}]
 `
 
+// externalIPService takes over traffic for an address it names, the
+// API server's included (CVE-2020-8554), if the API server lets it.
+const externalIPService = `apiVersion: v1
+kind: Service
+metadata: {name: rights-check, namespace: %NS%}
+spec:
+  ports: [{port: 443}]
+  externalIPs: [10.96.0.1]
+`
+
 // checkHumanRights checks that the stack gives the human no more than
 // SECURITY.md's Accepted risks and docs/06 §6 allow: edit in the given
 // namespaces under restricted Pod Security, nothing in Nyyrikki's
@@ -70,10 +80,15 @@ func (e *env) checkHumanRights(t *testing.T, playground string) {
 			t.Errorf("the human can't %v", args)
 		}
 	}
-	cmd := exec.Command("kubectl", "--kubeconfig", e.kubeconfig, "--as="+ownerK8sUser, "apply", "--dry-run=server", "-f", "-")
-	cmd.Stdin = strings.NewReader(strings.ReplaceAll(privilegedPod, "%NS%", playground))
-	out, err := cmd.CombinedOutput()
-	if err == nil || !strings.Contains(string(out), `violates PodSecurity "restricted`) {
-		t.Errorf("a privileged hostPath pod in %s as the human: %v\n%s", playground, err, out)
+	for _, c := range []struct{ what, manifest, refusal string }{
+		{"a privileged hostPath pod", privilegedPod, `violates PodSecurity "restricted`},
+		{"a Service with externalIPs", externalIPService, "Use of external IPs is denied by admission control"},
+	} {
+		cmd := exec.Command("kubectl", "--kubeconfig", e.kubeconfig, "--as="+ownerK8sUser, "apply", "--dry-run=server", "-f", "-")
+		cmd.Stdin = strings.NewReader(strings.ReplaceAll(c.manifest, "%NS%", playground))
+		out, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), c.refusal) {
+			t.Errorf("%s in %s as the human: %v\n%s", c.what, playground, err, out)
+		}
 	}
 }
