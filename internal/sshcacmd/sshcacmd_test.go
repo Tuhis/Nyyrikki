@@ -3,6 +3,7 @@ package sshcacmd
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"slices"
 	"strings"
@@ -69,6 +70,17 @@ func noPrivate(t *testing.T, what, s string, secs ...*corev1.Secret) {
 	t.Helper()
 	if strings.Contains(s, "PRIVATE KEY") || strings.Contains(s, "b3BlbnNzaC1rZXktdjE") {
 		t.Fatalf("%s holds a private key:\n%s", what, s)
+	}
+	// An OpenSSH private key file embeds its public key, which promote
+	// prints on purpose: strip every public key before looking for slices
+	// of the private files, or a line that happens to align with the
+	// public key's base64 is a false positive (seen as a flake on #42).
+	for _, sec := range secs {
+		for _, v := range sec.Data {
+			if signer, err := ssh.ParsePrivateKey(v); err == nil {
+				s = strings.ReplaceAll(s, base64.StdEncoding.EncodeToString(signer.PublicKey().Marshal()), "")
+			}
+		}
 	}
 	for _, sec := range secs {
 		for k, v := range sec.Data {
