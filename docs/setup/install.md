@@ -62,6 +62,49 @@ The chart grants Nyyrikki's ServiceAccount only `impersonate` on the
 human's user and groups (docs/06 D3). Requests then run with the human's
 own rights.
 
+## Verifying a release
+
+Releases after 0.4.0 are signed key-less with
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/)
+by this repository's release workflow (docs/09 D4): the image and the
+OCI chart by digest, and `SHA256SUMS`, which covers the other release
+assets, with its signature in `SHA256SUMS.sigstore.json`. Verify before
+installing. Each command fails unless the signature was made by the
+release workflow on `main`:
+
+```sh
+SIGNER=https://github.com/Tuhis/Nyyrikki/.github/workflows/release.yml@refs/heads/main
+ISSUER=https://token.actions.githubusercontent.com
+
+# The image: the digest is the second line of the IMAGE asset, and in the notes.
+cosign verify --certificate-identity "$SIGNER" --certificate-oidc-issuer "$ISSUER" \
+  ghcr.io/tuhis/nyyrikki@sha256:<image digest>
+
+# The OCI chart: the digest is on the release notes' Chart line.
+cosign verify --certificate-identity "$SIGNER" --certificate-oidc-issuer "$ISSUER" \
+  ghcr.io/tuhis/charts/nyyrikki@sha256:<chart digest>
+
+# The release assets: download them, SHA256SUMS and SHA256SUMS.sigstore.json
+# into one directory, then:
+cosign verify-blob --certificate-identity "$SIGNER" --certificate-oidc-issuer "$ISSUER" \
+  --bundle SHA256SUMS.sigstore.json SHA256SUMS
+sha256sum -c SHA256SUMS   # add --ignore-missing if you downloaded only some
+```
+
+On macOS, use `shasum -a 256 -c SHA256SUMS`. Then install exactly what
+you verified: the chart by its digest, which Helm checks
+(`helm install nyyrikki oci://ghcr.io/tuhis/charts/nyyrikki:<version>@sha256:<chart digest> …`),
+and `image.digest` set to the image digest.
+
+The image also carries BuildKit's SBOM and SLSA provenance for each
+platform. They are inside the signed image index, so the image's
+signature covers them. To read them:
+
+```sh
+docker buildx imagetools inspect ghcr.io/tuhis/nyyrikki@sha256:<image digest> --format '{{json .SBOM}}'
+docker buildx imagetools inspect ghcr.io/tuhis/nyyrikki@sha256:<image digest> --format '{{json .Provenance}}'
+```
+
 ## Remote clusters
 
 Apply `deploy/remote-target/nyyrikki-target.yaml` on the remote cluster,
