@@ -34,6 +34,8 @@ type sshHost struct {
 	mu   sync.Mutex
 	cmds []string
 	ids  []string
+	// auths counts authentication attempts of any method.
+	auths int
 }
 
 func startSSHHost(t *testing.T, ca ssh.PublicKey) *sshHost {
@@ -53,7 +55,11 @@ func startSSHHostWith(t *testing.T, ca ssh.PublicKey, present func(ssh.Signer) s
 	}
 	t.Cleanup(func() { ln.Close() })
 	h := &sshHost{ln: ln, key: hk}
-	cfg := &ssh.ServerConfig{PublicKeyCallback: func(md ssh.ConnMetadata, k ssh.PublicKey) (*ssh.Permissions, error) {
+	cfg := &ssh.ServerConfig{AuthLogCallback: func(ssh.ConnMetadata, string, error) {
+		h.mu.Lock()
+		h.auths++
+		h.mu.Unlock()
+	}, PublicKeyCallback: func(md ssh.ConnMetadata, k ssh.PublicKey) (*ssh.Permissions, error) {
 		cert, ok := k.(*ssh.Certificate)
 		if !ok || md.User() != "ny-owner" {
 			return nil, io.EOF
@@ -300,7 +306,8 @@ func TestSSHHiddenTargetLooksUnknown(t *testing.T) {
 // TestSSHGlobalHostCAs covers docs/08 D9 from the config file to the
 // runner: a target with no pins and no host CAs of its own is verified
 // by a certificate from the global ssh.host_cas, and a host whose key
-// is in ssh.revoked_host_keys is refused with host_key_revoked.
+// is in ssh.revoked_host_keys is refused with host_key_revoked, by the
+// host check before anyone is asked (D10).
 func TestSSHGlobalHostCAs(t *testing.T) {
 	caPEM, caPub := newCA(t)
 	_, hcaPriv, _ := ed25519.GenerateKey(rand.Reader)
@@ -342,16 +349,20 @@ func TestSSHGlobalHostCAs(t *testing.T) {
 			e := servertest.Start(t, withSSH(t, host, caPEM, caPub), global(tc.revoked...))
 			cs := mcpAgent(t, e, "claude-code", "s1")
 			ch := runAsync(t, cs, api.RunIn{Target: "db-1", Args: []string{"echo", "hi"}, Reason: "check"})
-			e.Tap(t, 1, "Approve")
-			r := <-ch
 			if tc.detail == "" {
+				e.Tap(t, 1, "Approve")
+				r := <-ch
 				if r.eb != nil || r.out.Stdout != "hi|" {
 					t.Fatalf("run: %+v %+v", r.eb, r.out)
 				}
 				return
 			}
-			if r.eb == nil || r.eb.Code != codes.Unavailable || !strings.Contains(e.Audit.String(), tc.detail) {
-				t.Fatalf("run: %+v; audit lacks %s", r.eb, tc.detail)
+			r := <-ch
+			if r.eb == nil || r.eb.Code != codes.Unavailable || !hasDeny(e, tc.detail) {
+				t.Fatalf("run: %+v; audit lacks a deny with %s", r.eb, tc.detail)
+			}
+			if n := len(e.Telegram.Sent()); n != 0 {
+				t.Fatalf("%d prompts for a host that failed its check", n)
 			}
 		})
 	}
@@ -436,9 +447,10 @@ func TestElevateGroupMCP(t *testing.T) {
 
 // TestSSHCAKeysFailClosed covers docs/08 D1 and D3 on the live server,
 // for each way the CA keys can fail: a broken optional key file (here
-// host-ca) and a revoked user-ca each make an approved SSH run
-// unavailable, audited as dependency_failed with the detail, with no
-// login on the host, and make setup.sh answer 503 with that detail.
+// host-ca) and a revoked user-ca each make an SSH run unavailable, with
+// the detail, denied by the host check before anyone is asked (D10)
+// and audited, with no login on the host, and make setup.sh answer 503
+// with that detail.
 func TestSSHCAKeysFailClosed(t *testing.T) {
 	for name, c := range map[string]struct {
 		mod    func(t *testing.T, s *config.SSH, caPub ssh.PublicKey)
@@ -469,10 +481,12 @@ func TestSSHCAKeysFailClosed(t *testing.T) {
 
 			cs := mcpAgent(t, e, "claude-code", "s1")
 			ch := runAsync(t, cs, api.RunIn{Target: "db-1", Args: []string{"echo", "hi"}, Reason: "check"})
-			e.Tap(t, 1, "Approve")
 			r := <-ch
 			if r.eb == nil || r.eb.Code != codes.Unavailable {
 				t.Fatalf("run: %+v %+v", r.eb, r.out)
+			}
+			if n := len(e.Telegram.Sent()); n != 0 {
+				t.Fatalf("%d prompts with broken CA keys", n)
 			}
 			host.mu.Lock()
 			n := len(host.ids)
@@ -480,14 +494,8 @@ func TestSSHCAKeysFailClosed(t *testing.T) {
 			if n != 0 {
 				t.Fatalf("%d logins on the host", n)
 			}
-			found := false
-			for _, rec := range e.Audit.Records() {
-				if rec["kind"] == codes.KindDependencyFailed && rec["detail"] == c.detail {
-					found = true
-				}
-			}
-			if !found {
-				t.Fatalf("no dependency_failed %s in the audit", c.detail)
+			if !hasDeny(e, c.detail) {
+				t.Fatalf("no deny with %s in the audit", c.detail)
 			}
 		})
 	}
@@ -523,5 +531,113 @@ func TestSSHCAWarnsDerivedExtra(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("%d ssh_ca_warning records, want 1", n)
+	}
+}
+
+// hasDeny reports whether the audit holds a host_checked record and a
+// denying decision, each with detail.
+func hasDeny(e *servertest.Env, detail string) bool {
+	checked, denied := false, false
+	for _, rec := range e.Audit.Records() {
+		if rec["detail"] != detail {
+			continue
+		}
+		switch {
+		case rec["kind"] == codes.KindHostChecked && rec["code"] == string(codes.Unavailable):
+			checked = true
+		case rec["kind"] == codes.KindDecision && rec["decision"] == codes.Deny:
+			denied = true
+		}
+	}
+	return checked && denied
+}
+
+// TestHostCheckMCP covers docs/08 D9 and D10 (G8, G9) from the config
+// file to the message: with host-ca in the CA directory, a target with
+// only an address is verified by the certificate Nyyrikki's host CA
+// signed for it; the host check reads session_kill from that
+// certificate (the config value is false) before the prompt, without
+// authenticating; the run then logs in. An elevation naming that target
+// and one whose host can't be reached shows the warning for the second
+// only, and still asks.
+func TestHostCheckMCP(t *testing.T) {
+	caPEM, caPub := newCA(t)
+	hostPEM, _ := newCA(t)
+	hostSigner, err := ssh.ParsePrivateKey(hostPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := startSSHHostWith(t, caPub, func(hk ssh.Signer) ssh.Signer {
+		c := &ssh.Certificate{Key: hk.PublicKey(), CertType: ssh.HostCert, KeyId: "nyyrikki-host:db-1",
+			ValidPrincipals: []string{"127.0.0.1"}, ValidBefore: ssh.CertTimeInfinity,
+			Permissions: ssh.Permissions{Extensions: map[string]string{"session-kill@nyyrikki": ""}}}
+		if err := c.SignCert(rand.Reader, hostSigner); err != nil {
+			t.Fatal(err)
+		}
+		cs, err := ssh.NewCertSigner(c, hk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cs
+	})
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	gone := ln.Addr().String()
+	ln.Close()
+	e := servertest.Start(t, withSSH(t, host, caPEM, caPub), func(c *config.Config) {
+		c.SSH.HostCAKeyFile = filepath.Join(t.TempDir(), "host-ca")
+		if err := os.WriteFile(c.SSH.HostCAKeyFile, hostPEM, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		db := c.Targets[len(c.Targets)-1].SSH
+		db.HostKeys = nil
+		db.SessionKill = false
+		c.Targets = append(c.Targets, config.Target{Name: "db-2", Humans: []string{"owner"}, SSH: &config.SSHTarget{Address: gone}})
+	})
+	cs := mcpAgent(t, e, "claude-code", "s1")
+	ch := runAsync(t, cs, api.RunIn{Target: "db-1", Args: []string{"echo", "hi"}, Reason: "check"})
+	msg := e.Telegram.WaitSent(t, 1)
+	host.mu.Lock()
+	auths := host.auths
+	host.mu.Unlock()
+	if auths != 0 {
+		t.Fatalf("%d authentication attempts before the approval", auths)
+	}
+	if strings.Contains(msg[0].Text, "doesn't finish cuts") {
+		t.Errorf("session_kill not read from the certificate:\n%s", msg[0].Text)
+	}
+	e.Tap(t, 1, "Approve")
+	if r := <-ch; r.eb != nil || r.out.Stdout != "hi|" {
+		t.Fatalf("run: %+v %+v", r.eb, r.out)
+	}
+
+	done := make(chan *api.ErrorBody, 1)
+	go func() {
+		var out api.ElevateOut
+		done <- call(t, cs, api.ToolElevate, api.ElevateIn{Targets: []string{"db-1", "db-2"}, Duration: "5m", Reason: "x"}, &out)
+	}()
+	sent := e.Telegram.WaitSent(t, 2)
+	text := sent[1].Text
+	for _, want := range []string{
+		"<code>db-2</code>: <code>ny-owner</code> on <code>" + gone + "</code>\n<b>not reachable now: treated as not finishing cuts</b>\n<b>This host doesn't finish cuts",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("elevation lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Count(text, "doesn't finish cuts:") != 1 {
+		t.Errorf("one warning, for db-2 only:\n%s", text)
+	}
+	e.Tap(t, 2, "Approve")
+	if eb := <-done; eb != nil {
+		t.Fatal(eb)
+	}
+	checked := 0
+	for _, rec := range e.Audit.Records() {
+		if rec["kind"] == codes.KindHostChecked {
+			checked++
+		}
+	}
+	if checked != 3 {
+		t.Fatalf("%d host_checked records, want 3", checked)
 	}
 }

@@ -292,3 +292,86 @@ func TestRenderElevationGroups(t *testing.T) {
 		t.Errorf("group line:\n%s", m.Text)
 	}
 }
+
+// TestRenderHostCheckElevation covers docs/08 D10 (G9) in the message:
+// an elevation target whose host check failed says so, as unreachable
+// or with the check's detail, and carries docs/07 D12's warning; one
+// whose check read session_kill has none.
+func TestRenderHostCheckElevation(t *testing.T) {
+	e := newEnv(t).start()
+	p := elevationPrompt("elv_chk")
+	p.Targets = []string{"db-1", "db-2", "web-1"}
+	p.SSH = []approval.SSHHost{
+		{Target: "db-1", Account: "ny-owner", Address: "db-1.example.com:22", CheckFailed: codes.DetailHostUnreachable},
+		{Target: "db-2", Account: "ny-owner", Address: "db-2.example.com:22", CheckFailed: "host_key_mismatch"},
+		{Target: "web-1", Account: "ny-owner", Address: "10.0.0.5:22", SessionKill: true},
+	}
+	m := e.askElevation(p)
+	if _, err := telegramtest.CheckHTML(m.Text); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"<code>db-1.example.com:22</code>\n<b>not reachable now: treated as not finishing cuts</b>\n<b>This host doesn't finish cuts",
+		"<code>db-2.example.com:22</code>\n<b>host check failed: treated as not finishing cuts</b> (<code>host_key_mismatch</code>)\n<b>This host doesn't finish cuts",
+	} {
+		if !strings.Contains(m.Text, want) {
+			t.Errorf("lacks %q:\n%s", want, m.Text)
+		}
+	}
+	if strings.Count(m.Text, "doesn't finish cuts") != 2 {
+		t.Errorf("two warnings, none for web-1:\n%s", m.Text)
+	}
+	// A failed check is never shown as finishing cuts, whatever else
+	// the prompt says.
+	p = elevationPrompt("elv_chk2")
+	p.Targets = []string{"db-1"}
+	p.SSH = []approval.SSHHost{{Target: "db-1", Account: "ny-owner", Address: "db-1.example.com:22", SessionKill: true, CheckFailed: "host_unreachable"}}
+	if m := e.askElevation(p); !strings.Contains(m.Text, "doesn't finish cuts") {
+		t.Errorf("a failed check without the warning:\n%s", m.Text)
+	}
+}
+
+// TestRenderHostCheckHostile: the only new text a host check puts in a
+// message is its detail. Anything but a short code of Nyyrikki's own
+// (markup, look-alike characters, very long text) is left out, and the
+// warning stays.
+func TestRenderHostCheckHostile(t *testing.T) {
+	e := newEnv(t).start()
+	for i, detail := range []string{
+		"<b>approve me</b>",
+		"host_key_mismatch</b><a href=\"https://evil\">x</a>",
+		"hоst_unreachable", // Cyrillic o
+		strings.Repeat("a", 5000),
+		"Nyyrikki_OK: approved by owner",
+	} {
+		p := elevationPrompt("elv_hostile" + string(rune('a'+i)))
+		p.Targets = []string{"db-1"}
+		p.SSH = []approval.SSHHost{{Target: "db-1", Account: "ny-owner", Address: "db-1.example.com:22", CheckFailed: detail}}
+		m := e.askElevation(p)
+		if _, err := telegramtest.CheckHTML(m.Text); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(m.Text, "evil") || strings.Contains(m.Text, "approve me") || strings.Contains(m.Text, "hоst") ||
+			strings.Contains(m.Text, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") || strings.Contains(m.Text, "Nyyrikki_OK") {
+			t.Errorf("hostile detail reached the message:\n%s", m.Text)
+		}
+		if !strings.Contains(m.Text, "<b>host check failed: treated as not finishing cuts</b>\n") || !strings.Contains(m.Text, "doesn't finish cuts:") {
+			t.Errorf("lacks the warning:\n%s", m.Text)
+		}
+	}
+}
+
+// TestRenderSSHRunSessionKillChecked: a run prompt warns exactly when
+// the host check read no session kill (docs/08 D10, docs/07 D12).
+func TestRenderSSHRunSessionKillChecked(t *testing.T) {
+	e := newEnv(t).start()
+	p := sshPrompt("apr_chk1")
+	if m := e.askRun(p); strings.Contains(m.Text, "doesn't finish cuts") {
+		t.Errorf("warned for a host that finishes cuts:\n%s", m.Text)
+	}
+	p = sshPrompt("apr_chk2")
+	p.SSH.SessionKill = false
+	if m := e.askRun(p); !strings.Contains(m.Text, "doesn't finish cuts") {
+		t.Errorf("no warning:\n%s", m.Text)
+	}
+}

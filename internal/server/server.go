@@ -121,7 +121,7 @@ func newSSHRunner(cfg *config.Config, keys *sshca.Keys, aw audit.Appender, log *
 		if err != nil {
 			return nil, fmt.Errorf("target %s: %w", t.Name, err)
 		}
-		st := sshtarget.Target{Name: t.Name, Address: t.SSH.Address, Host: host}
+		st := sshtarget.Target{Name: t.Name, Address: t.SSH.Address, Host: host, SessionKill: t.SSH.SessionKill}
 		if st.HostKeys, err = parseKeys(t.SSH.HostKeys); err != nil {
 			return nil, fmt.Errorf("target %s: %w", t.Name, err)
 		}
@@ -216,9 +216,23 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 		return err
 	}
 
-	point, err := decision.New(ctx, decision.Config{
+	sshKeys, err := newSSHKeys(cfg, aw, log)
+	if err != nil {
+		return err
+	}
+	sshRunner, err := newSSHRunner(cfg, sshKeys, aw, log, o)
+	if err != nil {
+		return err
+	}
+	dc := decision.Config{
 		Config: cfg, DB: db, Audit: aw, Asker: bot, Introspector: verifier, Now: o.Now, Logger: log,
-	})
+	}
+	if sshRunner != nil {
+		// docs/08 D10: the host check before every SSH prompt. Set only
+		// when non-nil, so that the interface is nil, not a nil runner.
+		dc.Hosts = sshRunner
+	}
+	point, err := decision.New(ctx, dc)
 	if err != nil {
 		return err
 	}
@@ -254,14 +268,6 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 		return err
 	}
 
-	sshKeys, err := newSSHKeys(cfg, aw, log)
-	if err != nil {
-		return err
-	}
-	sshRunner, err := newSSHRunner(cfg, sshKeys, aw, log, o)
-	if err != nil {
-		return err
-	}
 	if sshRunner != nil {
 		// Read once at start, only to say early what is wrong: runs and
 		// the /hosts/ endpoints read the keys again on each use, and fail

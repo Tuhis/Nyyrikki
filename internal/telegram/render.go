@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -9,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Tuhis/Nyyrikki/internal/approval"
+	"github.com/Tuhis/Nyyrikki/internal/codes"
 )
 
 // Limits from docs/05 D8 and D9 and the Bot API (docs/05 M3).
@@ -180,7 +182,14 @@ const (
 	loginShell     = "none, a login shell"
 	stdinNotShown  = "stdin is not shown. If the command runs it, you can't see what runs"
 	noSessionKill  = "This host doesn't finish cuts: what this starts may keep running after the approval ends, and anything does if the host is unreachable"
+	// The host check of an elevation's SSH target failed (docs/08 D10).
+	hostUnreachable = "not reachable now: treated as not finishing cuts"
+	hostCheckFailed = "host check failed: treated as not finishing cuts"
 )
+
+// checkDetail matches the detail of a failed host check that may be
+// shown: Nyyrikki's own codes only. Anything else is left out.
+var checkDetail = regexp.MustCompile(`^[a-z_]{1,40}$`)
 
 // renderSSHRunAs is "Runs as" for an SSH target: the account on the
 // host's address, and whether that is root (docs/07 D12).
@@ -286,7 +295,17 @@ func renderElevation(p approval.ElevationPrompt) string {
 			sb.WriteString(", <b>" + rootViaSudo + "</b>")
 		}
 		sb.WriteString("\n")
-		if !h.SessionKill {
+		switch {
+		case h.CheckFailed == codes.DetailHostUnreachable:
+			sb.WriteString("<b>" + hostUnreachable + "</b>\n")
+		case h.CheckFailed != "":
+			sb.WriteString("<b>" + hostCheckFailed + "</b>")
+			if checkDetail.MatchString(h.CheckFailed) {
+				sb.WriteString(" (" + code(h.CheckFailed) + ")")
+			}
+			sb.WriteString("\n")
+		}
+		if !h.SessionKill || h.CheckFailed != "" {
 			sb.WriteString("<b>" + noSessionKill + "</b>\n")
 		}
 	}

@@ -67,8 +67,12 @@ type Config struct {
 	Audit        Auditor
 	Asker        approval.Asker
 	Introspector authn.Introspector
-	Now          func() time.Time
-	Logger       *slog.Logger
+	// Hosts runs the host check of docs/08 D10 before every prompt that
+	// names an SSH target. Nil with an SSH target fails closed: such
+	// runs are unavailable, and elevations show the warning.
+	Hosts  HostChecker
+	Now    func() time.Time
+	Logger *slog.Logger
 }
 
 // Point is the decision point.
@@ -78,6 +82,7 @@ type Point struct {
 	audit  Auditor
 	asker  approval.Asker
 	intro  authn.Introspector
+	hosts  HostChecker
 	now    func() time.Time
 	log    *slog.Logger
 	base   context.Context
@@ -131,7 +136,7 @@ func New(ctx context.Context, c Config) (*Point, error) {
 	}
 	base, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	p := &Point{
-		cfg: c.Config, db: c.DB, audit: c.Audit, asker: c.Asker, intro: c.Introspector,
+		cfg: c.Config, db: c.DB, audit: c.Audit, asker: c.Asker, intro: c.Introspector, hosts: c.Hosts,
 		now: c.Now, log: c.Logger, base: base, cancel: cancel,
 		waiters:    map[string]chan string{},
 		elevations: map[string]*liveElevation{},
@@ -329,22 +334,35 @@ func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 		notCovered = why
 	}
 
-	// 4. One-off approval (docs/02 D7).
+	// 4. One-off approval (docs/02 D7). An SSH host is checked first
+	// (docs/08 D10): a failed check is a deny, and nobody is asked.
 	expires := p.now().Add(p.cfg.Approval.Timeout.D())
 	id := "apr_" + ulid.Make().String()
 	rec.ApprovalID = id
 	rec.Detail = notCovered
+	var facts HostFacts
+	if t.SSH != nil {
+		var checkErr, auditErr error
+		facts, checkErr, auditErr = p.checkHost(ctx, rec, r.Target)
+		if auditErr != nil {
+			return nil, auditErr
+		}
+		if checkErr != nil {
+			return nil, p.deny(ctx, rec, checkErr)
+		}
+		spec.SessionKillShown = facts.SessionKill
+	}
 	prompt := approval.RunPrompt{
 		ID: id, ApproverID: h.TelegramUserID, Target: r.Target,
 		RunAs: spec.RunAs,
 		Agent: approval.Agent{ClientName: pr.ClientID, KeyShort: p.audit.AgentHash(pr.AgentKey), SignedInAt: pr.SignedInAt},
-		Type:  t.Type(), SSH: sshHost(t, runAs.User),
+		Type:  t.Type(), SSH: sshHost(t, runAs.User, facts),
 		Argv: r.Request.DisplayCommand(), Stdin: r.Request.DisplayStdin(),
 		Interactive: r.Request.Interactive(),
 		Reason:      r.Reason, ExpiresAt: expires,
 	}
 	targets, _ := json.Marshal([]string{r.Target})
-	state, err := p.ask(ctx, rec, id, "run", h.TelegramUserID, pr, string(targets), digest[:], 0, expires,
+	state, err := p.ask(ctx, rec, id, "run", h.TelegramUserID, pr, string(targets), digest[:], 0, expires, "",
 		func(ctx context.Context) error { return p.asker.AskRun(ctx, prompt) }, r.Progress)
 	if err != nil {
 		return nil, p.deny(ctx, rec, err)
@@ -391,12 +409,13 @@ func RunAs(h *config.Human, t *config.Target) approval.Identity {
 }
 
 // sshHost is what the approver is shown about an SSH target (docs/07
-// D12); nil for any other type.
-func sshHost(t *config.Target, account string) *approval.SSHHost {
+// D12): session_kill as the host check read it (docs/08 D10), never the
+// config value directly. Nil for any other type.
+func sshHost(t *config.Target, account string, facts HostFacts) *approval.SSHHost {
 	if t == nil || t.SSH == nil {
 		return nil
 	}
-	return &approval.SSHHost{Target: t.Name, Account: account, Address: t.SSH.Address, Sudo: t.SSH.Sudo, SessionKill: t.SSH.SessionKill}
+	return &approval.SSHHost{Target: t.Name, Account: account, Address: t.SSH.Address, Sudo: t.SSH.Sudo, SessionKill: facts.SessionKill}
 }
 
 func stateError(state string) error {
@@ -423,13 +442,13 @@ func (p *Point) coveredByElevation(ctx context.Context, r RunRequest, h *config.
 	}
 	hash := HashSecret(r.Handle)
 	var (
-		id, state, agentKey, human, targetsJSON string
-		storedHash                              []byte
-		expiresMS                               int64
+		id, approvalID, state, agentKey, human, targetsJSON string
+		storedHash                                          []byte
+		expiresMS                                           int64
 	)
 	err := p.db.QueryRowContext(ctx,
-		"SELECT id, state, agent_key, human, targets, handle_hash, expires_ms FROM elevations WHERE handle_hash = ?", hash[:]).
-		Scan(&id, &state, &agentKey, &human, &targetsJSON, &storedHash, &expiresMS)
+		"SELECT id, approval_id, state, agent_key, human, targets, handle_hash, expires_ms FROM elevations WHERE handle_hash = ?", hash[:]).
+		Scan(&id, &approvalID, &state, &agentKey, &human, &targetsJSON, &storedHash, &expiresMS)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", codes.New(codes.HandleUnknown, "unknown elevation handle")
 	}
@@ -457,6 +476,20 @@ func (p *Point) coveredByElevation(ctx context.Context, r RunRequest, h *config.
 	case !slices.Contains(targets, r.Target):
 		return nil, "elevation_other_target", nil
 	}
+	if t, _ := p.cfg.TargetByName(r.Target); t != nil && t.SSH != nil {
+		// What the approver was shown about the host (docs/08 D10). An
+		// elevation without it (made before the host check existed)
+		// doesn't cover the run, which then asks for a one-off.
+		facts, ok, err := p.elevationFacts(ctx, approvalID)
+		if err != nil {
+			return nil, "", err
+		}
+		shown, listed := facts[r.Target]
+		if !ok || !listed {
+			return nil, detailElevationHostFacts, nil
+		}
+		spec.SessionKillShown = shown
+	}
 	p.mu.Lock()
 	le := p.elevations[id]
 	p.mu.Unlock()
@@ -476,7 +509,7 @@ func (p *Point) coveredByElevation(ctx context.Context, r RunRequest, h *config.
 // one of approve, deny, expire, withdraw or fail settles it. It returns the
 // final state.
 func (p *Point) ask(ctx context.Context, rec audit.Record, id, kind string, approverID int64, pr *authn.Principal,
-	targets string, digest []byte, duration time.Duration, expires time.Time,
+	targets string, digest []byte, duration time.Duration, expires time.Time, hostFacts string,
 	send func(context.Context) error, progress func(string)) (string, error) {
 	if !p.asker.Healthy() {
 		return "", codes.New(codes.Unavailable, "the approval channel is unavailable")
@@ -499,6 +532,14 @@ func (p *Point) ask(ctx context.Context, rec audit.Record, id, kind string, appr
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, kind, statePending, pr.Human, pr.AgentKey, approverID, targets, digest, durMS, p.now().UnixMilli(), expires.UnixMilli()); err != nil {
 		return "", codes.Wrap(codes.Unavailable, err, "state unavailable")
+	}
+	if hostFacts != "" {
+		// Kept with the approval, so that the elevation it creates can
+		// hold its runs to what the approver saw (docs/08 D10).
+		if _, err := p.db.ExecContext(ctx, "INSERT INTO approval_host_facts (approval_id, facts) VALUES (?, ?)", id, hostFacts); err != nil {
+			p.settle(id, statePending, stateFailed, nil)
+			return "", codes.Wrap(codes.Unavailable, err, "state unavailable")
+		}
 	}
 	sent := rec
 	sent.Kind = codes.KindApprovalSent

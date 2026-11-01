@@ -537,6 +537,64 @@ Where SE2 differs from, or settles what D9, D11 and D12 leave open:
   `-` for a Kubernetes target), groups (comma-separated, or `-`) and the
   description, tab-separated, description last.
 
+### SE4 (2026-11-01)
+
+Where SE4 differs from, or settles what D9 and D10 leave open:
+
+- **Which certificates are offered.** Certificate algorithms are
+  offered, and certificates accepted, for a target with host CAs of its
+  own or global ones, as before, and for a target **without pins** when
+  `host-ca` exists. A pinned target without host CAs stays verified by
+  its pins only, so a host that also has a certificate keeps presenting
+  its plain key, and its `session_kill` is the config value (D9's
+  "pinned host"). An enrolled host that is also pinned is therefore
+  verified by its pin. A `host-ca` certificate must also certify an
+  ed25519 key (D8), and its `session-kill@nyyrikki` counts only with an
+  empty value.
+- **The check never authenticates by construction.** Its host-key
+  callback returns an error once it has verified the host, which ends
+  the handshake inside key exchange, before the client asks for the
+  `ssh-userauth` service; the client config has no auth method either.
+  `TestHostCheckNoAuth` counts every authentication attempt the
+  in-process host sees, `none` included, and finds none, while a run
+  against the same host is counted.
+- **Details.** A check reports `host_unreachable` (refused, timed out,
+  or a handshake that ended before the host key, such as no common host
+  key algorithm), `host_key_mismatch`, `host_key_revoked`,
+  `host_not_pinned` (nothing could verify the target: no pin, no host
+  CA, no `host-ca`; never dialled), `unknown_target`, or the CA loader's
+  `ca_key_unreadable` / `user_ca_revoked` (never dialled, D1). A run's
+  own dial after approval keeps docs/07's `target_unreachable`. A run
+  whose host shows less than its approver saw is `host_changed`,
+  refused in the host-key callback, so before authentication, and
+  audited as `dependency_failed` after `run_started`, like the other
+  host refusals.
+- **The decision point runs the check** (one decision point): it calls
+  the SSH runner through an interface, after introspection, visibility
+  and elevation coverage, before the prompt. A covered run under an
+  elevation has no prompt and no check. No checker configured with an
+  SSH target, or a checker error without a detail, is
+  `host_check_unavailable`. Each check is audited as `host_checked`
+  (docs/03 §5.1); a failed write of it denies the run or the elevation.
+  An elevation checks its SSH targets in parallel, at most four at a
+  time.
+- **Elevation message.** A target whose check failed shows "not
+  reachable now: treated as not finishing cuts" when it was
+  unreachable, and "host check failed: treated as not finishing cuts"
+  with the detail otherwise (a key mismatch is something the approver
+  should see), then docs/07 D12's warning. The detail is shown only if
+  it is a short lower-case code.
+- **Where the facts are kept.** A one-off run's grant carries what its
+  prompt showed. An elevation's are written with its approval, in a new
+  table `approval_host_facts` (target → `session_kill` shown), so they
+  survive a restart as the elevation does. An elevation without that
+  row (one made before SE4 was deployed) doesn't cover runs on SSH
+  targets: they ask for a one-off, with a check of their own. A
+  corrupt row denies.
+- **Decided while implementing; the owner may revisit**: the
+  pinned-target rule of the first item, and showing the failed check's
+  detail.
+
 ## 11. Post-implementation review (YYYY-MM-DD)
 
 <!-- Added at close-out. -->

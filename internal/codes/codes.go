@@ -98,6 +98,12 @@ const (
 	CoveredElevation = "elevation"
 )
 
+// DetailHostUnreachable is the detail of a host check whose host could
+// not be reached (docs/08 D10). It is defined here because the check
+// (internal/sshtarget) and the elevation message (internal/telegram)
+// both name it.
+const DetailHostUnreachable = "host_unreachable"
+
 // Audit kinds (docs/03 §5.1).
 const (
 	KindAuthFailed         = "auth_failed"
@@ -120,4 +126,8 @@ const (
 	// KindSSHCAWarning: an extra trusted key equals a derived one
 	// (docs/08 D14).
 	KindSSHCAWarning = "ssh_ca_warning"
+	// KindHostChecked: the host check of an SSH target before an
+	// approval prompt (docs/08 D10), with the failure's code and detail,
+	// or detail session_kill / no_session_kill for what it read.
+	KindHostChecked = "host_checked"
 )

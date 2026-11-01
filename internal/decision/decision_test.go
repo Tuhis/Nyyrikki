@@ -2,6 +2,7 @@ package decision_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"path/filepath"
@@ -92,11 +93,13 @@ type flakyAudit struct {
 	*audit.Writer
 	mu      sync.Mutex
 	failing bool
+	// failKind, if set, fails only writes of that kind.
+	failKind string
 }
 
 func (f *flakyAudit) Append(ctx context.Context, r audit.Record) error {
 	f.mu.Lock()
-	failing := f.failing
+	failing := f.failing || (f.failKind != "" && r.Kind == f.failKind)
 	f.mu.Unlock()
 	if failing {
 		return errors.New("disk full")
@@ -113,6 +116,8 @@ type env struct {
 	clock *clock
 	cfg   *config.Config
 	dir   string
+	hosts *fakeHosts
+	db    *sql.DB
 }
 
 func testConfig() *config.Config {
@@ -145,7 +150,9 @@ func newEnvAt(t *testing.T, dir string) *env {
 		t.Fatal(err)
 	}
 	e := &env{t: t, asker: newAsker(), intro: &fakeIntro{}, audit: &flakyAudit{Writer: w}, clock: clk, cfg: testConfig(), dir: dir}
-	e.p, err = decision.New(ctx, decision.Config{Config: e.cfg, DB: db, Audit: e.audit, Asker: e.asker, Introspector: e.intro, Now: clk.now})
+	e.hosts = &fakeHosts{cfg: e.cfg, results: map[string]hostResult{}}
+	e.db = db
+	e.p, err = decision.New(ctx, decision.Config{Config: e.cfg, DB: db, Audit: e.audit, Asker: e.asker, Introspector: e.intro, Hosts: e.hosts, Now: clk.now})
 	if err != nil {
 		t.Fatal(err)
 	}

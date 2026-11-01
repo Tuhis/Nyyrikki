@@ -70,11 +70,17 @@ type fakeHost struct {
 	now       func() time.Time
 	// hostCert, if set, is presented instead of the plain host key.
 	hostCert *ssh.Certificate
+	// userCAFile is the harness's user CA key file, for tests that add
+	// a host-ca next to it.
+	userCAFile string
 
-	mu        sync.Mutex
-	events    []event
-	certs     []*ssh.Certificate
-	logins    int
+	mu     sync.Mutex
+	events []event
+	certs  []*ssh.Certificate
+	logins int
+	// auths counts every authentication attempt, of any method, "none"
+	// included (docs/08 G9: the host check makes none).
+	auths     int
 	conns     []net.Conn
 	closed    chan struct{}
 	noSession bool
@@ -103,10 +109,21 @@ func (h *fakeHost) loginCount() int {
 	return h.logins
 }
 
+func (h *fakeHost) authCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.auths
+}
+
 func (h *fakeHost) addr() string { return h.ln.Addr().String() }
 
 func (h *fakeHost) config() *ssh.ServerConfig {
 	cfg := &ssh.ServerConfig{
+		AuthLogCallback: func(ssh.ConnMetadata, string, error) {
+			h.mu.Lock()
+			h.auths++
+			h.mu.Unlock()
+		},
 		PublicKeyCallback: func(md ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			cert, ok := key.(*ssh.Certificate)
 			if !ok {
@@ -397,6 +414,7 @@ func newHarness(t *testing.T, mod func(*RunnerConfig, *fakeHost)) *harness {
 	t.Helper()
 	ca := newTestCA(t)
 	host := newFakeHost(t, ca.signer.PublicKey())
+	host.userCAFile = ca.file
 	a := &recAudit{}
 	cfg := RunnerConfig{
 		Targets: map[string]Target{"db-1": {Name: "db-1", Address: host.addr(), Host: "db-1.example.com",
