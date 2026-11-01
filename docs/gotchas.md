@@ -190,6 +190,10 @@ the doc.
   nothing without `KillUserProcesses=yes`, and the kill waits for the
   scope's `TimeoutStopSec` (90 s) before `KILL`.
   ([docs/07](07-ssh-target.md) M18)
+- **`sshd -V` doesn't exist before OpenSSH 9.x.** 8.9 answers "unknown
+  option -- V", then prints its version in the usage message. Read
+  `sshd -V 2>&1` and look for `OpenSSH_`, not the first line.
+  ([docs/07](07-ssh-target.md) §10, OD7)
 - **A writable principals file fails as "Certificate does not contain an
   authorized principal"**, with "bad ownership or modes" only in the
   line before. Write it with `umask 022`. ([docs/07](07-ssh-target.md) M19)
