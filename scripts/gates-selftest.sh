@@ -14,6 +14,7 @@ canaries=(
   "staticcheck|staticcheck|SA4017"
   "tidy|tidy|^-require github\.com/oklog/ulid"
   "test|test|planted failure"
+  "coverage|coverage|coverage: total [0-9.]+% is below the floor 90%"
   "vuln|vuln|GO-2022-1059"
   "licenses|licenses|Not allowed license 'GPL-3\.0' found for library 'example\.com/gpl'"
   "secret|secrets|nyyrikki-elevation-handle"

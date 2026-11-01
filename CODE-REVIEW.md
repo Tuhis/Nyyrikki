@@ -187,11 +187,21 @@ v8.30.1, kubeconform v0.8.0.
 | staticcheck | `staticcheck ./...` |
 | tidy | `go mod tidy -diff` |
 | tests | `go test -race -count=1 ./...` |
+| coverage | `go test -count=1 -coverpkg=./... -coverprofile=… ./...`; the total from `go tool cover -func` must not be below `coverage-floor.txt` (docs/09 D5). It fails closed: a missing or malformed floor, an empty profile or an unreadable total fails |
 | vulnerabilities | `govulncheck ./...` |
 | licences | `go-licenses check ./... --allowed_licenses=MIT,BSD-2-Clause,BSD-3-Clause,Apache-2.0,ISC`, ignoring hand-reviewed modules, whose LICENSE hashes are pinned in `scripts/pinned-licenses` |
 | secrets | `gitleaks dir . --redact --config .gitleaks.toml` (it also matches elevation handles and stream tickets) |
 | chart | `helm lint`, `helm template … \| kubeconform -strict -kubernetes-version 1.35.0`, and the chart's template tests |
 | pinning | every action pinned to a SHA, every workflow defaulting to `contents: read` |
+
+`coverage-floor.txt` holds one whole percent: the measured total, rounded
+down, less one point. The point is margin for statements whose coverage
+depends on timing (three in `internal/telegram` on 2026-11-01, so the
+total moved between 83.02% and 83.07% over five runs); without it the
+gate would fail at random on a slow runner. Raise it in a commit of its own (or alongside the tests that earn
+it) when the total has grown a whole point past it. Never lower it
+without saying why in the PR description; the reviewer checks that the
+reason holds.
 
 Every gate has a canary in `test/canaries/`, and `scripts/gates-selftest.sh`
 (the `gates-selftest` step in CI) fails if any gate passes its canary.
