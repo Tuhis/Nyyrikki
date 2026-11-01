@@ -1,5 +1,8 @@
 # Setting up Nyyrikki
 
+To try Nyyrikki on one Linux machine before deploying it, see
+[Try it locally](quickstart.md).
+
 In order:
 
 1. [Keycloak](keycloak.md): the realm, the clients and the audience scope.
