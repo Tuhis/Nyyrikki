@@ -628,6 +628,88 @@ Where SE3 settles what D4 leaves open:
   `TestUnauthenticated`, now naming both `/hosts/` paths; docs/01's
   dated note stays SE6's (§8).
 
+### SE5 (2026-11-01)
+
+Where SE5 differs from, or settles what D6, D7 and D8 leave open:
+
+- **The token's bytes.** `nye1.` then unpadded base64url, decoded
+  strictly (one spelling per token), of: the target's length (one byte),
+  the target, the expiry in Unix seconds (eight bytes, big-endian), 16
+  random bytes, and HMAC-SHA256 over `nye1.` and every byte before it.
+  The HMAC is checked first, in constant time; only then are the target,
+  the expiry and the use read. A forged, truncated or other target's
+  token is `401` with detail `token_invalid`, so the caller learns
+  nothing about why; an expired one `token_expired`, a used one
+  `token_used`. A token minted under another `host-ca` is forged.
+  `enroll-token` keeps no state and writes no audit record: the server
+  audits each use, with `token_sha256` only for a token whose HMAC
+  checked (docs/03 §5.1).
+- **One token, one enrollment, one check.** The token is claimed before
+  anyone is asked, so a replay while the first enrollment waits is `401`
+  too. The check is accepted only after an approved enrollment, once,
+  and only before the token expires: an enrollment approved near the end
+  of the 15 minutes has a short window for its check. The certificate is
+  valid either way; a refused check only means the host's script reports
+  it. A malformed body doesn't use the token up.
+- **Order of refusals.** A query string is `400` and a name that isn't
+  an SSH target `404`, as for `setup.sh`, before the token is read. Then
+  the CA keys: unreadable (`ca_key_unreadable`, `user_ca_revoked`) or no
+  `host-ca` (`host_ca_absent`) is `503`, so no token is checked against a
+  key that may be half rotated. Then the token (`401`), then the body
+  (`400`). None of these sends a prompt.
+- **The body** is exactly `HOST_KEY=`, `SESSION_KILL=` and `END=2`, in
+  that order, each line ending in a newline, printable ASCII only, at
+  most 4 KiB. The key must be in its canonical form, type and base64
+  with nothing else (no comment, no options), ed25519, and not a
+  certificate.
+- **The answers.** An approved enrollment is `200` with data lines
+  `HOST_CERT=<the certificate, authorized_keys form>` and `END=1`. A
+  denial, expiry or withdrawal is `403`, an unavailable approver,
+  audit log or CA `503`, each with `<code>: <detail>`. The check answers
+  `200` with `OK=<account>` or `REFUSED=<account>` per account tried,
+  `NOT_CHECKED=<account>` for those after the first refusal, a `HINT=`
+  line after a refusal, and `END`; a host that can't be reached or
+  presents anything but the certificate just issued is `503` with
+  `host_unreachable`, `host_cert_mismatch` or `host_key_revoked`.
+- **Every human of the target is asked** (those with a Telegram user ID;
+  none is `unavailable`, `no_approver`). Each gets an approval of its own,
+  kind `enroll`, all sharing a `group_id`; settling one settles the whole
+  group in one compare-and-set, which wins only if every approval of the
+  group was still in the state it moves from, so exactly one of approve,
+  deny, expire and withdraw wins across all copies. Every copy is
+  edited, with the status line naming the human whose tap settled it.
+  The approvals table gains the kind and the column; an existing
+  database is rebuilt once at start (SQLite can't change a `CHECK`), in
+  one transaction that checks the foreign keys before it commits. The
+  Telegram side stores an enrollment prompt as a one-off prompt.
+  Pending enrollments are expired at start, as any approval.
+- **The prompt** adds one line to §5.2's: "Approving makes Nyyrikki
+  trust this host key for this target's address", and the compare line
+  says to approve only if the fingerprints match. The client address is
+  the TCP peer's; `X-Forwarded-For` and the like are ignored, so behind a
+  proxy it is the proxy's.
+- **The check** dials once per account (OpenSSH's sshd refuses a change
+  of user within one connection; not measured here), offers only the ed25519 certificate host key
+  algorithm, and requires the exact certificate just issued, which must
+  also pass D9 as Nyyrikki's own certificate for the target. Pins and
+  other host CAs don't count here, so a pinned target's enrollment is
+  checked too (runs on it stay on the pin, SE4). Its run certificate is
+  docs/07 D5's, with key ID `nyyrikki:chk_<random>`, audited
+  (`host_enroll_checked`, `probe_started`) before the host is dialled.
+  After authenticating it disconnects without opening a channel.
+- **Code layout.** `SessionKillExtension` and `HostCertKeyID` moved to
+  `internal/sshca`, which signs them; `internal/sshtarget` refers to
+  them. The CA loader is built from the config by one function,
+  `sshca.FromConfig`, which the server and `enroll-token` share, so both
+  derive the token key from the same files.
+- **`NOTES.txt`** still says enrollment arrives later: the setup
+  script learns `--enroll` in SE6, which prints the command (D14).
+  `ssh.hostCertValidity` is in the chart's values now, mapped to
+  `ssh.host_cert_validity`.
+- **Decided while implementing; the owner may revisit**: a check after
+  the token's expiry is refused, and every copy of a settled enrollment
+  names who settled it.
+
 ## 11. Post-implementation review (YYYY-MM-DD)
 
 <!-- Added at close-out. -->

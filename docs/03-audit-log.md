@@ -90,6 +90,25 @@ and the check's `detail` when it failed, otherwise `detail`
 the bundle's `ISSUED` and the fingerprints of its `CA_KEY`s and
 `SIGNER_KEY`s), once per fetch of an SSH host's trust bundle.
 
+*Extended 2026-11-01 by [docs/08](08-ssh-onboarding.md) D6, D7 (SE5)*:
+host enrollment, with three new fields: `host_key` (the SHA256
+fingerprint of the host key enrolled), `token_sha256` (the hex SHA-256 of
+an enrollment token's random part, never the token, and only for a token
+whose HMAC checked), and `client_addr` (the address the request came
+from). `host_enroll_requested` (the target, before the prompts; `detail`
+`session_kill` or `no_session_kill` as the host reported);
+`host_enroll_approved` (`human` is who tapped); `host_enroll_denied`
+(any refusal: a bad, expired, used or other target's token, a malformed
+body, a missing or broken `host-ca`, a denial, expiry, withdrawal or
+failure, with `code` and `detail`); `host_cert_issued` (`cert_serial`,
+`host_key`, written before the certificate is returned; no record, no
+certificate); `host_enroll_checked` (once per account before the check
+authenticates, with `run_as` and the probe certificate's `cert_serial`,
+`detail` `probe_started`; then once with each account's result in
+`detail`, or the failure's `code` and `detail`). An enrollment's
+approvals also write `approval_sent` and `approval_settled` as any
+approval does.
+
 ### 5.2 Schema
 
 ```sql
