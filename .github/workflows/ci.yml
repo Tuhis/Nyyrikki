@@ -84,9 +84,26 @@ jobs:
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: go-licenses version matches the Dockerfile's
+        run: |
+          grep -qx "ARG GO_LICENSES_VERSION=$GO_LICENSES_VERSION" Dockerfile \
+            || { echo "Dockerfile's GO_LICENSES_VERSION differs from ci.yml's ($GO_LICENSES_VERSION)"; exit 1; }
       - name: Build the image
         run: docker build -t nyyrikki:ci .
       - name: Runs as non-root and starts
         run: |
           test "$(docker inspect -f '{{.Config.User}}' nyyrikki:ci)" = "65532:65532"
           docker run --rm nyyrikki:ci --version
+      - name: Holds the licence notices
+        # docs/09 D3, §5.3. The image has no shell, so the directory is
+        # copied out of a created (never started) container.
+        run: |
+          id=$(docker create nyyrikki:ci)
+          trap 'docker rm "$id" >/dev/null' EXIT
+          docker cp "$id:/usr/share/doc/nyyrikki/licenses" licenses
+          for f in github.com/Tuhis/Nyyrikki/LICENSE github.com/modelcontextprotocol/go-sdk/LICENSE go/LICENSE; do
+            test -s "licenses/$f" || { echo "missing $f"; exit 1; }
+          done
+          n=$(find licenses -type f | wc -l)
+          [ "$n" -gt 3 ] || { echo "only $n licence files"; exit 1; }
+          echo "$n licence files"
