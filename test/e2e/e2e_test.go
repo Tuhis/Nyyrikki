@@ -355,18 +355,33 @@ func TestEndToEnd(t *testing.T) {
 		// to the browser session, as the OD18 step below checks.
 		cl := e.adminClient(t, "nyyrikki-cli")
 		var scopes []struct{ ID, Name string }
-		json.Unmarshal(e.admin(t, "GET", "/admin/realms/"+realm+"/client-scopes", nil), &scopes)
+		if err := json.Unmarshal(e.admin(t, "GET", "/admin/realms/"+realm+"/client-scopes", nil), &scopes); err != nil {
+			t.Fatalf("client scopes: %v", err)
+		}
 		var offlineID string
 		for _, sc := range scopes {
 			if sc.Name == "offline_access" {
 				offlineID = sc.ID
 			}
 		}
+		if offlineID == "" {
+			t.Fatal("the realm has no offline_access client scope")
+		}
 		opt := "/admin/realms/" + realm + "/clients/" + fmt.Sprint(cl["id"]) + "/optional-client-scopes/" + offlineID
 		e.admin(t, "DELETE", opt, nil)
+		// Put it back whatever happens, or the later OD18 checks fail for
+		// the wrong reason (round 1 of #50).
+		restored := false
+		restore := func() {
+			if !restored {
+				restored = true
+				e.admin(t, "PUT", opt, nil)
+			}
+		}
+		t.Cleanup(restore)
 		fresh := e.newCLI(t)
 		fresh.login(t)
-		e.admin(t, "PUT", opt, nil)
+		restore()
 		if typ := claims(loginFile(fresh)["refresh_token"].(string))["typ"]; typ != "Refresh" {
 			t.Fatalf("a login without offline_access has a %v refresh token", typ)
 		}
