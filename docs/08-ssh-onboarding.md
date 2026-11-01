@@ -756,12 +756,22 @@ Where SE6 differs from, or settles what D5, D13, D14 and D15 leave open:
   the revocation list and the drop-in. Each is journaled, so a rollback
   restores them. Step 2's revocations are not: like the rest of step 2,
   what the values no longer trust stays untrusted.
-- **One lock**, `/etc/ssh/.nyyrikki-lock`, a symbolic link naming the
-  holder's PID, made atomically: the setup (but not `--dry-run` or
-  `--status`) and the pull both take it, so a pull from cron never
-  interleaves with a setup. A lock whose process is gone (a kill, a
-  reboot) is taken over. A pull that finds a live lock fails and tries
-  again at its next run.
+- **One lock**: a kernel lock (`flock`, util-linux or BusyBox) on
+  `/run/nyyrikki-ssh.lock` (a tmpfs, so nothing outlives a reboot), a
+  root-owned file of mode 0600, held on a
+  file descriptor until the process exits. The setup (but not
+  `--dry-run` or `--status`) and the pull both take it, so a pull from
+  cron never interleaves with a setup. A holder that dies (a kill, a
+  reboot) releases it, so there is nothing stale to take over. A run that
+  finds it held refuses; the pull tries again at its next run. A
+  symbolic link at the path is refused, not followed. Under `/run`, the
+  file leaves nothing under `/etc` behind, also after `--uninstall`. *Revised 2026-11-01 (review of #50)*: the lock was
+  first a symbolic link naming the holder's PID, taken over when stale by
+  `readlink`, `kill -0`, `rm`, `ln`; two processes finding the same stale
+  lock could both end up holding it, so a pull could interleave with the
+  leak-recovery setup and restore a signer it had just dropped. A file of
+  mode 0600 because `flock` works on a read-only descriptor: a readable
+  file would let any user hold the lock and stop every pull.
 - **Step 8** writes `pull.sh` and `pull.conf` whatever the schedule, so a
   host with `pull: none` can run the pull by hand. A run without
   `--cacert` removes an earlier `server-ca.pem`, and warns. A cron counts

@@ -372,7 +372,8 @@ Enrollment (step 10) comes after all that: it never undoes steps 2 to 9.
 Run the command again whenever the target's humans, source addresses or
 `sudo` change: the pull never adds access. Re-running is safe: it brings
 the host to what the values say. The script and the pull take the same
-lock, so they never change the trust files at once.
+lock (`flock` on `/run/nyyrikki-ssh.lock`, which needs util-linux's or
+BusyBox's `flock`), so they never change the trust files at once.
 
 **Turning `sudo` off doesn't undo root an account already used.** A
 re-run with `sudo: false` removes Nyyrikki's sudoers file, and refuses
