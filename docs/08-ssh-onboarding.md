@@ -363,6 +363,14 @@ works.
     comparing the fingerprint would trust the holder's host for that
     target's address. The prompt says what to compare. The approver
     should be the administrator at the host, or in touch with them.
+  - *The token on the host's command line* (round 1 of #47): the
+    printed `… | sudo sh -s -- --enroll <token>` puts the token in the
+    host's process list for the setup's duration, in sudo's log and in
+    shell history. A local user who reads it from `ps` can post a key of
+    their own first; the approver then sees a fingerprint that doesn't
+    match the host's terminal, which is the case above, and the real
+    script gets `token_used`. The token's 15 minutes and single use bound
+    the rest.
 - **What the pull can and can't do as root** (D5): add revocations,
   remove principals and sudoers files, replace the trusted CA keys, and
   change the bundle signers by D5's three relations only. Nothing else,
