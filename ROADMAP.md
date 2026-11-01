@@ -44,6 +44,7 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 | R10 | [SSH target](#r10--ssh-target) | 🔧 implemented 2026-10-30, [docs/07](docs/07-ssh-target.md) approved (#25): SH1–SH6, unit and in-process tests against a fake SSH host, `test/ssh-host` runs the setup script in Debian, Ubuntu and Rocky containers, e2e on kind against an OpenSSH container set up by the served script; open: G12 (a real command on a real host, approved on a real phone, set up with the script), and session kill measured only on Debian (§2 M18). Not in the first version |
 | R11 | [SSH CA hardening](#r11--ssh-ca-hardening) | 💡 proposed 2026-10-29, after R10; the pull of trust material is taken over by R12 (signed in the pod, docs/08 OD3), the external signer stays open |
 | R12 | [SSH onboarding and upkeep](#r12--ssh-onboarding-and-upkeep) | 🔧 [docs/08](docs/08-ssh-onboarding.md) approved 2026-10-31 (#40); SE1–SE6 implemented: SE1 2026-10-31 (#42: CA keys through `internal/sshca`, `nyyrikkid ssh-ca`, the CA Secret mounted whole, the install hook and rotation CronJobs), SE2 2026-10-31 (#43: defaults, groups, global host CAs, `nyyrikki ssh`), SE3 2026-11-01 (#45: the signed trust bundle), SE4 2026-11-01 (#46: host verification by `host-ca`, the host check before approval), SE5 2026-11-01 (#47: enrollment tokens and endpoints, the host certificate, the check after enrollment), SE6 2026-11-01 (the setup script's trust pull, enrollment and `--status`, Alpine, the setup docs' three paths, NOTES.txt, e2e of enrollment and a rotation reaching a host by its pull); open: G14 (a real host enrolled and rotated, manual by the owner) |
+| R13 | [Public release readiness](#r13--public-release-readiness) | 🔧 [docs/09](docs/09-public-release.md) drafted 2026-11-01 with OD1 taken (owner: prepare it as recommended); PB1–PB6 in progress; open: PB7, the repository settings after the visibility flip, by the owner |
 
 ## Milestones to the first version
 
@@ -409,3 +410,18 @@ host certificate it signed, so a target needs only its address; hosts
 with cron pulling a signed trust bundle every 15 minutes; defaults,
 global host CAs and groups in the values; `nyyrikki ssh`. Everything
 stays in the Helm values: Nyyrikki stores no registry (docs/08 OD1).
+
+## R13 — Public release readiness
+
+**Proposed 2026-11-01 (owner request)** ([docs/09](docs/09-public-release.md)).
+
+**Why**: the owner wants the repository public. An outsider meets a
+README with no status and no way to try it, a security policy with no
+reporting channel, binaries without their dependencies' licence texts,
+unsigned releases and an unprotected `main`.
+
+**Scope**: the README, private vulnerability reporting, licence notices
+in the image and the release, key-less signed releases, a coverage
+gate, a local quickstart on Linux with a real Telegram bot, Renovate's
+`go mod tidy`, and the repository settings the owner applies after the
+flip. Nothing on the decision path changes.

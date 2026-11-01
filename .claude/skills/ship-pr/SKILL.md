@@ -18,10 +18,11 @@ Verify them if something behaves unexpectedly, because they can drift:
   GitHub enforced them. The repo allows every merge method, but
   `CONTRIBUTING.md` says PRs land by **squash**. Merged branches are **not**
   deleted automatically.
-- **No build CI exists yet.** Until R1 picks a toolchain, the repo holds
-  design and process documents only, and `claude-review` is the only check.
-  When `CONTRIBUTING.md` §Running the gates lists real gates, they apply
-  here too.
+- **CI runs on every PR**: `build` (Go 1.26 and 1.27), `gates`, `image`
+  (`ci.yml`), and, when the paths it watches change, `e2e` and
+  `ssh-host`. Run `CONTRIBUTING.md` §Running the gates before pushing.
+  When the repository goes public, a ruleset will enforce the merge
+  conditions below (docs/09 §5.7); update this section then.
 - **Nyyrikki is a security component** (`CLAUDE.md`). A review finding that
   points to a way a request could run without approval, a credential could
   reach the agent, or a failure could end in allow is the most serious kind
@@ -336,7 +337,7 @@ PR in round 1, instead of "since your last review".
 Merge only when **all** of these hold for the **current head SHA**:
 
 - Every check has finished, each as `success`, `skipped` or `neutral`, with
-  none pending. Today that means `claude-review` alone. A PR with **no**
+  none pending. Today that means CI's checks and `claude-review`. A PR with **no**
   checks at all is not green: it means the review workflow didn't run, so
   find out why.
 - Every commit has been reviewed: `git log <marker>..HEAD` (§3) is empty,

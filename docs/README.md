@@ -26,6 +26,7 @@ Not a design doc, but in this directory:
 | [06](06-packaging-and-deployment.md) | R6 — Packaging and deployment, the minimal part for M4 |
 | [07](07-ssh-target.md) | R10 — SSH target: commands on Linux hosts, as the human |
 | [08](08-ssh-onboarding.md) | R12 — SSH onboarding and upkeep, made simple |
+| [09](09-public-release.md) | R13 — Public release readiness |
 
 The replaced Warden plan (2026-10-25) also had docs numbered 01–09.
 Nothing was built from them, so they were removed and numbering starts
