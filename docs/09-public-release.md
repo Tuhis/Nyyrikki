@@ -265,9 +265,56 @@ already reports, licenses and signs.
 - **A public repository invites drive-by PRs** that the design-first
   process will turn away. CONTRIBUTING.md already says so.
 
-## 10. How it was implemented (YYYY-MM-DD)
+## 10. How it was implemented (2026-11-02)
 
-<!-- Added during implementation. -->
+- **PB1** (#51) also carried PB6 (one line in `renovate.json`). The
+  README's approval example uses the parser's canonical form
+  (`kubectl delete --namespace=shop pod web-0`), not a hand-written
+  fixture's.
+- **PB2** (#52): the notices include Go's own licence (`go/LICENSE`),
+  since the standard library is compiled into every binary and
+  go-licenses leaves it out. One script saves a set
+  (`scripts/save-licenses.sh`), another packs the CLI's four platforms
+  (`scripts/cli-licenses.sh`), which CI's `gates` job runs as the
+  runner's non-root user and the release runs **before** the image push.
+  Review found two bugs before merge: copies from the module cache are
+  read-only, so the merge failed for a non-root user; and `go list |
+  grep -q` under `pipefail` could skip the go-sdk's licence silently.
+  The archive is now checked for Nyyrikki's, the go-sdk's and Go's
+  licences by name. The go-licenses version lives in the Dockerfile's
+  `ARG` and `ci.yml`, which the `image` job keeps equal.
+- **PB3** (#54): cosign-installer v4.1.2 installs cosign v3.1.4, both
+  bumped by hand like BuildKit. `helm push` prints its digest on stderr
+  in Helm 3 and on stdout in Helm 4; the job reads both. The signer
+  identity is a literal, the same string users verify with. The release
+  notes gain a `Chart:` line. G4's manual check waits for the next
+  release.
+- **PB4** (#53): the floor is 82, one point under the measured total,
+  for statements covered or not depending on timing (D5, revised). On
+  CI the gate hit `go tool covdata: text file busy` (golang/go#22315);
+  #57 builds the tool before the test run.
+- **PB5** (#56): the shared setup is `test/stack`, built only with the
+  `e2e` or `quickstart` tag, so no product binary can import it and it
+  stays out of the coverage total; `e2e.yml` vets the quickstart and
+  runs `test/stack`'s tests. Review (three rounds) changed the design:
+  - the agent runs in a pod (D6, revised), and the human's rights are
+    `edit` in a playground namespace with Pod Security `restricted`,
+    not cluster-wide (an elevation could otherwise read the bot token
+    or reach root on the host); the e2e checks the rights first;
+  - the stack's cluster refuses Services with `externalIPs`
+    (CVE-2020-8554);
+  - `up` finds the approver's Telegram ID with `getUpdates` (no offset),
+    showing the checked ID and @username before the sender's chosen
+    name, so the token is never needed in a file;
+  - every stack command runs in its own process group with a bounded
+    teardown, so Ctrl-C or SIGTERM leaves nothing behind; a third
+    signal during cleanup exits and says to run `down`.
+  Keycloak's admin and owner passwords are random (§9, revised).
+- **Found on the way, recorded in BUGS.md** (#61): the SSH setup script
+  posts the check after enrollment right after reloading sshd, which
+  can race the reload (a false failure, no access granted); and
+  `TestHostCheckElevationParallel` asserts on wall-clock time. A
+  `servertest` port race that failed CI on #56 is fixed in #62.
 
 ## 11. Post-implementation review (YYYY-MM-DD)
 
