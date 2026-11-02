@@ -182,8 +182,10 @@ var stopGrace = 10 * time.Second
 // stopGrace: a step's children (kind create cluster's docker run, a
 // docker build) end with it, before any cleanup runs, even those that
 // ignore SIGTERM. Being in its own group, it doesn't get the terminal's
-// Ctrl-C itself; the context brings it. A context that never ends (Run's)
-// changes nothing.
+// Ctrl-C itself; the context brings it. The quickstart's context ends on a
+// signal; so does the e2e's, during its setup only. Without one (Run's,
+// and the e2e's after setup), an interrupted run can leave a step going
+// until the next Create removes what it made.
 //
 // Call waited once the command has been waited for (Run, Output): it
 // stops the group's SIGKILL, so the group's number, free again once the

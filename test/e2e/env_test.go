@@ -12,14 +12,17 @@
 package e2e
 
 import (
+	"context"
 	"crypto/x509"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -132,11 +135,28 @@ func setup(t *testing.T) *env {
 		Logf:            t.Logf,
 	}
 
+	// During setup, a Ctrl-C or SIGTERM ends the running stack step, with
+	// its process group, and so fails the setup; the cleanups then remove
+	// the stack (go test waits for them). Without this, the steps' own
+	// process groups would keep running after the test binary died, and
+	// the stack would stay up. After setup, signals act as they did:
+	// stop restores the default, and the stack's context is cleared,
+	// since stop also cancels it.
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	cfg.Context = sigCtx
+	var st *stack.Stack
+	defer func() {
+		stopSignals()
+		if st != nil {
+			st.Context = nil
+		}
+	}()
+
 	// The network, the cluster on it, the CA and Keycloak.
 	if os.Getenv("NYYRIKKI_E2E_KEEP") == "" {
 		t.Cleanup(func() { stack.Teardown(cfg) })
 	}
-	st, err := stack.Create(cfg)
+	st, err = stack.Create(cfg)
 	must(t, err)
 	e := &env{st: st, dir: dir, root: root, kubeconfig: st.Kubeconfig, nodeIP: st.NodeIP, issuer: st.Issuer,
 		canonical: st.Canonical, caFile: st.CAFile, caPool: st.CAPool}
