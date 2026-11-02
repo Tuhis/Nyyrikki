@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,6 +32,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -99,18 +101,25 @@ func (s *SyncBuffer) Records() []map[string]any {
 // Option changes the config before start.
 type Option func(*config.Config)
 
+// PickAddr returns a loopback address with a port that was free a moment
+// ago. Tests may replace it.
+var PickAddr = func(t testing.TB) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.Addr().String()
+}
+
 // Start runs nyyrikkid until the test ends.
 func Start(t *testing.T, opts ...Option) *Env {
 	t.Helper()
 	dir := t.TempDir()
 	e := &Env{AS: authntest.New(t), Telegram: telegramtest.New(t), API: NewFakeAPIServer(t), Audit: &SyncBuffer{}, Dir: dir}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
+	addr := PickAddr(t)
 	e.MainAddr = addr
 	canonical := "https://" + addr
 	e.AS.Audience = canonical + "/mcp"
@@ -159,24 +168,41 @@ func Start(t *testing.T, opts ...Option) *Env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	e.cancel = cancel
-	e.done = make(chan error, 1)
-	ready := make(chan struct{})
-	go func() {
-		e.done <- server.Run(ctx, c, server.Options{
-			Version: "test", AuditOut: e.Audit, Executable: exe,
-			Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-			AuthHTTPClient: e.AS.Client(),
-			Ready:          func(net.Addr, net.Addr) { close(ready) },
-		})
-	}()
-	select {
-	case <-ready:
-	case err := <-e.done:
-		t.Fatalf("nyyrikkid did not start: %v", err)
-	case <-time.After(10 * time.Second):
-		t.Fatal("nyyrikkid did not start")
+	// The port PickAddr found free can be taken by another test before
+	// nyyrikkid binds it; then start again on another one.
+	for attempt := 1; ; attempt++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		e.cancel = cancel
+		e.done = make(chan error, 1)
+		ready := make(chan struct{})
+		go func() {
+			e.done <- server.Run(ctx, c, server.Options{
+				Version: "test", AuditOut: e.Audit, Executable: exe,
+				Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+				AuthHTTPClient: e.AS.Client(),
+				Ready:          func(net.Addr, net.Addr) { close(ready) },
+			})
+		}()
+		var startErr error
+		select {
+		case <-ready:
+		case startErr = <-e.done:
+		case <-time.After(10 * time.Second):
+			cancel()
+			t.Fatal("nyyrikkid did not start")
+		}
+		if startErr == nil {
+			break
+		}
+		cancel()
+		if !errors.Is(startErr, syscall.EADDRINUSE) || attempt == 5 {
+			t.Fatalf("nyyrikkid did not start: %v", startErr)
+		}
+		addr = PickAddr(t)
+		e.MainAddr = addr
+		canonical = "https://" + addr
+		e.AS.Audience = canonical + "/mcp"
+		c.Server.CanonicalURL, c.Server.Listen = canonical, addr
 	}
 	t.Cleanup(e.Stop)
 	// The bot is healthy once it has polled.
