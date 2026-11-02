@@ -309,6 +309,7 @@ already reports, licenses and signs.
   - every stack command runs in its own process group with a bounded
     teardown, so Ctrl-C or SIGTERM leaves nothing behind; a third
     signal during cleanup exits and says to run `down`.
+
   Keycloak's admin and owner passwords are random (§9, revised).
 - **Found on the way, recorded in BUGS.md** (#61): the SSH setup script
   posts the check after enrollment right after reloading sshd, which
