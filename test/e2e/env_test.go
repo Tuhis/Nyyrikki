@@ -12,65 +12,76 @@
 package e2e
 
 import (
-	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
+	"context"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/json"
-	"encoding/pem"
 	"fmt"
-	"io"
-	"math/big"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/Tuhis/Nyyrikki/internal/telegram/telegramtest"
+	"github.com/Tuhis/Nyyrikki/test/stack"
 )
 
+// The stack (test/stack) is shared with the local quickstart
+// (dev/quickstart, docs/09 D6), so the e2e keeps it working. What is the
+// e2e's own stays here: the fake Bot API, the workload, the SSH host.
 const (
-	clusterName  = "nyyrikki-e2e"
-	keycloakName = "nyyrikki-e2e-keycloak"
-	fakebotName  = "nyyrikki-e2e-fakebot"
-	// A docker network of our own, with a configured subnet: docker pins
-	// a container's address (--ip) only on such a network, and the network
-	// kind makes for itself may not have one (it doesn't on GitHub's
-	// runners).
-	networkName   = "nyyrikki-e2e"
+	clusterName = "nyyrikki-e2e"
+	fakebotName = "nyyrikki-e2e-fakebot"
+	// The stack's docker network: its name is the cluster's.
+	networkName   = clusterName
 	networkSubnet = "10.231.0.0/24"
 	networkPrefix = "10.231.0"
 	distroless    = "gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab"
-	keycloakImage = "quay.io/keycloak/keycloak:26.8.1"
-	image         = "nyyrikki:e2e"
 	busyboxImage  = "busybox:1.36"
-	namespace     = "nyyrikki"
+	namespace     = stack.Namespace
 	workNS        = "e2e"
-	nodePort      = 30443
-	realm         = "nyyrikki"
-	ownerUser     = "owner"
+	realm         = stack.Realm
+	ownerUser     = stack.OwnerUser
 	ownerPassword = "owner-e2e-password"
-	ownerK8sUser  = "owner@example.com"
+	ownerK8sUser  = stack.OwnerK8sUser
 	approverID    = 4242
 	introspectSec = "e2e-introspection-secret"
 	mcpClientID   = "nyyrikki-mcp-e2e"
 )
 
+// boxPod is the workload, in workNS: restricted Pod Security's demands
+// (non-root, no privilege escalation, no capabilities, a seccomp
+// profile) and nothing more.
+const boxPod = `apiVersion: v1
+kind: Pod
+metadata: {name: box, namespace: %s}
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: box
+      image: %s
+      imagePullPolicy: Never
+      command: [sleep, "3600"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+`
+
 // env is the running environment.
 type env struct {
+	st         *stack.Stack
 	dir        string
 	kubeconfig string
 	nodeIP     string
-	gatewayIP  string
 	issuer     string
 	canonical  string
 	caFile     string // trusts Keycloak, nyyrikkid and the fake Bot API
@@ -81,18 +92,15 @@ type env struct {
 	root       string // the checkout
 	values     string // the chart values installed
 	ssh        *sshEnv
-	adminToken string
 }
 
 func run(t testing.TB, name string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command(name, args...)
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out.String())
+	out, err := stack.Run(name, args...)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return out.String()
+	return out
 }
 
 func (e *env) kubectl(t testing.TB, args ...string) string {
@@ -100,72 +108,65 @@ func (e *env) kubectl(t testing.TB, args ...string) string {
 	return run(t, "kubectl", append([]string{"--kubeconfig", e.kubeconfig}, args...)...)
 }
 
+// must fails the test on err.
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // setup builds the whole environment. It is torn down when the test ends,
 // unless NYYRIKKI_E2E_KEEP is set.
 func setup(t *testing.T) *env {
 	t.Helper()
-	for _, tool := range []string{"docker", "kind", "helm", "kubectl"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			t.Fatalf("%s not on PATH", tool)
-		}
-	}
-	e := &env{dir: t.TempDir()}
-	e.kubeconfig = filepath.Join(e.dir, "kubeconfig")
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.root = root
+	dir := t.TempDir()
+	cfg := stack.Config{
+		Name: clusterName, Subnet: networkSubnet, Dir: dir, Root: root, ImageTag: "e2e",
+		OwnerPassword: ownerPassword, KeycloakAdminPassword: "admin", IntrospectionSecret: introspectSec,
+		// The human's rights: edit in the workload's namespace, and
+		// nowhere else (checkHumanRights).
+		OwnerNamespaces: []string{workNS},
+		ExtraContainers: []string{fakebotName},
+		Logf:            t.Logf,
+	}
 
-	// The network and the cluster on it.
-	teardown := func() {
-		exec.Command("kind", "delete", "cluster", "--name", clusterName).Run()
-		exec.Command("docker", "rm", "-f", keycloakName, fakebotName).Run()
-		exec.Command("docker", "network", "rm", networkName).Run()
-	}
-	teardown()
-	run(t, "docker", "network", "create", "--subnet", networkSubnet, networkName)
-	create := exec.Command("kind", "create", "cluster", "--name", clusterName, "--kubeconfig", e.kubeconfig, "--wait", "180s")
-	create.Env = append(os.Environ(), "KIND_EXPERIMENTAL_DOCKER_NETWORK="+networkName)
-	if out, err := create.CombinedOutput(); err != nil {
-		t.Fatalf("kind create cluster: %v\n%s", err, out)
-	}
+	// During setup, a Ctrl-C or SIGTERM ends the running stack step, with
+	// its process group, and so fails the setup; the cleanups then remove
+	// the stack (go test waits for them). Without this, the steps' own
+	// process groups would keep running after the test binary died, and
+	// the stack would stay up. After setup, signals act as they did:
+	// stop restores the default, and the stack's context is cleared,
+	// since stop also cancels it.
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	cfg.Context = sigCtx
+	var st *stack.Stack
+	defer func() {
+		stopSignals()
+		if st != nil {
+			st.Context = nil
+		}
+	}()
+
+	// The network, the cluster on it, the CA and Keycloak.
 	if os.Getenv("NYYRIKKI_E2E_KEEP") == "" {
-		t.Cleanup(teardown)
+		t.Cleanup(func() { stack.Teardown(cfg) })
 	}
-	out := run(t, "docker", "inspect", "-f", `{{with index .NetworkSettings.Networks "`+networkName+`"}}{{.IPAddress}} {{.Gateway}}{{end}}`, clusterName+"-control-plane")
-	f := strings.Fields(out)
-	e.nodeIP, e.gatewayIP = f[0], f[1]
-	kcIP, botIP := networkPrefix+".250", networkPrefix+".251"
-	e.issuer = fmt.Sprintf("https://%s:8443/realms/%s", kcIP, realm)
-	e.canonical = fmt.Sprintf("https://%s:%d", e.nodeIP, nodePort)
-	t.Logf("node %s, gateway %s, keycloak %s", e.nodeIP, e.gatewayIP, kcIP)
+	st, err = stack.Create(cfg)
+	must(t, err)
+	e := &env{st: st, dir: dir, root: root, kubeconfig: st.Kubeconfig, nodeIP: st.NodeIP, issuer: st.Issuer,
+		canonical: st.Canonical, caFile: st.CAFile, caPool: st.CAPool}
 
-	// One CA for every TLS endpoint of the test.
-	ca := newCA(t)
-	e.caPool = x509.NewCertPool()
-	e.caPool.AddCert(ca.cert)
-	e.caFile = writeFile(t, e.dir, "ca.crt", ca.certPEM)
-	kcCert, kcKey := ca.issue(t, kcIP)
-	nyCert, nyKey := ca.issue(t, e.nodeIP)
-	tgCert, tgKey := ca.issue(t, botIP)
-
-	// Keycloak, on the kind network so the pod reaches it at the same
-	// address as the test.
-	kcDir := filepath.Join(e.dir, "keycloak")
-	os.MkdirAll(kcDir, 0o755)
-	writeFileMode(t, kcDir, "tls.crt", kcCert, 0o644)
-	writeFileMode(t, kcDir, "tls.key", kcKey, 0o644)
-	run(t, "docker", "run", "-d", "--name", keycloakName, "--network", networkName, "--ip", kcIP,
-		"-v", kcDir+":/certs:ro",
-		"-e", "KC_BOOTSTRAP_ADMIN_USERNAME=admin", "-e", "KC_BOOTSTRAP_ADMIN_PASSWORD=admin",
-		keycloakImage, "start-dev",
-		"--https-port=8443", "--http-enabled=false",
-		"--https-certificate-file=/certs/tls.crt", "--https-certificate-key-file=/certs/tls.key",
-		"--hostname=https://"+kcIP+":8443")
-
-	// The fake Bot API, also on the kind network: a container can reach
-	// another container, but a host firewall may stop it reaching the host.
+	// The fake Bot API, also on the stack's network: a container can
+	// reach another container, but a host firewall may stop it reaching
+	// the host.
+	botIP := networkPrefix + ".251"
+	tgCert, tgKey, err := st.CA.Issue(botIP)
+	must(t, err)
 	botDir := filepath.Join(e.dir, "fakebot")
 	os.MkdirAll(botDir, 0o755)
 	writeFileMode(t, botDir, "tls.crt", tgCert, 0o644)
@@ -182,8 +183,7 @@ func setup(t *testing.T) *env {
 	e.tg = &fakeBot{api: "https://" + botIP + ":8443", control: "http://" + botIP + ":9000"}
 
 	// The image and the CLI, built from this checkout.
-	run(t, "docker", "build", "-q", "-t", image, root)
-	run(t, "kind", "load", "docker-image", image, "--name", clusterName)
+	must(t, st.BuildImage())
 	// busybox is pulled here, for the node's platform, and imported as an
 	// archive: kind load docker-image can't import multi-platform images,
 	// and the node pulling it itself failed on CI runners whose network's
@@ -199,275 +199,64 @@ func setup(t *testing.T) *env {
 		run(t, "docker", "save", "-o", bbTar, busyboxImage)
 	}
 	run(t, "kind", "load", "image-archive", bbTar, "--name", clusterName)
-	e.cli = filepath.Join(e.dir, "nyyrikki")
-	build := exec.Command("go", "build", "-o", e.cli, "./cmd/nyyrikki")
-	build.Dir = root
-	build.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build CLI: %v\n%s", err, out)
-	}
+	must(t, st.BuildCLI())
+	e.cli = st.CLI
 
-	e.configureKeycloak(t)
+	// Stands in for an MCP harness's own registration (Bearer, keyed by sid).
+	must(t, st.ConfigureKeycloak(stack.DeviceClient(mcpClientID, false)))
+	e.ownerID = st.OwnerID
 
-	// The cluster side: the human's own rights, a workload, Nyyrikki's
-	// Secrets, and a NodePort for the canonical URL.
-	e.kubectl(t, "create", "namespace", namespace)
-	e.kubectl(t, "create", "namespace", workNS)
-	e.kubectl(t, "create", "clusterrolebinding", "e2e-owner-edit", "--clusterrole=edit", "--user="+ownerK8sUser)
+	// The cluster side: Nyyrikki's namespace, Secrets and NodePort, the
+	// human's own rights, and a workload.
+	must(t, st.PrepareCluster([]byte(telegramtest.DefaultToken)))
 	// The namespace's default ServiceAccount is made by a controller after
 	// the namespace; a pod created before it is refused. On a busy runner
 	// that gap was long enough to fail the setup (2026-10-30).
 	e.kubectl(t, "-n", workNS, "wait", "--for=create", "serviceaccount/default", "--timeout=120s")
-	e.kubectl(t, "-n", workNS, "run", "box", "--image="+busyboxImage, "--image-pull-policy=Never", "--restart=Never", "--", "sleep", "3600")
-	sdir := filepath.Join(e.dir, "secrets")
-	os.MkdirAll(sdir, 0o700)
-	e.kubectl(t, "-n", namespace, "create", "secret", "tls", "nyyrikki-tls",
-		"--cert="+writeFile(t, sdir, "tls.crt", nyCert), "--key="+writeFile(t, sdir, "tls.key", nyKey))
-	e.kubectl(t, "-n", namespace, "create", "secret", "generic", "nyyrikki-telegram",
-		"--from-file=bot-token="+writeFile(t, sdir, "bot-token", []byte(telegramtest.DefaultToken)))
-	e.kubectl(t, "-n", namespace, "create", "secret", "generic", "nyyrikki-keycloak",
-		"--from-file=client-secret="+writeFile(t, sdir, "client-secret", []byte(introspectSec)))
-	e.kubectl(t, "-n", namespace, "create", "configmap", "e2e-ca", "--from-file=ca.crt="+e.caFile)
-	svc := fmt.Sprintf(`apiVersion: v1
-kind: Service
-metadata: {name: nyyrikki-e2e-nodeport, namespace: %s}
-spec:
-  type: NodePort
-  selector: {app.kubernetes.io/name: nyyrikki, app.kubernetes.io/instance: nyyrikki}
-  ports: [{port: 8443, targetPort: https, nodePort: %d}]
-`, namespace, nodePort)
-	e.kubectl(t, "apply", "-f", writeFile(t, e.dir, "nodeport.yaml", []byte(svc)))
+	// The workload, fit for the restricted Pod Security its namespace
+	// enforces: busybox runs as nobody.
+	box := exec.Command("kubectl", "--kubeconfig", e.kubeconfig, "apply", "-f", "-")
+	box.Stdin = strings.NewReader(fmt.Sprintf(boxPod, workNS, busyboxImage))
+	if out, err := box.CombinedOutput(); err != nil {
+		t.Fatalf("the workload pod: %v\n%s", err, out)
+	}
 
 	t.Cleanup(func() {
 		if t.Failed() {
-			for _, args := range [][]string{
-				{"-n", namespace, "get", "pods", "-o", "wide"},
-				{"-n", namespace, "describe", "pods"},
-				{"-n", namespace, "logs", "deploy/nyyrikki-nyyrikki", "--tail=200"},
-				// The workload pod, and the node's state: box timing out
-				// at Ready showed nothing of why (#50).
-				{"-n", workNS, "describe", "pods"},
-				{"get", "events", "-A", "--sort-by=.lastTimestamp"},
-				{"describe", "nodes"},
-			} {
-				out, _ := exec.Command("kubectl", append([]string{"--kubeconfig", e.kubeconfig}, args...)...).CombinedOutput()
-				t.Logf("kubectl %v:\n%s", args, out)
-			}
+			// The workload pod, and the node's state: box timing out at
+			// Ready showed nothing of why (#50).
+			t.Log(st.Diagnostics(
+				[]string{"-n", workNS, "describe", "pods"},
+				[]string{"get", "events", "-A", "--sort-by=.lastTimestamp"},
+				[]string{"describe", "nodes"},
+			))
 		}
 	})
 	e.ssh = e.setupSSH(t)
-	values := fmt.Sprintf(`image: {repository: nyyrikki, tag: e2e, pullPolicy: Never}
-canonicalURL: %s
-auth: {issuer: %s}
-approval: {timeout: 2m}
-human:
-  subject: %s
-  kubernetes: {user: %s, groups: []}
-  telegramUserID: %d
-targets:
-  - name: this-cluster
-    description: the kind cluster
-    inCluster: true
-%s
-telegram: {apiURL: %s}
-trustedCA: {configMap: e2e-ca}
-`, e.canonical, e.issuer, e.ownerID, ownerK8sUser, approverID, strings.TrimSuffix(e.ssh.values(e.nodeIP, nil), "\n"), e.tg.api)
-	e.values = values
-	run(t, "helm", "--kubeconfig", e.kubeconfig, "install", "nyyrikki", filepath.Join(root, "deploy/chart/nyyrikki"),
-		"-n", namespace, "-f", writeFile(t, e.dir, "values.yaml", []byte(values)), "--wait", "--timeout", "180s")
+	e.values = st.Values(stack.Values{
+		ApproverID: approverID, TelegramAPI: e.tg.api, ApprovalTimeout: "2m",
+		Extra: e.ssh.values(e.nodeIP, nil),
+	})
+	must(t, st.Install(e.values, true))
 	e.kubectl(t, "-n", workNS, "wait", "--for=condition=Ready", "pod/box", "--timeout=120s")
 	e.waitCanonical(t)
 	return e
 }
 
-// waitCanonical waits until the canonical URL answers: the pod is ready
-// before the NodePort is.
+// waitCanonical waits until the canonical URL answers.
 func (e *env) waitCanonical(t *testing.T) {
 	t.Helper()
-	deadline := time.Now().Add(90 * time.Second)
-	for {
-		resp, err := e.httpClient().Get(e.canonical + "/.well-known/oauth-protected-resource/mcp")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
-				break
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("canonical URL not reachable: %v", err)
-		}
-		time.Sleep(time.Second)
-	}
+	must(t, e.st.WaitCanonical(90*time.Second))
 }
 
 // httpClient trusts the test CA and follows no redirect unless told to.
-func (e *env) httpClient() *http.Client {
-	return &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{RootCAs: e.caPool}},
-	}
-}
-
-func (e *env) kcBase() string { return strings.TrimSuffix(e.issuer, "/realms/"+realm) }
-
-// configureKeycloak waits for Keycloak and sets up the realm as
-// docs/setup/keycloak.md describes, through the admin REST API.
-func (e *env) configureKeycloak(t *testing.T) {
-	t.Helper()
-	hc := e.httpClient()
-	deadline := time.Now().Add(4 * time.Minute)
-	for {
-		resp, err := hc.Get(e.kcBase() + "/realms/master/.well-known/openid-configuration")
-		if err == nil && resp.StatusCode == 200 {
-			resp.Body.Close()
-			break
-		}
-		if resp != nil {
-			resp.Body.Close()
-		}
-		if time.Now().After(deadline) {
-			out, _ := exec.Command("docker", "logs", "--tail", "50", keycloakName).CombinedOutput()
-			t.Fatalf("keycloak did not start: %v\n%s", err, out)
-		}
-		time.Sleep(2 * time.Second)
-	}
-	e.adminToken = e.adminLogin(t)
-	e.admin(t, "POST", "/admin/realms", map[string]any{
-		"realm": realm, "enabled": true, "accessTokenLifespan": 300,
-	})
-	r := "/admin/realms/" + realm
-	e.admin(t, "POST", r+"/client-scopes", map[string]any{
-		"name": "nyyrikki", "protocol": "openid-connect",
-		"attributes": map[string]string{"include.in.token.scope": "true", "display.on.consent.screen": "false"},
-		"protocolMappers": []any{map[string]any{
-			"name": "nyyrikki audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
-			"config": map[string]string{
-				"included.custom.audience": e.canonical + "/mcp",
-				"access.token.claim":       "true", "id.token.claim": "false", "introspection.token.claim": "true",
-			},
-		}},
-	})
-	deviceClient := func(id string, dpop bool) map[string]any {
-		return map[string]any{
-			"clientId": id, "publicClient": true, "standardFlowEnabled": false, "directAccessGrantsEnabled": false,
-			"implicitFlowEnabled": false, "consentRequired": false,
-			"attributes": map[string]string{
-				"oauth2.device.authorization.grant.enabled": "true",
-				"dpop.bound.access.tokens":                  fmt.Sprint(dpop),
-			},
-			// No "roles": its audience-resolve mapper adds "account" to aud,
-			// and Nyyrikki accepts only its own audience (docs/01 D9).
-			"defaultClientScopes":  []string{"basic", "profile", "email", "web-origins", "acr"},
-			"optionalClientScopes": []string{"nyyrikki"},
-		}
-	}
-	cli := deviceClient("nyyrikki-cli", true)
-	// The CLI may hold an offline session (docs/01 OD18).
-	cli["optionalClientScopes"] = []string{"nyyrikki", "offline_access"}
-	e.admin(t, "POST", r+"/clients", cli)
-	// Stands in for an MCP harness's own registration (Bearer, keyed by sid).
-	e.admin(t, "POST", r+"/clients", deviceClient(mcpClientID, false))
-	// Named after Nyyrikki's audience: Keycloak introspects a token only
-	// for a client in its aud (docs/setup/keycloak.md).
-	e.admin(t, "POST", r+"/clients", map[string]any{
-		"clientId": e.canonical + "/mcp", "publicClient": false, "secret": introspectSec,
-		"standardFlowEnabled": false, "directAccessGrantsEnabled": false, "serviceAccountsEnabled": false,
-	})
-	e.admin(t, "POST", r+"/users", map[string]any{
-		"username": ownerUser, "enabled": true, "email": "owner@example.com", "emailVerified": true,
-		"firstName": "Owner", "lastName": "E2E",
-		"credentials": []any{map[string]any{"type": "password", "value": ownerPassword, "temporary": false}},
-	})
-	var users []struct {
-		ID string `json:"id"`
-	}
-	json.Unmarshal(e.admin(t, "GET", r+"/users?username="+ownerUser+"&exact=true", nil), &users)
-	if len(users) != 1 {
-		t.Fatalf("owner user not found")
-	}
-	e.ownerID = users[0].ID
-	e.configureDCR(t)
-}
-
-func (e *env) adminLogin(t *testing.T) string {
-	t.Helper()
-	form := url.Values{"grant_type": {"password"}, "client_id": {"admin-cli"}, "username": {"admin"}, "password": {"admin"}}
-	resp, err := e.httpClient().PostForm(e.kcBase()+"/realms/master/protocol/openid-connect/token", form)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var tr struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil || tr.AccessToken == "" {
-		t.Fatalf("admin login: %v", err)
-	}
-	return tr.AccessToken
-}
+func (e *env) httpClient() *http.Client { return e.st.HTTPClient() }
 
 func (e *env) admin(t *testing.T, method, path string, body any) []byte {
 	t.Helper()
-	var rd io.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
-		rd = bytes.NewReader(b)
-	}
-	req, _ := http.NewRequest(method, e.kcBase()+path, rd)
-	// Admin tokens from the master realm live a minute: sign in per call.
-	req.Header.Set("Authorization", "Bearer "+e.adminLogin(t))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := e.httpClient().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	out, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		t.Fatalf("keycloak %s %s: %s %s", method, path, resp.Status, out)
-	}
+	out, err := e.st.Admin(method, path, body)
+	must(t, err)
 	return out
-}
-
-type testCA struct {
-	cert    *x509.Certificate
-	certPEM []byte
-	key     *ecdsa.PrivateKey
-}
-
-func newCA(t *testing.T) *testCA {
-	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "nyyrikki e2e CA"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, _ := x509.ParseCertificate(der)
-	return &testCA{cert: c, key: k, certPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})}
-}
-
-var serial int64 = 1
-
-func (ca *testCA) issue(t *testing.T, ip string) (certPEM, keyPEM []byte) {
-	serial++
-	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: ip},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
-		IPAddresses: []net.IP{net.ParseIP(ip)},
-		KeyUsage:    x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &k.PublicKey, ca.key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kd, _ := x509.MarshalPKCS8PrivateKey(k)
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
-		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kd})
 }
 
 func writeFile(t testing.TB, dir, name string, b []byte) string {
@@ -476,9 +265,7 @@ func writeFile(t testing.TB, dir, name string, b []byte) string {
 
 func writeFileMode(t testing.TB, dir, name string, b []byte, mode os.FileMode) string {
 	t.Helper()
-	p := filepath.Join(dir, name)
-	if err := os.WriteFile(p, b, mode); err != nil {
-		t.Fatal(err)
-	}
+	p, err := stack.WriteFile(dir, name, b, mode)
+	must(t, err)
 	return p
 }
