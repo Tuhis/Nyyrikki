@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -116,5 +119,36 @@ func TestWaitReadyWithoutContext(t *testing.T) {
 	}()
 	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
 		t.Fatalf("waitReady without a context: %v", err)
+	}
+}
+
+// The first signal only ends the running step (the context's job); during
+// the cleanup, the next warns, and the third stops the program, saying
+// how to remove the rest.
+func TestWatchSignals(t *testing.T) {
+	sigs := make(chan os.Signal)
+	var cleaning atomic.Bool
+	var out strings.Builder
+	exited := make(chan int, 1)
+	go watchSignals(sigs, &cleaning, &out, func(code int) { exited <- code })
+	sigs <- syscall.SIGINT // stops the step
+	cleaning.Store(true)
+	sigs <- syscall.SIGINT // warns
+	select {
+	case <-exited:
+		t.Fatal("stopped on the second signal")
+	case <-time.After(100 * time.Millisecond):
+	}
+	sigs <- syscall.SIGTERM // stops
+	select {
+	case code := <-exited:
+		if code != 130 {
+			t.Errorf("exit code %d", code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("didn't stop on the third signal")
+	}
+	if s := out.String(); !strings.Contains(s, "one more") || !strings.Contains(s, "run dev/quickstart.sh down") {
+		t.Errorf("said %q", s)
 	}
 }

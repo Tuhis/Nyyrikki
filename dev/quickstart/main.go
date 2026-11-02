@@ -43,6 +43,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode"
@@ -173,6 +174,7 @@ func up(args []string) (err error) {
 	// after the cleanup: stopping cancels the context, which must not
 	// make a failure look like an interrupt.
 	stopSignals := func() {}
+	var cleaning atomic.Bool
 	interrupted := func() bool { return cfg.Context != nil && cfg.Context.Err() != nil }
 	defer func() {
 		defer stopSignals()
@@ -189,6 +191,7 @@ func up(args []string) (err error) {
 			return
 		}
 		logf("removing what was made")
+		cleaning.Store(true)
 		cleanup(cfg)
 	}()
 	bot := ""
@@ -210,7 +213,10 @@ func up(args []string) (err error) {
 	// one is caught too, and the cleanup's commands run in a process group
 	// of their own, out of the terminal's reach.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	stopSignals = stop
+	sigs := make(chan os.Signal, 3)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	go watchSignals(sigs, &cleaning, os.Stderr, os.Exit)
+	stopSignals = func() { signal.Stop(sigs); stop() }
 	cfg.Context = ctx
 
 	if err := os.MkdirAll(state, 0o700); err != nil {
@@ -685,6 +691,27 @@ func clusterUp() (bool, error) {
 		return false, err
 	}
 	return strings.Contains("\n"+out, "\n"+name+"\n"), nil
+}
+
+// watchSignals counts the signals up has caught. The first ends the
+// running step, through the context; the cleanup then runs, and is
+// bounded (stack.Teardown). During it a further signal warns, and the
+// third in all stops the program, leaving the rest to
+// dev/quickstart.sh down: the way out of a cleanup that is stuck.
+func watchSignals(sigs <-chan os.Signal, cleaning *atomic.Bool, out io.Writer, exit func(int)) {
+	n := 0
+	for range sigs {
+		n++
+		switch {
+		case n >= 3:
+			fmt.Fprintln(out, "quickstart: stopped before the cleanup finished: run dev/quickstart.sh down to remove what is left")
+			exit(130)
+			return
+		case cleaning.Load():
+			fmt.Fprintf(out, "quickstart: still removing what was made; %s stops it, leaving the rest to dev/quickstart.sh down\n",
+				map[bool]string{true: "one more Ctrl-C", false: "two more Ctrl-Cs"}[n == 2])
+		}
+	}
 }
 
 // cleanup removes the stack (the agent pod with the cluster), its images
