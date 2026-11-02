@@ -291,3 +291,19 @@ the doc.
   accepts an empty list.** Test NOTES by rendering a copy as an ordinary
   template, and fail on `(not .Values.x)` for lists.
   ([docs/07](07-ssh-target.md) §10, `deploy/chart/chart_test.go`)
+- **Files copied from the Go module cache are read-only (0444).** A
+  second `cp` over a copy fails for a non-root user; root, as in a
+  Docker build, never notices. `chmod -R u+w` what you copy out.
+  ([docs/09](09-public-release.md) §10, `scripts/save-licenses.sh`)
+- **`cmd | grep -q` under `pipefail` can read a match as no match.**
+  `grep -q` exits at the first match, the writer dies of SIGPIPE, and
+  the pipeline fails. Read the output whole, then grep it.
+  ([docs/09](09-public-release.md) §10, `scripts/save-licenses.sh`)
+- **`helm push` prints `Digest:` on stderr in Helm 3 and on stdout in
+  Helm 4.** Capture both (`2>&1`) and require exactly one well-formed
+  digest. ([docs/09](09-public-release.md) §10, `release.yml`)
+- **`go test -coverpkg` can fail with `go tool covdata: … text file
+  busy`** on a cold build cache: the tool is built while parallel test
+  processes exec it (golang/go#22315). Build it first with
+  `go tool -n covdata`. ([docs/09](09-public-release.md) §10,
+  `scripts/gates.sh`)

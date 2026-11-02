@@ -111,6 +111,9 @@ Answer by: 12:05:00 UTC
 
 ## Getting started
 
+- **Try it locally** (Linux): [docs/setup/quickstart.md](docs/setup/quickstart.md)
+  builds a kind cluster, Keycloak and Nyyrikki from the checkout with a
+  throwaway Telegram bot of your own, and puts the agent in a pod.
 - **Install**: [docs/setup/](docs/setup/README.md) walks through
   Keycloak, the Telegram bot, the Helm chart and signing agents in.
 - **Releases**: the image is `ghcr.io/tuhis/nyyrikki`, the chart
