@@ -33,6 +33,11 @@ shared service account. Nyyrikki never hands a credential to the agent.
 your rights, so it can read whatever you can read; see
 [SECURITY.md](SECURITY.md).)
 
+![An agent's terminal next to the approver's phone: a pod delete approved, a prompt-injected namespace delete denied, a command run over SSH, and an elevation on three hosts ended early](docs/assets/demo.gif)
+
+*A re-enactment with made-up names. The approval messages and the CLI
+output follow Nyyrikki's real formats.*
+
 ## How it works
 
 ```mermaid
