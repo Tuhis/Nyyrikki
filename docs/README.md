@@ -27,6 +27,7 @@ Not a design doc, but in this directory:
 | [07](07-ssh-target.md) | R10 — SSH target: commands on Linux hosts, as the human |
 | [08](08-ssh-onboarding.md) | R12 — SSH onboarding and upkeep, made simple |
 | [09](09-public-release.md) | R13 — Public release readiness |
+| [10](10-sops-target.md) | R14 — SOPS target: files encrypted with Google Cloud KMS |
 
 The replaced Warden plan (2026-10-25) also had docs numbered 01–09.
 Nothing was built from them, so they were removed and numbering starts

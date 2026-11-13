@@ -45,6 +45,7 @@ Telegram, MCP clients, Go libraries) are kept in `docs/measured.md` and
 | R11 | [SSH CA hardening](#r11--ssh-ca-hardening) | 💡 proposed 2026-10-29, after R10; the pull of trust material is taken over by R12 (signed in the pod, docs/08 OD3), the external signer stays open |
 | R12 | [SSH onboarding and upkeep](#r12--ssh-onboarding-and-upkeep) | 🔧 [docs/08](docs/08-ssh-onboarding.md) approved 2026-10-31 (#40); SE1–SE6 implemented: SE1 2026-10-31 (#42: CA keys through `internal/sshca`, `nyyrikkid ssh-ca`, the CA Secret mounted whole, the install hook and rotation CronJobs), SE2 2026-10-31 (#43: defaults, groups, global host CAs, `nyyrikki ssh`), SE3 2026-11-01 (#45: the signed trust bundle), SE4 2026-11-01 (#46: host verification by `host-ca`, the host check before approval), SE5 2026-11-01 (#47: enrollment tokens and endpoints, the host certificate, the check after enrollment), SE6 2026-11-01 (the setup script's trust pull, enrollment and `--status`, Alpine, the setup docs' three paths, NOTES.txt, e2e of enrollment and a rotation reaching a host by its pull); open: G14 (a real host enrolled and rotated, manual by the owner) |
 | R13 | [Public release readiness](#r13--public-release-readiness) | 🔧 implemented 2026-11-02, [docs/09](docs/09-public-release.md) (OD1 2026-11-01): PB1 (#51), PB2 (#52), PB3 (#54), PB4 (#53, #57), PB5 (#56) and PB6 (#51) merged; open: PB7, the repository settings after the visibility flip (owner), and the manual checks G4 (verify the next release's signatures) and G6 (the quickstart with a real bot) |
+| R14 | [SOPS target](#r14--sops-target) | 🔧 designed 2026-11-13: [docs/10](docs/10-sops-target.md), owner decisions OD1–OD7 taken 2026-11-12 and 2026-11-13 (Nyyrikki runs the operation with the SOPS library and its own key service; one Google service account with a request reason; `decrypt`, `set`, `unset`, `encrypt`; the message says what is asked and which file); open: all chunks SO1–SO5, nothing implemented. Not in the first version |
 
 ## Milestones to the first version
 
@@ -79,7 +80,7 @@ item, the doc's chunks say which part.
 | M4 | [Running against a real target](#m4--running-against-a-real-target) | R6 (minimal) | 🔧 deployed 2026-10-29 on the owner's cluster (Flux, chart 0.2.0, its own Keycloak realm, behind an internal gateway that re-encrypts), released (0.1.0, 0.2.0), M2's and M3's manual checks run there; open: real tasks by an agent on its own machine holding nothing but its Nyyrikki token. The checks ran from a machine that also holds an admin kubeconfig |
 
 **Not in the first version**, so no milestone covers it: a second target
-type, such as SSH (R10); temporary credentials issued on targets, unless
+type, such as SSH (R10) or SOPS (R14); temporary credentials issued on targets, unless
 the first target can't impersonate; the operator surface (R7); AI risk
 assessment (R8); response redaction (R9).
 
@@ -425,3 +426,24 @@ in the image and the release, key-less signed releases, a coverage
 gate, a local quickstart on Linux with a real Telegram bot, Renovate's
 `go mod tidy`, and the repository settings the owner applies after the
 flip. Nothing on the decision path changes.
+
+## R14 — SOPS target
+
+**Proposed 2026-11-12 (owner request)** ([docs/10](docs/10-sops-target.md)).
+
+**Why**: secrets kept in git are encrypted with SOPS, with the key in
+Google Cloud KMS. An agent can't read one that isn't deployed, change a
+value or add a file without a Google credential that can use the key,
+which works forever, on every file, with nothing approved and nothing
+recorded.
+
+**Scope**: SOPS operations on a file the agent sends, through the same
+`run` and `elevate` operations as the other targets: decrypting,
+changing one value, and encrypting a new file. Nyyrikki unwraps the
+file's data key with its own Google credential and does the work in the
+pod; the data key and the credential never reach the agent. The
+approver sees what is asked: the operation, the path it names, which
+file and the KMS key. Cloud KMS can't act as a human, so every call
+carries a request reason that names the run and the human. Not in
+scope: other SOPS key types, Google Cloud in general, and unmodified
+`sops` on the agent's machine.
