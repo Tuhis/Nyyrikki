@@ -1,3 +1,15 @@
-# Modules the licence gate can't classify, reviewed by hand (docs/01 D14).
+# Modules the licence gate can't classify, or whose licence is admitted by
+# name only, reviewed by hand (docs/01 D14, docs/10 OD6).
 # module@version  sha256-of-LICENSE  reason
 github.com/modelcontextprotocol/go-sdk@v1.8.0 af679003d933f045393a6a029f43da113f9ae364eac651d9ae268392985580f5 MIT and Apache-2.0 for code mid-transition, CC-BY-4.0 for docs only (docs/01 M3); reviewed 2026-10-26
+github.com/getsops/sops/v3@v3.13.3 1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5 MPL-2.0, admitted by name (docs/10 OD6): used unmodified, licence text and source shipped in the image; reviewed 2026-11-13
+github.com/hashicorp/errwrap@v1.1.0 bef1747eda88b9ed46e94830b0d978c3499dad5dfe38d364971760881901dadd MPL-2.0, admitted by name (docs/10 OD6): used unmodified, licence text and source shipped in the image; reviewed 2026-11-13
+github.com/hashicorp/go-cleanhttp@v0.5.2 60222c28c1a7f6a92c7df98e5c5f4459e624e6e285e0b9b94467af5f6ab3343d MPL-2.0, admitted by name (docs/10 OD6): used unmodified, licence text and source shipped in the image; reviewed 2026-11-13
+github.com/hashicorp/go-multierror@v1.1.1 a830016911a348a54e89bd54f2f8b0d8fffdeac20aecfba8e36ebbf38a03f5ff MPL-2.0, admitted by name (docs/10 OD6): used unmodified, licence text and source shipped in the image; reviewed 2026-11-13
+github.com/hashicorp/go-retryablehttp@v0.7.8 d6b1a865f1c8c697d343bd4e0ce61025f91898486a1f00d727f32e8644af77d3 MPL-2.0, admitted by name (docs/10 OD6): used unmodified, licence text and source shipped in the image; reviewed 2026-11-13
+github.com/hashicorp/go-rootcerts@v1.0.2 60222c28c1a7f6a92c7df98e5c5f4459e624e6e285e0b9b94467af5f6ab3343d MPL-2.0, admitted by name (docs/10 OD6): used unmodified, licence text and source shipped in the image; reviewed 2026-11-13
+github.com/hashicorp/go-secure-stdlib/parseutil@v0.2.0 71221abdf10fd93ad9513b4636fa29a7d8465569e641b96c764063f0cd022be3 MPL-2.0, admitted by name (docs/10 OD6): used unmodified, licence text and source shipped in the image; reviewed 2026-11-13
+github.com/hashicorp/go-secure-stdlib/strutil@v0.1.2 60222c28c1a7f6a92c7df98e5c5f4459e624e6e285e0b9b94467af5f6ab3343d MPL-2.0, admitted by name (docs/10 OD6): used unmodified, licence text and source shipped in the image; reviewed 2026-11-13
+github.com/hashicorp/go-sockaddr@v1.0.7 9b97ec15fc0ca7cfa85d944361c7e0c989592462edaacc5a1d4fc8f6210cf361 MPL-2.0, admitted by name (docs/10 OD6): used unmodified, licence text and source shipped in the image; reviewed 2026-11-13
+github.com/hashicorp/hcl@v1.0.1-vault-7 bef1747eda88b9ed46e94830b0d978c3499dad5dfe38d364971760881901dadd MPL-2.0, admitted by name (docs/10 OD6): used unmodified, licence text and source shipped in the image; reviewed 2026-11-13
+github.com/hashicorp/vault/api@v1.23.0 710ea76b4cf769ad3436459e05cf18fbe652e3141760e28c215118d1d57688b6 MPL-2.0, admitted by name (docs/10 OD6): used unmodified, licence text and source shipped in the image; reviewed 2026-11-13

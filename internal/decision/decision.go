@@ -363,11 +363,15 @@ func (p *Point) DecideRun(ctx context.Context, r RunRequest) (*Grant, error) {
 		}
 		spec.SessionKillShown = facts.SessionKill
 	}
+	sopsReq, err := sopsRequest(t, r.Request)
+	if err != nil {
+		return nil, p.deny(ctx, rec, err)
+	}
 	prompt := approval.RunPrompt{
 		ID: id, ApproverID: h.TelegramUserID, Target: r.Target,
 		RunAs: spec.RunAs,
 		Agent: approval.Agent{ClientName: pr.ClientID, KeyShort: p.audit.AgentHash(pr.AgentKey), SignedInAt: pr.SignedInAt},
-		Type:  t.Type(), SSH: sshHost(t, runAs.User, facts),
+		Type:  t.Type(), SSH: sshHost(t, runAs.User, facts), SOPS: sopsReq,
 		Argv: r.Request.DisplayCommand(), Stdin: r.Request.DisplayStdin(),
 		Interactive: r.Request.Interactive(),
 		Reason:      r.Reason, ExpiresAt: expires,
@@ -416,7 +420,32 @@ func RunAs(h *config.Human, t *config.Target) approval.Identity {
 	if t != nil && t.SSH != nil {
 		return approval.Identity{User: config.SSHAccount(h.ID)}
 	}
+	if t != nil && t.SOPS != nil {
+		// Cloud KMS can't act as a human (docs/10 OD3).
+		return approval.Identity{User: config.SOPSRunAs(h.ID)}
+	}
 	return approval.Identity{User: h.Kubernetes.User, Groups: h.Kubernetes.Groups}
+}
+
+// sopsPrompter is a request that says what the approver is shown of it
+// besides its command (docs/10 D8); only SOPS requests do.
+type sopsPrompter interface {
+	Prompt() *approval.SOPSRequest
+}
+
+// sopsRequest is what the approver is shown of a request on a SOPS
+// target. A SOPS target whose request can't say it is a bug in the
+// caller, and is refused.
+func sopsRequest(t *config.Target, req target.Request) (*approval.SOPSRequest, error) {
+	if t.SOPS == nil {
+		return nil, nil
+	}
+	if sp, ok := req.(sopsPrompter); ok {
+		if p := sp.Prompt(); p != nil && p.Asks != "" {
+			return p, nil
+		}
+	}
+	return nil, codes.WithDetail(codes.Internal, "sops_prompt_missing", "the request can't be shown to the approver")
 }
 
 // sshHost is what the approver is shown about an SSH target (docs/07

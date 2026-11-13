@@ -11,6 +11,9 @@ In order:
 4. [Agents](agents.md): signing agents in through the CLI or an MCP harness.
 5. [SSH hosts](ssh-hosts.md), if any target is an SSH host: the user CA,
    and setting up each host.
+6. [SOPS targets](sops.md), if agents work with SOPS files encrypted
+   with Google Cloud KMS: the service account, its credential and the
+   keys.
 
 Before going live, check the deployment requirements in
 [SECURITY.md](../../SECURITY.md#deployment-requirements). Nyyrikki's guarantees

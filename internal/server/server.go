@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"google.golang.org/api/option"
 
 	sshhost "github.com/Tuhis/Nyyrikki/deploy/ssh-host"
 	"github.com/Tuhis/Nyyrikki/internal/audit"
@@ -30,6 +31,7 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/kubectl"
 	"github.com/Tuhis/Nyyrikki/internal/mcpserver"
 	"github.com/Tuhis/Nyyrikki/internal/runner"
+	"github.com/Tuhis/Nyyrikki/internal/sopstarget"
 	"github.com/Tuhis/Nyyrikki/internal/sshca"
 	"github.com/Tuhis/Nyyrikki/internal/sshtarget"
 	"github.com/Tuhis/Nyyrikki/internal/store"
@@ -56,6 +58,34 @@ type Options struct {
 	KubeServiceAccountDir string
 	// SSHDial replaces the SSH runner's TCP dialler (tests).
 	SSHDial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// SOPSClientOptions are added to the SOPS runner's Cloud KMS clients
+	// (tests: a fake KMS's endpoint).
+	SOPSClientOptions []option.ClientOption
+}
+
+// newSOPSRunner builds the SOPS runner from the SOPS targets (docs/10
+// §5.4); nil when there are none.
+func newSOPSRunner(cfg *config.Config, aw audit.Appender, log *slog.Logger, o Options) (*sopstarget.Runner, error) {
+	targets := map[string]sopstarget.Target{}
+	for _, t := range cfg.Targets {
+		if t.SOPS != nil {
+			targets[t.Name] = sopstarget.Target{Name: t.Name, CredentialsFile: t.SOPS.GCPKMS.CredentialsFile, Keys: t.SOPS.GCPKMS.Keys}
+		}
+	}
+	if len(targets) == 0 {
+		return nil, nil
+	}
+	return sopstarget.NewRunner(sopstarget.RunnerConfig{
+		Targets: targets,
+		Limits: sopstarget.Limits{
+			DefaultTimeout: cfg.Run.DefaultTimeout.D(),
+			MaxTimeout:     cfg.Run.MaxTimeout.D(),
+			MaxOutput:      int64(cfg.Run.MaxOutput),
+		},
+		Audit:         aw,
+		Logger:        log,
+		ClientOptions: o.SOPSClientOptions,
+	})
 }
 
 // newSSHRunner builds the SSH runner from the ssh block and the SSH
@@ -212,7 +242,7 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 
 	targets := map[string]kubectl.Target{}
 	for _, t := range cfg.Targets {
-		if t.SSH != nil {
+		if t.SSH != nil || t.SOPS != nil {
 			continue
 		}
 		targets[t.Name] = kubectl.Target{
@@ -247,7 +277,20 @@ func Run(ctx context.Context, cfg *config.Config, o Options) error {
 			log.Error("the SSH CA keys are unavailable; SSH runs and /hosts/ are refused until fixed", "detail", codes.DetailOf(err), "err", err)
 		}
 	}
-	runners := runner.Runners{Kubernetes: kubeRunner, SSH: sshRunner}
+	sopsRunner, err := newSOPSRunner(cfg, aw, log, o)
+	if err != nil {
+		return err
+	}
+	if sopsRunner != nil {
+		// docs/10 D12: read once at start, without any call to Google,
+		// only to say early what is wrong. Runs read the file again on
+		// each use, and fail closed then. The reason is the loader's own
+		// text, with nothing from the file.
+		for name, err := range sopsRunner.CheckCredentials() {
+			log.Error("a sops target's Google credential is unavailable; its runs are refused until fixed", "target", name, "reason", err.Error())
+		}
+	}
+	runners := runner.Runners{Kubernetes: kubeRunner, SSH: sshRunner, SOPS: sopsRunner}
 
 	mcpSrv := mcpserver.New(mcpserver.Deps{Config: cfg, Point: point, Runner: runners, Audit: aw, Logger: log, Version: o.Version})
 

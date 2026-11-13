@@ -116,6 +116,13 @@ var PickAddr = func(t testing.TB) string {
 // Start runs nyyrikkid until the test ends.
 func Start(t *testing.T, opts ...Option) *Env {
 	t.Helper()
+	return StartWithOptions(t, nil, opts...)
+}
+
+// StartWithOptions is Start with mod changing the server's options, for
+// what isn't in the config: the test seams of server.Options.
+func StartWithOptions(t *testing.T, mod func(*server.Options), opts ...Option) *Env {
+	t.Helper()
 	dir := t.TempDir()
 	e := &Env{AS: authntest.New(t), Telegram: telegramtest.New(t), API: NewFakeAPIServer(t), Audit: &SyncBuffer{}, Dir: dir}
 
@@ -175,14 +182,16 @@ func Start(t *testing.T, opts ...Option) *Env {
 		e.cancel = cancel
 		e.done = make(chan error, 1)
 		ready := make(chan struct{})
-		go func() {
-			e.done <- server.Run(ctx, c, server.Options{
-				Version: "test", AuditOut: e.Audit, Executable: exe,
-				Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-				AuthHTTPClient: e.AS.Client(),
-				Ready:          func(net.Addr, net.Addr) { close(ready) },
-			})
-		}()
+		so := server.Options{
+			Version: "test", AuditOut: e.Audit, Executable: exe,
+			Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+			AuthHTTPClient: e.AS.Client(),
+			Ready:          func(net.Addr, net.Addr) { close(ready) },
+		}
+		if mod != nil {
+			mod(&so)
+		}
+		go func() { e.done <- server.Run(ctx, c, so) }()
 		var startErr error
 		select {
 		case <-ready:

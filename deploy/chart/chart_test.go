@@ -775,3 +775,115 @@ func TestChartEnrollTokenConfig(t *testing.T) {
 		t.Fatalf("the server runs with %q; enroll-token reads %q by default", got, want)
 	}
 }
+
+var sopsSet = []string{
+	"--set", "targets[2].name=sops-prod", "--set", "targets[2].description=Flux secrets",
+	"--set", "targets[2].sops.gcpKMS.secretName=my-gcp",
+	"--set", "targets[2].sops.gcpKMS.keys[0]=projects/acme/locations/europe-north1/keyRings/flux/cryptoKeys/prod",
+	"--set", "targets[2].sops.gcpKMS.keys[1]=projects/acme/locations/global/keyRings/flux/cryptoKeys/staging",
+}
+
+// volumeAndMount returns the pod's volume named name and its mount path
+// in the container, or nil when there is none.
+func volumeAndMount(t *testing.T, objs []object, name string) (map[string]any, string) {
+	t.Helper()
+	spec := podSpec(t, objs)
+	var vol map[string]any
+	for _, v := range spec["volumes"].([]any) {
+		if v.(map[string]any)["name"] == name {
+			vol = v.(map[string]any)
+		}
+	}
+	path := ""
+	for _, m := range containerOf(t, spec)["volumeMounts"].([]any) {
+		mm := m.(map[string]any)
+		if mm["name"] == name {
+			if mm["readOnly"] != true {
+				t.Fatalf("mount %s is writable", name)
+			}
+			path = mm["mountPath"].(string)
+		}
+	}
+	if (vol == nil) != (path == "") {
+		t.Fatalf("volume %s: %v, mounted at %q", name, vol, path)
+	}
+	return vol, path
+}
+
+// TestChartSOPSTarget covers docs/10 §5.4 (G7's chart part): every knob
+// of a SOPS target reaches the config nyyrikkid reads, its credential is
+// a Secret mounted as a file at the path the config names, and the
+// federation token is projected only when an audience is set.
+func TestChartSOPSTarget(t *testing.T) {
+	const audience = "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/c"
+	objs := render(t, append(append([]string(nil), sopsSet...), "--set", "gcp.workloadIdentityAudience="+audience)...)
+	src := kind(objs, "ConfigMap")[0]["data"].(map[string]any)["config.yaml"].(string)
+	c, err := config.Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("config refused: %v\n%s", err, src)
+	}
+	s, ok := c.TargetByName("sops-prod")
+	if !ok || s.SOPS == nil || s.Description != "Flux secrets" || s.SOPS.GCPKMS.CredentialsFile != "/etc/nyyrikki/gcp/sops-prod/credentials.json" ||
+		len(s.SOPS.GCPKMS.Keys) != 2 || s.SOPS.GCPKMS.Keys[1] != "projects/acme/locations/global/keyRings/flux/cryptoKeys/staging" {
+		t.Fatalf("sops-prod %+v", s)
+	}
+	if strings.Contains(src, "my-gcp") || strings.Contains(src, audience) {
+		t.Errorf("the config names the Secret or the audience:\n%s", src)
+	}
+	vol, path := volumeAndMount(t, objs, "gcp-sops-prod")
+	if vol == nil || path != "/etc/nyyrikki/gcp/sops-prod" {
+		t.Fatalf("credential volume %v at %q", vol, path)
+	}
+	sec := vol["secret"].(map[string]any)
+	items := sec["items"].([]any)
+	if sec["secretName"] != "my-gcp" || len(items) != 1 || items[0].(map[string]any)["key"] != "credentials.json" || items[0].(map[string]any)["path"] != "credentials.json" {
+		t.Fatalf("credential volume %v", sec)
+	}
+	tok, path := volumeAndMount(t, objs, "gcp-token")
+	if tok == nil || path != "/var/run/secrets/nyyrikki/gcp" {
+		t.Fatalf("token volume %v at %q", tok, path)
+	}
+	sat := tok["projected"].(map[string]any)["sources"].([]any)[0].(map[string]any)["serviceAccountToken"].(map[string]any)
+	if sat["audience"] != audience || sat["path"] != "token" || sat["expirationSeconds"] != 3600 {
+		t.Fatalf("projected token %v", sat)
+	}
+	if v, _ := volumeAndMount(t, objs, "target-sops-prod"); v != nil {
+		t.Error("a SOPS target got a Kubernetes target volume")
+	}
+	// No credential in the environment (docs/01 D15), and nothing that
+	// redirects SOPS's Cloud KMS client (docs/10 §10).
+	if env, ok := containerOf(t, podSpec(t, objs))["env"].([]any); ok {
+		for _, e := range env {
+			if n := e.(map[string]any)["name"].(string); strings.HasPrefix(n, "GOOGLE_") || strings.HasPrefix(n, "SOPS_") {
+				t.Fatalf("env %s is set", n)
+			}
+		}
+	}
+
+	// Without an audience (a service account key): no token is projected.
+	objs = render(t, sopsSet...)
+	if v, _ := volumeAndMount(t, objs, "gcp-token"); v != nil {
+		t.Error("a token is projected without an audience")
+	}
+	if v, _ := volumeAndMount(t, objs, "gcp-sops-prod"); v == nil {
+		t.Error("no credential volume without an audience")
+	}
+
+	// Without a SOPS target: nothing of Google's, whatever gcp says.
+	objs = render(t, "--set", "gcp.workloadIdentityAudience="+audience)
+	for _, name := range []string{"gcp-token", "gcp-sops-prod"} {
+		if v, _ := volumeAndMount(t, objs, name); v != nil {
+			t.Errorf("volume %s without a SOPS target", name)
+		}
+	}
+
+	// A target without its Secret or its keys doesn't render.
+	for name, set := range map[string][]string{
+		"no secret": {"--set", "targets[2].name=sops-prod", "--set", "targets[2].sops.gcpKMS.keys[0]=projects/a/locations/b/keyRings/c/cryptoKeys/d"},
+		"no keys":   {"--set", "targets[2].name=sops-prod", "--set", "targets[2].sops.gcpKMS.secretName=my-gcp"},
+	} {
+		if out, err := helmTemplate(t, set...); err == nil {
+			t.Errorf("%s: rendered\n%s", name, out)
+		}
+	}
+}

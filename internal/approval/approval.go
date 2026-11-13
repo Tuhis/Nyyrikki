@@ -37,6 +37,30 @@ type SSHHost struct {
 	CheckFailed string
 }
 
+// SOPSRequest is what the approver is shown of a request on a SOPS
+// target besides its command (docs/10 D8). Asks is one line of
+// Nyyrikki's own wording saying what is asked, with any path it names
+// already quoted. FileName is the agent's claim. Says are the file's
+// own cleartext values, one per line, already quoted; when there are
+// none to show, SaysNote says why. ShowSays is false for an encrypt,
+// whose file is plaintext and is never shown. KMSKeys are the keys the
+// run may call. None of it is HTML-escaped.
+type SOPSRequest struct {
+	Asks     string
+	FileName string
+	ShowSays bool
+	Says     []string
+	SaysNote string
+	KMSKeys  []string
+}
+
+// SOPSTarget is what an elevation prompt says of a SOPS target (docs/10
+// D8): the keys a window on it opens.
+type SOPSTarget struct {
+	Target string
+	Keys   []string
+}
+
 // RunPrompt asks for a one-off approval of one request (docs/05 D5).
 // Argv and Stdin are the display forms from docs/04 §5.2 and docs/07 D2,
 // already redacted where the type redacts (docs/04 D14) but not
@@ -44,11 +68,15 @@ type SSHHost struct {
 // (Type codes.TypeSSH), Argv is the command string, possibly multi-line,
 // Stdin is only its size and hash, and SSH is set.
 type RunPrompt struct {
-	ID          string
-	ApproverID  int64
-	Target      string
-	Type        string
-	SSH         *SSHHost
+	ID         string
+	ApproverID int64
+	Target     string
+	Type       string
+	SSH        *SSHHost
+	// SOPS is set for a SOPS target (Type codes.TypeSOPS, docs/10 D8);
+	// Argv is then the sops command line and Stdin the file's size and
+	// hash.
+	SOPS        *SOPSRequest
 	RunAs       Identity
 	Agent       Agent
 	Argv        string
@@ -78,9 +106,11 @@ type ElevationPrompt struct {
 	Duration   time.Duration
 	RunAs      Identity
 	SSH        []SSHHost
-	Agent      Agent
-	Reason     string
-	ExpiresAt  time.Time
+	// SOPS lists the SOPS targets among Targets (docs/10 D8).
+	SOPS      []SOPSTarget
+	Agent     Agent
+	Reason    string
+	ExpiresAt time.Time
 }
 
 // EnrollPrompt asks one human of an SSH target to approve enrolling a

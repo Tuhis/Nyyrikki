@@ -11,15 +11,17 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/decision"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl/request"
+	"github.com/Tuhis/Nyyrikki/internal/sopstarget"
 	"github.com/Tuhis/Nyyrikki/internal/sshtarget"
 	"github.com/Tuhis/Nyyrikki/internal/target"
 )
 
 // Runners holds one runner per target type. SSH is nil when no target is
-// an SSH target.
+// an SSH target, and SOPS when none is a SOPS target.
 type Runners struct {
 	Kubernetes *kubectl.Runner
 	SSH        *sshtarget.Runner
+	SOPS       *sopstarget.Runner
 }
 
 // Run runs a non-interactive request. g is released on every path.
@@ -32,6 +34,10 @@ func (r Runners) Run(g *decision.Grant, req target.Request, timeout time.Duratio
 	case *sshtarget.Request:
 		if r.SSH != nil {
 			return r.SSH.Run(g, c, timeout)
+		}
+	case *sopstarget.Request:
+		if r.SOPS != nil {
+			return r.SOPS.Run(g, c, timeout)
 		}
 	}
 	return nil, noRunner(g)

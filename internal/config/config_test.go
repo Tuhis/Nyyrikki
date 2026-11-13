@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Tuhis/Nyyrikki/internal/codes"
 )
 
 func valid(t *testing.T) string {
@@ -153,5 +155,94 @@ func TestGroupsInvalid(t *testing.T) {
 				t.Fatal("accepted")
 			}
 		})
+	}
+}
+
+const sopsTarget = `  - name: sops-prod
+    description: Flux secrets of the prod cluster
+    humans: [owner]
+    sops:
+      gcp_kms:
+        credentials_file: /etc/nyyrikki/gcp/sops-prod.json
+        keys:
+          - projects/acme/locations/europe-north1/keyRings/flux/cryptoKeys/prod
+          - projects/acme/locations/global/keyRings/flux/cryptoKeys/staging
+`
+
+// withSOPSTarget is the valid config with a SOPS target added.
+func withSOPSTarget(t *testing.T) string {
+	t.Helper()
+	src := valid(t)
+	if !strings.Contains(src, "\nssh:\n") {
+		t.Fatal("fixture lacks the ssh block")
+	}
+	return strings.Replace(src, "\nssh:\n", "\n"+sopsTarget+"ssh:\n", 1)
+}
+
+// docs/10 §5.4: a sops target names one credential file and the keys it
+// may use, and nothing else.
+func TestSOPSTarget(t *testing.T) {
+	c, err := Parse([]byte(withSOPSTarget(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, ok := c.TargetByName("sops-prod")
+	if !ok || s.Type() != codes.TypeSOPS || s.SOPS.GCPKMS.CredentialsFile != "/etc/nyyrikki/gcp/sops-prod.json" || len(s.SOPS.GCPKMS.Keys) != 2 {
+		t.Fatalf("sops target: %+v", s)
+	}
+	for _, name := range []string{"prod-k8s", "db-1"} {
+		if o, _ := c.TargetByName(name); o.Type() == codes.TypeSOPS {
+			t.Fatalf("%s reads as a sops target", name)
+		}
+	}
+	if SOPSRunAs("owner") != "Nyyrikki's Google credential, for owner" {
+		t.Fatal(SOPSRunAs("owner"))
+	}
+	key := "          - projects/acme/locations/europe-north1/keyRings/flux/cryptoKeys/prod\n"
+	cases := map[string][2]string{
+		"no credentials file":   {"        credentials_file: /etc/nyyrikki/gcp/sops-prod.json\n", ""},
+		"a relative file":       {"credentials_file: /etc/nyyrikki/gcp/sops-prod.json", "credentials_file: gcp/sops-prod.json"},
+		"no keys":               {"        keys:\n" + key + "          - projects/acme/locations/global/keyRings/flux/cryptoKeys/staging\n", ""},
+		"a key twice":           {key, key + key},
+		"a key version":         {key, "          - projects/acme/locations/europe-north1/keyRings/flux/cryptoKeys/prod/cryptoKeyVersions/1\n"},
+		"a key ring":            {key, "          - projects/acme/locations/europe-north1/keyRings/flux\n"},
+		"a key with a comma":    {key, "          - projects/acme/locations/europe-north1/keyRings/flux/cryptoKeys/prod,projects/acme/locations/europe-north1/keyRings/flux/cryptoKeys/x\n"},
+		"a key with a query":    {key, "          - projects/acme/locations/europe-north1/keyRings/flux/cryptoKeys/prod?x=1\n"},
+		"a URL":                 {key, "          - https://cloudkms.googleapis.com/v1/projects/acme/locations/europe-north1/keyRings/flux/cryptoKeys/prod\n"},
+		"an unknown field":      {"      gcp_kms:\n", "      endpoint: https://evil.example\n      gcp_kms:\n"},
+		"sops and kubernetes":   {"    sops:\n", "    kubernetes:\n      in_cluster: true\n    sops:\n"},
+		"sops and ssh":          {"    sops:\n", "    ssh:\n      address: db-2.example.com\n    sops:\n"},
+		"an unknown key source": {"      gcp_kms:\n", "      age:\n        recipients: [age1x]\n      gcp_kms:\n"},
+	}
+	for name, cse := range cases {
+		t.Run(name, func(t *testing.T) {
+			src := withSOPSTarget(t)
+			if !strings.Contains(src, cse[0]) {
+				t.Fatalf("fixture lacks %q", cse[0])
+			}
+			if _, err := Parse([]byte(strings.Replace(src, cse[0], cse[1], 1))); err == nil {
+				t.Fatal("accepted")
+			}
+		})
+	}
+}
+
+func TestIsKMSKeyName(t *testing.T) {
+	for name, want := range map[string]bool{
+		"projects/acme/locations/europe-north1/keyRings/flux/cryptoKeys/prod": true,
+		"projects/my-proj:1/locations/global/keyRings/a_b/cryptoKeys/c-d_e":   true,
+		"": false,
+		"projects/acme/locations/global/keyRings/flux/cryptoKeys/":                         false,
+		"projects/acme/locations/global/keyRings/flux/cryptoKeys/prod/":                    false,
+		"projects/acme/locations/global/keyRings/flux/cryptoKeys/prod\n":                   false,
+		"projects/acme/locations/global/keyRings/flux/cryptoKeys/pr od":                    false,
+		"projects/acme/locations/global/keyRings/flux/cryptoKeys/prod:decrypt":             false,
+		"projects/../locations/global/keyRings/flux/cryptoKeys/prod":                       false,
+		"projects/./locations/global/keyRings/flux/cryptoKeys/prod":                        false,
+		"projects/acme/locations/global/keyRings/flux/cryptoKeys/prod/cryptoKeyVersions/1": false,
+	} {
+		if IsKMSKeyName(name) != want {
+			t.Errorf("IsKMSKeyName(%q) = %v", name, !want)
+		}
 	}
 }

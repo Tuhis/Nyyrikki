@@ -8,6 +8,25 @@ LICENSES=MIT,BSD-2-Clause,BSD-3-Clause,Apache-2.0,ISC
 # The go-sdk's licence files are mid-transition (docs/01 M3) and are reviewed
 # by hand (docs/01 D14); its LICENSE hash is pinned in scripts/pinned-licenses.
 LICENSE_IGNORE=(--ignore github.com/modelcontextprotocol/go-sdk --ignore github.com/Tuhis/Nyyrikki)
+# The SOPS library and the Vault client it links are MPL-2.0, which is not
+# on the allowlist. They are admitted by name, each reviewed by hand and its
+# LICENSE hash pinned in scripts/pinned-licenses (docs/10 OD6): used
+# unmodified, and the image ships their licence texts and source
+# (scripts/save-licenses.sh). MPL-2.0 itself stays off the allowlist, so any
+# other MPL-2.0 module still fails this gate.
+LICENSE_IGNORE+=(
+  --ignore github.com/getsops/sops/v3
+  --ignore github.com/hashicorp/errwrap
+  --ignore github.com/hashicorp/go-cleanhttp
+  --ignore github.com/hashicorp/go-multierror
+  --ignore github.com/hashicorp/go-retryablehttp
+  --ignore github.com/hashicorp/go-rootcerts
+  --ignore github.com/hashicorp/go-secure-stdlib/parseutil
+  --ignore github.com/hashicorp/go-secure-stdlib/strutil
+  --ignore github.com/hashicorp/go-sockaddr
+  --ignore github.com/hashicorp/hcl
+  --ignore github.com/hashicorp/vault/api
+)
 
 gate() {
   local name=$1 dir=${2:-.}
@@ -52,6 +71,10 @@ gate() {
                    # With an SSH target: the CA hook and CronJobs (docs/08 D16).
                    helm lint deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml -f deploy/chart/nyyrikki/ci/ssh-values.yaml --kube-version 1.35.0
                    helm template t deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml -f deploy/chart/nyyrikki/ci/ssh-values.yaml --kube-version 1.35.0 \
+                     | kubeconform -strict -summary -kubernetes-version 1.35.0
+                   # With a SOPS target: the credential and token mounts (docs/10 §5.4).
+                   helm lint deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml -f deploy/chart/nyyrikki/ci/sops-values.yaml --kube-version 1.35.0
+                   helm template t deploy/chart/nyyrikki -f deploy/chart/nyyrikki/ci/test-values.yaml -f deploy/chart/nyyrikki/ci/sops-values.yaml --kube-version 1.35.0 \
                      | kubeconform -strict -summary -kubernetes-version 1.35.0
                    NYYRIKKI_CHART_TESTS=1 go test -count=1 ./deploy/... ;;
       pinning)     scripts/check-pinning.sh ;;

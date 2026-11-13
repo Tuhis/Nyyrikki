@@ -100,6 +100,10 @@ says so:
   (docs/01 M11 checks this.)
 - Nyyrikki's credentials are Secrets mounted as files, never
   environment variables or ConfigMap values.
+- A SOPS target's Google service account has a role on that target's
+  keys and nothing else, and `SOPS_GCP_KMS_ENDPOINT` and
+  `SOPS_GCP_KMS_UNIVERSE_DOMAIN` are not set on the pod (Nyyrikki
+  refuses to start with either; docs/10 M16).
 - Nyyrikki's ServiceAccounts can impersonate only the configured
   humans' identities and have no other rights.
 - The CLI's client in the authorization server requires DPoP-bound
@@ -126,7 +130,7 @@ says so:
 | INV-02 | A request is parsed once into a canonical form. The approver is shown that form, the approval binds to it, and exactly that form is forwarded. | R4, R5 |
 | INV-03 | An elevation lasts at most 30 minutes by the server's clock, covers only its named targets, one agent key (docs/01 D8) and one human, and only requests that carry its handle (docs/01 D24). It is never widened. Long-lived requests under it are cut when it ends. | R2, R4 |
 | INV-04 | An approval counts only if it comes from a configured approver's Telegram account, in their private chat with the bot, before it expires, and only once. No MCP tool or CLI command approves, denies or ends anything. | R5 |
-| INV-05 | Requests run on the target as the human the agent is bound to, taken from the human registry, never from anything in the request. | R4 |
+| INV-05 | Requests run on the target as the human the agent is bound to, taken from the human registry, never from anything in the request. On a SOPS target, where Cloud KMS can't act as a human, they run as the target's own Google service account, and every call names the run and the human in its request reason (Accepted risks; docs/10 OD3). | R4, R14 |
 | INV-06 | Only access tokens from the configured issuer, with Nyyrikki as audience, unexpired, for a known human are accepted, and a DPoP-bound or CLI token only with a valid proof (docs/01 D9). Run and elevate also need the session to be live by introspection. No token is passed on to a target. | docs/01 D9, R2 |
 | INV-07 | Any error, timeout or unreachable dependency ends in deny. | every doc |
 | INV-08 | Nyyrikki never puts its own credentials in a response, an error, a log or a Telegram message. (A target's response to a request, approved or under an elevation, that reads them because the human can is an accepted risk below.) | R4 |
@@ -309,6 +313,34 @@ These kinds of issue are always in scope:
   says to compare the fingerprint with what the host printed; the
   approver should be the administrator at the host, or in touch with
   them.
+- **On a SOPS target, Google sees Nyyrikki, not the human** (docs/10
+  OD3, owner decision 2026-11-12). Cloud KMS has no impersonation, so
+  every call is made by the target's service account. The human, the
+  run and what covered it are in the call's request reason, which is
+  Nyyrikki's claim, and in Nyyrikki's audit log. The service account's
+  role on the target's keys is what bounds it, the same for every
+  human. Google records the calls only when Data Access logs are on for
+  Cloud KMS (docs/setup/sops.md).
+- **A SOPS request's file name is the agent's word** (docs/10 OD7,
+  owner decision 2026-11-12). Nyyrikki never sees the repository, so a
+  steered agent can send one file under another's name. What Nyyrikki
+  vouches for is the file's own cleartext values, shown under "The file
+  says", and the path a request names; the names of cleartext keys are
+  not covered by the file's MAC. A file encrypted in full has no
+  cleartext to show, and then an approval of "decrypt the whole file"
+  can't tell it from any other file under the same key. An elevation on
+  a SOPS target covers every file its keys protect, with no message per
+  file. Use a target per key, and split keys by how sensitive their
+  files are.
+- **A decrypted SOPS file is a response like any other**: the plaintext
+  reaches the agent unredacted, and through it the model provider
+  (Responses are unredacted, above). Its data key and the Google
+  credential never do (INV-08).
+- **Whoever controls Nyyrikki's pod can use a SOPS target's Google
+  credential** for as long as it is bound: with Workload Identity
+  Federation by exchanging the pod's token, with a key file by reading
+  it. They get what the service account's role gives, on the target's
+  keys.
 - **The SSH setup script and the trust bundles are served without
   authentication, the enrollment endpoints take a token instead of a
   sign-in, and each use writes an audit record** (docs/07 D16, docs/08

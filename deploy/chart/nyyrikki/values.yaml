@@ -66,6 +66,19 @@ targets:
   #     sudo: false          # passwordless sudo; unset takes ssh.defaults.sudo
   #     sessionKill: false   # for a pinned host, as the setup script reported
   #   clients: []
+  # A SOPS target (docs/10, docs/setup/sops.md): SOPS operations on files
+  # encrypted with Google Cloud KMS. secretName is a Secret in this
+  # namespace with the key `credentials.json`: a Workload Identity
+  # Federation configuration (see gcp below) or a service account key.
+  # keys are the only CryptoKeys the target uses, by full resource name.
+  # - name: sops-prod
+  #   description: Flux secrets of the prod cluster
+  #   sops:
+  #     gcpKMS:
+  #       secretName: nyyrikki-gcp-sops-prod
+  #       keys:
+  #         - projects/acme/locations/europe-north1/keyRings/flux/cryptoKeys/prod
+  #   clients: []
 
 # Named sets of targets, of any type, for elevate (docs/08 D11): an
 # elevation asked for a group covers the members it has at that moment.
@@ -115,6 +128,17 @@ ssh:
   # `kubectl create job --from=cronjob/...` (docs/08 §5.4). Empty means
   # the value of generateCA. Leave false for a Secret an operator owns.
   caJobs: null
+
+# Shared by every SOPS target (docs/10 D6).
+gcp:
+  # The audience the workload identity pool provider accepts, by default
+  # https://iam.googleapis.com/projects/NUMBER/locations/global/
+  # workloadIdentityPools/POOL/providers/PROVIDER. When set, the pod gets
+  # a ServiceAccount token for that audience at
+  # /var/run/secrets/nyyrikki/gcp/token, which is the path a federation
+  # configuration's credential_source.file names. Leave empty when every
+  # SOPS target uses a service account key.
+  workloadIdentityAudience: ""
 
 telegram:
   apiURL: https://api.telegram.org

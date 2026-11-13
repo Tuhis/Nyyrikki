@@ -38,8 +38,8 @@ type ListTargetsOut struct {
 // RunIn is run's input (docs/02 §5.2).
 type RunIn struct {
 	Target      string   `json:"target" jsonschema:"the target name, from list_targets"`
-	Args        []string `json:"args" jsonschema:"kubernetes targets: kubectl arguments, without the leading kubectl; ssh targets: the command, joined with spaces into one string the host's shell runs"`
-	Stdin       string   `json:"stdin,omitempty" jsonschema:"input for commands that read stdin (kubectl -f -, exec/attach -i; any ssh command). On ssh targets the approver sees only its size and hash"`
+	Args        []string `json:"args" jsonschema:"kubernetes targets: kubectl arguments, without the leading kubectl; ssh targets: the command, joined with spaces into one string the host's shell runs; sops targets: a sops command line without the leading sops"`
+	Stdin       string   `json:"stdin,omitempty" jsonschema:"input for commands that read stdin (kubectl -f -, exec/attach -i; any ssh command). On ssh targets the approver sees only its size and hash. On sops targets it is the file"`
 	Reason      string   `json:"reason" jsonschema:"why you need this; shown to the approver as your claim"`
 	Elevation   string   `json:"elevation,omitempty" jsonschema:"the handle of a live elevation covering this target"`
 	Timeout     string   `json:"timeout,omitempty" jsonschema:"how long the command may run, Go duration syntax, e.g. 2m"`

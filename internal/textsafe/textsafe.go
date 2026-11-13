@@ -3,7 +3,12 @@
 // the same list.
 package textsafe
 
-import "unicode"
+import (
+	"fmt"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // Invisible reports characters that could hide or reorder what the
 // approver reads: control characters, format characters (bidi controls,
@@ -34,3 +39,52 @@ const MaxCombiningRun = 4
 
 // IsCombining reports a combining mark.
 func IsCombining(r rune) bool { return unicode.In(r, unicode.Mn, unicode.Me) }
+
+// safeShellRune reports the characters that need no quoting (docs/04
+// §5.2).
+func safeShellRune(r rune) bool {
+	return r < utf8.RuneSelf && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
+		strings.ContainsRune("@%+=:,./_-", r))
+}
+
+// Quote shell-quotes s for display (docs/04 §5.2): as it is when every
+// character is safe, otherwise in single quotes, with invisible
+// characters, combining marks past MaxCombiningRun and invalid UTF-8
+// shown as escapes. Every request display uses it, so that one argv
+// element reads the same whatever the target type.
+func Quote(s string) string {
+	needs := s == ""
+	for _, r := range s {
+		if !safeShellRune(r) {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return s
+	}
+	var b strings.Builder
+	b.WriteByte('\'')
+	run := 0 // consecutive combining marks
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if IsCombining(r) {
+			run++
+		} else {
+			run = 0
+		}
+		switch {
+		case r == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, `\x{%02x}`, s[i])
+		case r == '\'':
+			b.WriteString(`'\''`)
+		case Invisible(r) || run > MaxCombiningRun:
+			fmt.Fprintf(&b, `\u{%x}`, r)
+		default:
+			b.WriteRune(r)
+		}
+		i += size
+	}
+	b.WriteByte('\'')
+	return b.String()
+}

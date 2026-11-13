@@ -307,3 +307,32 @@ the doc.
   processes exec it (golang/go#22315). Build it first with
   `go tool -n covdata`. ([docs/09](09-public-release.md) §10,
   `scripts/gates.sh`)
+- **The SOPS library takes its Cloud KMS endpoint from the
+  environment, whatever credential you hand it.** `gcpkms.MasterKey`
+  reads `SOPS_GCP_KMS_ENDPOINT` and `SOPS_GCP_KMS_UNIVERSE_DOMAIN` on
+  every call, even with a token source set, and sends the request, and
+  the access token, there. `nyyrikkid` refuses to start with either
+  set. ([docs/10](10-sops-target.md) M16, `internal/sopstarget`)
+- **SOPS goes on to the next key after a key service error, and reports
+  failures only as text.** A key service that refuses a key hasn't
+  stopped the run: keep a record and a latch, and check them when the
+  library returns. ([docs/10](10-sops-target.md) M15, D5)
+- **SOPS's MAC error prints hashes of the file's plaintext.** No error
+  of the library's may reach an agent, a log or the audit record; map
+  its exit code to a fixed word instead.
+  ([docs/10](10-sops-target.md) M5, D9)
+- **SOPS's key group lookup and `Truncate` panic on some inputs** (a
+  path through a scalar is a failed type assertion). Every call into
+  the library on an agent's file runs under `recover`.
+  ([docs/10](10-sops-target.md) §10, `internal/sopstarget`)
+- **Importing the SOPS library runs its `audit` package's `init`**,
+  which reads `/etc/sops/audit.yaml`, panics if it doesn't parse and
+  connects to the PostgreSQL servers it names. Keep that file out of
+  the image. ([docs/10](10-sops-target.md) M17)
+- **The `sops` program reads a file's type from its name**: `secret.env`
+  is dotenv, `secret.dotenv` is binary. And `mac_only_encrypted` can be
+  set only from a `.sops.yaml`, not by a flag.
+  ([docs/10](10-sops-target.md) §10, `internal/sopstarget` tests)
+- **`go-licenses save` copies an MPL-2.0 module's whole source**, not
+  only its licence text: about 5 MB for SOPS and the Vault client.
+  ([docs/10](10-sops-target.md) M18)

@@ -86,10 +86,12 @@ const (
 	Deny  = "deny"
 )
 
-// Target types (docs/02 D5, docs/07 D13), as list_targets returns them.
+// Target types (docs/02 D5, docs/07 D13, docs/10 D1), as list_targets
+// returns them.
 const (
 	TypeKubernetes = "kubernetes"
 	TypeSSH        = "ssh"
+	TypeSOPS       = "sops"
 )
 
 // What covered an allowed request.

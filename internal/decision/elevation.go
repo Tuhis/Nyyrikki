@@ -132,11 +132,19 @@ func (p *Point) Elevate(ctx context.Context, r ElevateRequest) (*Elevation, erro
 		b, _ := json.Marshal(shown)
 		factsJSON = string(b)
 	}
+	// docs/10 D8: a window on a SOPS target is a window on its keys.
+	var sopsTargets []approval.SOPSTarget
+	for _, name := range targets {
+		if t, _ := p.cfg.TargetByName(name); t.SOPS != nil {
+			sopsTargets = append(sopsTargets, approval.SOPSTarget{Target: t.Name, Keys: append([]string(nil), t.SOPS.GCPKMS.Keys...)})
+		}
+	}
 	expires := p.now().Add(p.cfg.Approval.Timeout.D())
 	prompt := approval.ElevationPrompt{
 		ID: id, ApproverID: h.TelegramUserID, Targets: targets, Groups: groups, Duration: dur,
 		RunAs:  approval.Identity{User: h.Kubernetes.User, Groups: h.Kubernetes.Groups},
 		SSH:    hosts,
+		SOPS:   sopsTargets,
 		Agent:  approval.Agent{ClientName: pr.ClientID, KeyShort: p.audit.AgentHash(pr.AgentKey), SignedInAt: pr.SignedInAt},
 		Reason: r.Reason, ExpiresAt: expires,
 	}
