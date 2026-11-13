@@ -88,6 +88,16 @@ type Runner struct {
 	skipFileCheck bool
 }
 
+// endpointEnv are the environment variables that decide where a Cloud
+// KMS call, and the access token with it, is sent (docs/10 M16). SOPS
+// reads the first two after every option it is given, so no option
+// overrides them; the Google client under it reads the rest. NewRunner
+// refuses to start with any of them set.
+var endpointEnv = []string{
+	gcpkms.SopsGCPKMSEndpointEnv, gcpkms.SopsGCPKMSUniverseDomainEnv,
+	"GOOGLE_CLOUD_UNIVERSE_DOMAIN", "GOOGLE_API_USE_MTLS_ENDPOINT", "GOOGLE_API_USE_MTLS", "GOOGLE_API_USE_CLIENT_CERTIFICATE",
+}
+
 // NewRunner validates cfg and returns a Runner. It refuses to start
 // when the environment redirects SOPS's Cloud KMS client: SOPS reads
 // the endpoint and the universe domain from the environment whatever
@@ -105,7 +115,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
-	for _, name := range []string{gcpkms.SopsGCPKMSEndpointEnv, gcpkms.SopsGCPKMSUniverseDomainEnv} {
+	for _, name := range endpointEnv {
 		if getenv(name) != "" {
 			return nil, fmt.Errorf("sopstarget: %s is set; Nyyrikki doesn't take the Cloud KMS endpoint from the environment", name)
 		}
@@ -508,6 +518,9 @@ func (r *Request) run(ks *keyService) ([]byte, error) {
 		if err != nil {
 			return nil, fail(DetailNotWritable)
 		}
+		// Set's second result says whether the value changed, not
+		// whether it worked: it has no error, and panics on a path it
+		// can't follow, which guarded turns into a failure.
 		tree.Branches[0], _ = tree.Branches[0].Set(r.path, value)
 	case opUnset:
 		b, err := tree.Branches[0].Unset(r.path)

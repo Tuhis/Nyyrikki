@@ -147,10 +147,11 @@ reach `cloudkms.googleapis.com`, `sts.googleapis.com` and
 `iamcredentials.googleapis.com` (the last two only with federation), and
 `oauth2.googleapis.com` with a key file.
 
-Don't set `SOPS_GCP_KMS_ENDPOINT` or `SOPS_GCP_KMS_UNIVERSE_DOMAIN` on
-the pod: the SOPS library would send its calls, and the access token
-with them, wherever they point, so Nyyrikki refuses to start with either
-set.
+Don't set `SOPS_GCP_KMS_ENDPOINT`, `SOPS_GCP_KMS_UNIVERSE_DOMAIN`,
+`GOOGLE_CLOUD_UNIVERSE_DOMAIN`, `GOOGLE_API_USE_MTLS_ENDPOINT`,
+`GOOGLE_API_USE_MTLS` or `GOOGLE_API_USE_CLIENT_CERTIFICATE` on the pod:
+they decide where the calls, and the access token with them, are sent,
+so Nyyrikki refuses to start with any of them set.
 
 ## 5. Check it
 

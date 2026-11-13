@@ -52,7 +52,7 @@ func TestValidateCredentials(t *testing.T) {
 			continue
 		}
 		// The error never holds what the file holds.
-		for _, leak := range []string{"SECRET", "private-key-material", "/bin/", "169.254"} {
+		for _, leak := range []string{"SECRET", "private-key-material", "/bin/", "169.254", "something_new", "client_secret", "environment_id", "workforce_pool"} {
 			if strings.Contains(err.Error(), leak) {
 				t.Errorf("%s: the error holds %q: %v", name, leak, err)
 			}

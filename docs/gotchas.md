@@ -311,8 +311,11 @@ the doc.
   environment, whatever credential you hand it.** `gcpkms.MasterKey`
   reads `SOPS_GCP_KMS_ENDPOINT` and `SOPS_GCP_KMS_UNIVERSE_DOMAIN` on
   every call, even with a token source set, and sends the request, and
-  the access token, there. `nyyrikkid` refuses to start with either
-  set. ([docs/10](10-sops-target.md) M16, `internal/sopstarget`)
+  the access token, there, after every option it was given, so no
+  option overrides them. The Google client under it reads
+  `GOOGLE_CLOUD_UNIVERSE_DOMAIN` and the `GOOGLE_API_USE_MTLS…` and
+  `GOOGLE_API_USE_CLIENT_CERTIFICATE` variables. `nyyrikkid` refuses to
+  start with any of them set. ([docs/10](10-sops-target.md) M16, `internal/sopstarget`)
 - **SOPS goes on to the next key after a key service error, and reports
   failures only as text.** A key service that refuses a key hasn't
   stopped the run: keep a record and a latch, and check them when the

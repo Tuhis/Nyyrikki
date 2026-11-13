@@ -637,7 +637,10 @@ func TestNewRunner(t *testing.T) {
 	}
 	// SOPS takes its Cloud KMS endpoint from the environment whatever
 	// credential it is given: a call sent there would carry the token.
-	for _, name := range []string{"SOPS_GCP_KMS_ENDPOINT", "SOPS_GCP_KMS_UNIVERSE_DOMAIN"} {
+	// The Google client under it reads its own: a universe domain, and
+	// whether to use the mTLS endpoint and a client certificate.
+	for _, name := range []string{"SOPS_GCP_KMS_ENDPOINT", "SOPS_GCP_KMS_UNIVERSE_DOMAIN",
+		"GOOGLE_CLOUD_UNIVERSE_DOMAIN", "GOOGLE_API_USE_MTLS_ENDPOINT", "GOOGLE_API_USE_MTLS", "GOOGLE_API_USE_CLIENT_CERTIFICATE"} {
 		c := ok
 		c.Getenv = func(n string) string {
 			if n == name {

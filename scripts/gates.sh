@@ -46,8 +46,9 @@ gate() {
                    # The SOPS target against the sops program go.mod pins as a
                    # tool, at the library's version (docs/10 G3). After the suite,
                    # not inside it: building the program next to the suite's own
-                   # links ran CI's runners out of disk (#75). -v and the count:
-                   # a run that matched no test, or skipped them, fails.
+                   # links ran CI's runners out of disk (#75). -v, the count and
+                   # the SKIP check: a run that matched no test, or skipped any,
+                   # fails.
                    [ "$dir" = . ] || exit 0
                    bin=$(mktemp -d); trap 'rm -rf "$bin"' EXIT
                    go build -o "$bin/sops" github.com/getsops/sops/v3/cmd/sops
@@ -55,6 +56,7 @@ gate() {
                      || { echo "$out"; exit 1; }
                    n=$(grep -c '^--- PASS: TestSOPSProgram' <<<"$out" || true)
                    [ "$n" -ge 2 ] || { echo "$out"; echo "test: only $n of the sops program tests passed"; exit 1; }
+                   ! grep -q '^ *--- SKIP' <<<"$out" || { echo "$out"; echo "test: a sops program test was skipped"; exit 1; }
                    echo "ok  	the sops program tests ($n)" ;;
       coverage)    # Cross-package total against coverage-floor.txt (docs/09 D5).
                    # No -race: the test gate has it. Fails closed: a floor that

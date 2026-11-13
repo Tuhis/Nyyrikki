@@ -101,9 +101,9 @@ says so:
 - Nyyrikki's credentials are Secrets mounted as files, never
   environment variables or ConfigMap values.
 - A SOPS target's Google service account has a role on that target's
-  keys and nothing else, and `SOPS_GCP_KMS_ENDPOINT` and
-  `SOPS_GCP_KMS_UNIVERSE_DOMAIN` are not set on the pod (Nyyrikki
-  refuses to start with either; docs/10 M16).
+  keys and nothing else, and no environment variable that moves the
+  Cloud KMS endpoint is set on the pod (`SOPS_GCP_KMS_ENDPOINT` and the
+  others in docs/10 M16; Nyyrikki refuses to start with any of them).
 - Nyyrikki's ServiceAccounts can impersonate only the configured
   humans' identities and have no other rights.
 - The CLI's client in the authorization server requires DPoP-bound

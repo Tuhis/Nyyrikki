@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"sync"
@@ -67,7 +66,9 @@ func ValidateCredentials(b []byte) (kind string, err error) {
 	}
 	for name := range top {
 		if !externalAccountFields[name] {
-			return "", fmt.Errorf("an external_account credential file may not hold %q", name)
+			// Not the name: the error is logged, and a file that isn't
+			// what it should be holds nobody knows what.
+			return "", errors.New("an external_account credential file holds a field Nyyrikki doesn't accept (docs/setup/sops.md lists them)")
 		}
 	}
 	var src map[string]json.RawMessage
@@ -78,7 +79,7 @@ func ValidateCredentials(b []byte) (kind string, err error) {
 		// A URL, an executable, a certificate or an environment_id
 		// would make Nyyrikki fetch or run something to get its token.
 		if name != "file" && name != "format" {
-			return "", fmt.Errorf("credential_source may hold only file and format, not %q", name)
+			return "", errors.New("credential_source may hold only file and format")
 		}
 	}
 	var file string
