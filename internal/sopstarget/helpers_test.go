@@ -39,60 +39,40 @@ const secretRegex = "^(data|stringData)$"
 
 var testKeys = []string{sopstest.KeyProd, sopstest.KeyOther}
 
-var (
-	sopsOnce sync.Once
-	sopsDir  string
-	sopsBin  string
-	sopsErr  error
-)
+// sopsProgramEnv names the sops program the comparisons of docs/10 G3
+// run against: the one this module pins as a tool (go.mod), built by
+// the test gate (scripts/gates.sh). Tests that need it are named
+// TestSOPSProgram… and skip without it; every other test makes its files
+// with the library, so an ordinary go test builds no program.
+const sopsProgramEnv = "NYYRIKKI_SOPS_PROGRAM"
 
-// TestMain removes the sops program the tests built.
-func TestMain(m *testing.M) {
-	code := m.Run()
-	if sopsDir != "" {
-		os.RemoveAll(sopsDir)
-	}
-	os.Exit(code)
-}
-
-// sopsProgram builds the sops program this module pins as a tool
-// (go.mod), once per test binary: the same version as the library
-// (docs/10 G3).
 func sopsProgram(t testing.TB) string {
 	t.Helper()
-	sopsOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "nyyrikki-sops-")
-		if err != nil {
-			sopsErr = err
-			return
-		}
-		sopsDir = dir
-		sopsBin = filepath.Join(dir, "sops")
-		out, err := exec.Command("go", "build", "-o", sopsBin, "github.com/getsops/sops/v3/cmd/sops").CombinedOutput()
-		if err != nil {
-			sopsErr = &buildError{string(out)}
-		}
-	})
-	if sopsErr != nil {
-		t.Fatalf("building the pinned sops program: %v", sopsErr)
+	bin := os.Getenv(sopsProgramEnv)
+	if bin == "" {
+		t.Skip("set " + sopsProgramEnv + " to the pinned sops program (the test gate does)")
 	}
-	return sopsBin
+	if _, err := os.Stat(bin); err != nil {
+		t.Fatalf("%s: %v", sopsProgramEnv, err)
+	}
+	return bin
 }
 
-type buildError struct{ out string }
+type programError struct{ out string }
 
-func (e *buildError) Error() string { return e.out }
+func (e *programError) Error() string { return e.out }
 
 // sopsCLI runs the real sops program against the fake Cloud KMS, on a
 // file holding content, and returns its stdout.
 func sopsCLI(t testing.TB, f *sopstest.Fake, name string, content []byte, args ...string) ([]byte, error) {
 	t.Helper()
+	bin := sopsProgram(t)
 	dir := t.TempDir()
 	file := filepath.Join(dir, name)
 	if err := os.WriteFile(file, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(sopsProgram(t), append(args, file)...)
+	cmd := exec.Command(bin, append(args, file)...)
 	cmd.Dir = dir
 	cmd.Env = []string{
 		"HOME=" + dir, "PATH=" + os.Getenv("PATH"),
@@ -102,16 +82,9 @@ func sopsCLI(t testing.TB, f *sopstest.Fake, name string, content []byte, args .
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, &buildError{stderr.String()}
+		return nil, &programError{stderr.String()}
 	}
 	return stdout.Bytes(), nil
-}
-
-// encrypted is secretYAML encrypted by the real sops program with
-// KeyProd, data and stringData only.
-func encrypted(t testing.TB, f *sopstest.Fake) []byte {
-	t.Helper()
-	return mustSops(t, f, "secret.yaml", []byte(secretYAML), "encrypt", "--gcp-kms", sopstest.KeyProd, "--encrypted-regex", secretRegex)
 }
 
 func mustSops(t testing.TB, f *sopstest.Fake, name string, content []byte, args ...string) []byte {
@@ -121,6 +94,20 @@ func mustSops(t testing.TB, f *sopstest.Fake, name string, content []byte, args 
 		t.Fatalf("sops %v: %v", args, err)
 	}
 	return out
+}
+
+// encrypted is secretYAML encrypted with KeyProd, data and stringData
+// only, as Flux's files are.
+func encrypted(t testing.TB, f *sopstest.Fake) []byte {
+	t.Helper()
+	return f.EncryptYAMLRegex(t, secretYAML, sopstest.KeyProd, secretRegex)
+}
+
+// regexFile is plain YAML encrypted with KeyProd, with SOPS's
+// encrypted_regex rule, or every value when regex is "".
+func regexFile(t testing.TB, f *sopstest.Fake, plain, regex string) []byte {
+	t.Helper()
+	return f.EncryptYAML(t, plain, sopstest.KeyProd, func(m *sops.Metadata) { m.EncryptedRegex = regex })
 }
 
 // memAudit keeps audit records in memory.

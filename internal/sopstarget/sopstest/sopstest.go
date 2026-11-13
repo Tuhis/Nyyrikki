@@ -334,7 +334,17 @@ func (k keyService) Decrypt(context.Context, *keyservice.DecryptRequest, ...grpc
 // changes the file's metadata first (its rules, its keys).
 func (f *Fake) EncryptYAML(t testing.TB, plain, key string, meta func(*sops.Metadata)) []byte {
 	t.Helper()
-	st := common.StoreForFormat(formats.Yaml, sopsconfig.NewStoresConfig())
+	return f.Encrypt(t, "yaml", plain, key, meta)
+}
+
+// Encrypt is EncryptYAML for a file of type typ: yaml, json or dotenv.
+func (f *Fake) Encrypt(t testing.TB, typ, plain, key string, meta func(*sops.Metadata)) []byte {
+	t.Helper()
+	format, ok := map[string]formats.Format{"yaml": formats.Yaml, "json": formats.Json, "dotenv": formats.Dotenv}[typ]
+	if !ok {
+		t.Fatalf("sopstest: no file type %q", typ)
+	}
+	st := common.StoreForFormat(format, sopsconfig.NewStoresConfig())
 	branches, err := st.LoadPlainFile([]byte(plain))
 	if err != nil {
 		t.Fatal(err)

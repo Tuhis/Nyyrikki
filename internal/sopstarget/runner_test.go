@@ -1,7 +1,6 @@
 package sopstarget
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -20,8 +19,18 @@ import (
 
 const wantReason = "nyyrikki run=run_01TEST human=owner covered_by=approval:apr_01TEST"
 
-// nyyrikkiCalls are the calls the runner made: the fixtures' own, made
-// by the sops program, carry its token.
+// readBack decrypts a file Nyyrikki returned, with Nyyrikki.
+func (e *env) readBack(t *testing.T, file []byte) string {
+	t.Helper()
+	out, err := e.run(t, mustParse(t, file, append([]string{"decrypt"}, yamlFlags()...)...))
+	if err != nil {
+		t.Fatalf("reading a returned file back: %v", err)
+	}
+	return string(out)
+}
+
+// nyyrikkiCalls are the calls the runner made: the sops program's own,
+// in the tests that use it, carry its token.
 func nyyrikkiCalls(f *sopstest.Fake) []sopstest.Call {
 	var out []sopstest.Call
 	for _, c := range f.Calls() {
@@ -32,23 +41,21 @@ func nyyrikkiCalls(f *sopstest.Fake) []sopstest.Call {
 	return out
 }
 
-// docs/10 G3, G6: decrypt returns what the sops program returns for the
-// same file, with one KMS call that carries the reason and the target's
-// token, and the audit record names the key.
+// docs/10 G6: decrypt returns the file's plaintext, with one KMS call
+// that carries the reason and the target's token, and the audit record
+// names the key.
 func TestDecrypt(t *testing.T) {
 	// A credential in the environment is never used (docs/10 D6, M7).
 	t.Setenv("GOOGLE_OAUTH_ACCESS_TOKEN", "from-the-environment")
 	t.Setenv("GOOGLE_CREDENTIALS", `{"type":"authorized_user"}`)
 	e := newEnv(t)
 	enc := encrypted(t, e.fake)
-	want := mustSops(t, e.fake, "secret.yaml", enc, "decrypt")
-
 	got, err := e.run(t, mustParse(t, enc, append([]string{"decrypt"}, yamlFlags()...)...))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, want) || string(got) != secretYAML {
-		t.Fatalf("decrypt returned %q; the sops program returns %q", got, want)
+	if string(got) != secretYAML {
+		t.Fatalf("decrypt returned %q", got)
 	}
 	calls := nyyrikkiCalls(e.fake)
 	if len(calls) != 1 || calls[0].Op != "decrypt" || calls[0].Key != sopstest.KeyProd {
@@ -93,41 +100,34 @@ func TestDecryptExtractAndTypes(t *testing.T) {
 		}
 		return string(out)
 	}
-	sops := func(args ...string) string {
-		t.Helper()
-		return string(mustSops(t, e.fake, "secret.yaml", enc, append([]string{"decrypt"}, args...)...))
-	}
 	leaf, branch := `["stringData"]["password"]`, `["stringData"]`
-	if got := run("--extract", leaf); got != "hunter2" || got != sops("--extract", leaf) {
+	if got := run("--extract", leaf); got != "hunter2" {
 		t.Fatalf("extract of a value: %q", got)
 	}
-	if got := run("--extract", branch); got != "password: hunter2\nuser: app\n" || got != sops("--extract", branch) {
+	if got := run("--extract", branch); got != "password: hunter2\nuser: app\n" {
 		t.Fatalf("extract of a branch: %q", got)
 	}
 	if got := run("--extract", `["kind"]`); got != "Secret" {
 		t.Fatalf("extract of a cleartext value: %q", got)
 	}
-	if got := run("--output-type", "json"); got != sops("--output-type", "json") || !strings.Contains(got, `"password": "hunter2"`) {
+	if got := run("--output-type", "json"); !strings.Contains(got, `"password": "hunter2"`) || !strings.HasPrefix(got, "{") {
 		t.Fatalf("JSON output: %q", got)
 	}
 
-	// JSON and dotenv files, made by the sops program.
-	// The sops program reads the type from the file's name.
-	for typ, plain := range map[string]string{"json": `{"a": "one", "b": {"c": 2}}`, "dotenv": "A=one\nB=two\n"} {
-		name := map[string]string{"json": "f.json", "dotenv": "f.env"}[typ]
-		encd := mustSops(t, e.fake, name, []byte(plain), "encrypt", "--gcp-kms", sopstest.KeyOther)
-		want := mustSops(t, e.fake, name, encd, "decrypt")
-		got, err := e.run(t, mustParse(t, encd, "decrypt", "--input-type", typ, "--filename-override", name))
+	// JSON and dotenv files.
+	for typ, c := range map[string][2]string{"json": {`{"a": "one", "b": {"c": 2}}`, "{\n\t\"a\": \"one\",\n\t\"b\": {\n\t\t\"c\": 2\n\t}\n}\n"}, "dotenv": {"A=one\nB=two\n", "A=one\nB=two\n"}} {
+		encd := e.fake.Encrypt(t, typ, c[0], sopstest.KeyOther, nil)
+		got, err := e.run(t, mustParse(t, encd, "decrypt", "--input-type", typ, "--filename-override", "f."+typ))
 		if err != nil {
 			t.Fatalf("%s: %v", typ, err)
 		}
-		if !bytes.Equal(got, want) {
-			t.Fatalf("%s: decrypt returned %q; the sops program returns %q", typ, got, want)
+		if string(got) != c[1] {
+			t.Fatalf("%s: decrypt returned %q; want %q", typ, got, c[1])
 		}
 	}
 }
 
-// docs/10 G3, M6: set and unset return a file the sops program reads,
+// docs/10 M6: set and unset return a file that decrypts to the change,
 // with the same wrapped data key, after one decrypt and no encrypt.
 func TestSetAndUnset(t *testing.T) {
 	e := newEnv(t)
@@ -157,8 +157,9 @@ func TestSetAndUnset(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v: %v", c.args, err)
 		}
-		if got := string(mustSops(t, e.fake, "secret.yaml", out, "decrypt")); got != c.want {
-			t.Errorf("%v: the sops program reads %q; want %q", c.args, got, c.want)
+		calls := nyyrikkiCalls(e.fake)[before:]
+		if got := e.readBack(t, out); got != c.want {
+			t.Errorf("%v: the result reads %q; want %q", c.args, got, c.want)
 		}
 		if wrapped(out) != wrapped(enc) {
 			t.Errorf("%v: the wrapped data key changed", c.args)
@@ -168,7 +169,6 @@ func TestSetAndUnset(t *testing.T) {
 		if strings.Contains(string(out), "new-password-1") || strings.Contains(string(out), "new-token-2") {
 			t.Errorf("%v: the new value is in cleartext: %s", c.args, out)
 		}
-		calls := nyyrikkiCalls(e.fake)[before:]
 		if len(calls) != 1 || calls[0].Op != "decrypt" || calls[0].Reason != wantReason {
 			t.Errorf("%v: KMS calls %+v", c.args, calls)
 		}
@@ -184,8 +184,8 @@ func TestSetAndUnset(t *testing.T) {
 	}
 }
 
-// docs/10 G3: encrypt returns a file the sops program decrypts, wrapped
-// with the key the request names.
+// docs/10 D5: encrypt returns a file wrapped with the key the request
+// names, with only the values its rule names encrypted.
 func TestEncrypt(t *testing.T) {
 	e := newEnv(t)
 	out, err := e.run(t, mustParse(t, []byte(secretYAML), append([]string{"encrypt", "--gcp-kms", sopstest.KeyOther, "--encrypted-regex", secretRegex}, yamlFlags()...)...))
@@ -195,9 +195,6 @@ func TestEncrypt(t *testing.T) {
 	s := string(out)
 	if strings.Contains(s, "hunter2") || !strings.Contains(s, "name: db-creds") || !strings.Contains(s, "resource_id: "+sopstest.KeyOther) || !strings.Contains(s, "encrypted_regex: "+secretRegex) {
 		t.Fatalf("the encrypted file: %s", s)
-	}
-	if got := string(mustSops(t, e.fake, "secret.yaml", out, "decrypt")); got != secretYAML {
-		t.Fatalf("the sops program reads %q", got)
 	}
 	calls := nyyrikkiCalls(e.fake)
 	if len(calls) != 1 || calls[0].Op != "encrypt" || calls[0].Key != sopstest.KeyOther || calls[0].Reason != wantReason {
@@ -211,7 +208,7 @@ func TestEncrypt(t *testing.T) {
 	if err != nil || string(back) != secretYAML {
 		t.Fatalf("decrypt of an encrypt: %q %v", back, err)
 	}
-	// The other rules, each read back by the sops program.
+	// The other rules, each read back.
 	for _, rule := range [][]string{{"--unencrypted-regex", "^(apiVersion|kind|metadata)$"}, {"--encrypted-suffix", "Data"}, {"--unencrypted-suffix", "ata"}, nil} {
 		out, err := e.run(t, mustParse(t, []byte(secretYAML), append(append([]string{"encrypt", "--gcp-kms", sopstest.KeyProd}, rule...), yamlFlags()...)...))
 		if err != nil {
@@ -220,8 +217,8 @@ func TestEncrypt(t *testing.T) {
 		if strings.Contains(string(out), "hunter2") != (len(rule) == 2 && rule[0] == "--unencrypted-suffix") {
 			t.Errorf("%v: password in cleartext is wrong: %s", rule, out)
 		}
-		if got := string(mustSops(t, e.fake, "secret.yaml", out, "decrypt")); got != secretYAML {
-			t.Errorf("%v: the sops program reads %q", rule, got)
+		if got := e.readBack(t, out); got != secretYAML {
+			t.Errorf("%v: the result reads %q", rule, got)
 		}
 	}
 }
@@ -687,7 +684,7 @@ func TestSOPSLoggingIsDiscarded(t *testing.T) {
 func TestFailuresAfterTheDataKey(t *testing.T) {
 	e := newEnv(t)
 	plain := "list:\n    - a\n    - b\nsecret: x\n"
-	enc := mustSops(t, e.fake, "f.yaml", []byte(plain), "encrypt", "--gcp-kms", sopstest.KeyProd)
+	enc := regexFile(t, e.fake, plain, "")
 	// A key into a list: SOPS's Set asserts an index and panics.
 	req := mustParse(t, enc, append([]string{"set"}, yamlFlags(`["list"]["k"]`, `"v"`)...)...)
 	out, err := e.run(t, req)
@@ -699,7 +696,7 @@ func TestFailuresAfterTheDataKey(t *testing.T) {
 		t.Fatalf("run_finished: %+v", fin)
 	}
 	// A dotenv file can't hold a branch.
-	env := mustSops(t, e.fake, "f.env", []byte("A=one\n"), "encrypt", "--gcp-kms", sopstest.KeyProd)
+	env := e.fake.Encrypt(t, "dotenv", "A=one\n", sopstest.KeyProd, nil)
 	req = mustParse(t, env, "set", "--input-type", "dotenv", "--filename-override", "f.env", `["B"]`, `{"c": 1}`)
 	out, err = e.run(t, req)
 	if out != nil {
@@ -713,7 +710,7 @@ func TestFailuresAfterTheDataKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(mustSops(t, e.fake, "secret.yaml", out, "decrypt")); !strings.Contains(got, "    user:\n        name: app\n") {
+	if got := e.readBack(t, out); !strings.Contains(got, "    user:\n        name: app\n") {
 		t.Fatalf("set through a value: %q", got)
 	}
 }

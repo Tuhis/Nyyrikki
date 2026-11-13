@@ -37,7 +37,20 @@ gate() {
       vet)         go vet ./... ;;
       staticcheck) staticcheck ./... ;;
       tidy)        go mod tidy -diff ;;
-      test)        go test -race -count=1 ./... ;;
+      test)        go test -race -count=1 ./...
+                   # The SOPS target against the sops program go.mod pins as a
+                   # tool, at the library's version (docs/10 G3). After the suite,
+                   # not inside it: building the program next to the suite's own
+                   # links ran CI's runners out of disk (#75). -v and the count:
+                   # a run that matched no test, or skipped them, fails.
+                   [ "$dir" = . ] || exit 0
+                   bin=$(mktemp -d); trap 'rm -rf "$bin"' EXIT
+                   go build -o "$bin/sops" github.com/getsops/sops/v3/cmd/sops
+                   out=$(NYYRIKKI_SOPS_PROGRAM="$bin/sops" go test -race -count=1 -v -run '^TestSOPSProgram' ./internal/sopstarget/) \
+                     || { echo "$out"; exit 1; }
+                   n=$(grep -c '^--- PASS: TestSOPSProgram' <<<"$out" || true)
+                   [ "$n" -ge 2 ] || { echo "$out"; echo "test: only $n of the sops program tests passed"; exit 1; }
+                   echo "ok  	the sops program tests ($n)" ;;
       coverage)    # Cross-package total against coverage-floor.txt (docs/09 D5).
                    # No -race: the test gate has it. Fails closed: a floor that
                    # isn't a whole number from 1 to 100, an empty profile or an

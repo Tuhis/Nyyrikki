@@ -2,6 +2,7 @@ package decision_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"testing"
 	"time"
 
@@ -10,7 +11,6 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/codes"
 	"github.com/Tuhis/Nyyrikki/internal/config"
 	"github.com/Tuhis/Nyyrikki/internal/decision"
-	"github.com/Tuhis/Nyyrikki/internal/sopstarget"
 )
 
 const (
@@ -24,15 +24,31 @@ func withSOPS(e *env) *env {
 	return e
 }
 
-// sopsReq is an encrypt, whose file needs no key to make.
+// sopsRequest stands in for sopstarget.Request: what the decision point
+// uses of one, without linking the SOPS library into this package's
+// tests. The real request is exercised with the decision point in
+// internal/server.
+type sopsRequest struct{ file string }
+
+func (r sopsRequest) Type() string      { return codes.TypeSOPS }
+func (r sopsRequest) Interactive() bool { return false }
+func (r sopsRequest) Digest(target, _ string) [32]byte {
+	return sha256.Sum256([]byte("sops\x00" + target + "\x00" + r.file))
+}
+func (r sopsRequest) Audit() audit.Request   { return audit.Request{Argv: []string{"encrypt"}} }
+func (r sopsRequest) DisplayCommand() string { return "sops encrypt --gcp-kms=" + sopsKeyA }
+func (r sopsRequest) DisplayStdin() string {
+	return "‹plaintext yaml, 18 bytes, sha256:000000000000›"
+}
+func (r sopsRequest) Prompt() *approval.SOPSRequest {
+	return &approval.SOPSRequest{Asks: "Encrypt a new file: 1 value encrypted, 0 left in cleartext",
+		FileName: r.file, KMSKeys: []string{sopsKeyA}}
+}
+
 func sopsReq(t *testing.T, target string) decision.RunRequest {
 	t.Helper()
-	r, err := sopstarget.Parse([]string{"encrypt", "--gcp-kms", sopsKeyA, "--input-type", "yaml", "--filename-override", "clusters/prod/new.enc.yaml"},
-		[]byte("password: hunter2\n"), false, []string{sopsKeyA, sopsKeyB})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return decision.RunRequest{Principal: principal("agent-a"), RunID: decision.NewRunID(), Target: target, Request: r, Reason: "because"}
+	return decision.RunRequest{Principal: principal("agent-a"), RunID: decision.NewRunID(), Target: target,
+		Request: sopsRequest{file: "clusters/prod/new.enc.yaml"}, Reason: "because"}
 }
 
 // TestSOPSOneOff covers docs/10 D8 and OD3 at the decision point: the

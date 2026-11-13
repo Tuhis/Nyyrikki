@@ -390,9 +390,14 @@ what was built and where each goal is tested.
   ServiceAccount token at `/var/run/secrets/nyyrikki/gcp/token` when
   `gcp.workloadIdentityAudience` is set; `docs/setup/sops.md`.
 - The `sops` program is pinned as a tool in `go.mod`, at the library's
-  version, and the tests build it once: files it encrypts are what
-  Nyyrikki is tested on, and what Nyyrikki returns is read back by it
-  (G3).
+  version. The test gate builds it after the suite and runs the
+  `TestSOPSProgram…` tests against it (`scripts/gates.sh`, with
+  `NYYRIKKI_SOPS_PROGRAM`): files it encrypts are decrypted, and what
+  Nyyrikki returns is read back by it (G3). Every other test makes its
+  files with the library, so a plain `go test` builds no program and
+  skips those two. *Revised 2026-11-13 (CI of #75)*: the tests first
+  built the program themselves, inside the suite, which ran CI's
+  runners out of disk next to the suite's own links.
 - `google.golang.org/grpc` and `go.opentelemetry.io/otel` were raised
   past what SOPS asks for, because `govulncheck` reported the versions
   it brought in.
@@ -403,7 +408,7 @@ what was built and where each goal is tested.
 |---|---|
 | G1 | `sopstarget`: `TestParseRefusesWhatIsNotOffered`, `TestCanonicalForm`; `server`: `TestSOPSRefusedBeforeApproval` |
 | G2 | `sopstarget`: `TestParseRefusesFiles` (no KMS call), `TestOneCallPerKey`, `TestKeyServiceRefusesOtherKeys`; `server`: `TestSOPSRunMCP` (no call before the tap, none after a denial) |
-| G3 | `sopstarget`: `TestDecrypt`, `TestDecryptExtractAndTypes`, `TestSetAndUnset`, `TestEncrypt`, each against the `sops` program |
+| G3 | `sopstarget`: `TestSOPSProgramFilesAreRead`, `TestSOPSProgramReadsWhatIsReturned` (against the `sops` program, in the test gate); `TestDecrypt`, `TestDecryptExtractAndTypes`, `TestSetAndUnset`, `TestEncrypt` (against the library's own files) |
 | G4 | `sopstarget`: `TestTamperedFiles`; `server`: `TestSOPSRefusedBeforeApproval` |
 | G5 | `sopstarget`: `TestAsks`, `TestFileSays`, `TestSetValueIsRedacted`; `telegram`: `TestRenderSOPSRun` (the golden message), `TestRenderSOPSOperations`, `TestRenderSOPSHostile`, `TestRenderSOPSElevation`; `decision`: `TestSOPSOneOff`, `TestElevationSOPS` |
 | G6 | `sopstarget`: `TestDecrypt` (reason, token, `kms_keys`), `TestCut`; `server`: `TestSOPSElevationAndCLI` |

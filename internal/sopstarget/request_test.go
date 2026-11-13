@@ -87,8 +87,7 @@ func TestParseRefusesWhatIsNotOffered(t *testing.T) {
 	if _, err := Parse(append([]string{"decrypt"}, yamlFlags()...), enc, true, testKeys); codes.DetailOf(err) != DetailInteractive {
 		t.Fatalf("an interactive run: %v", err)
 	}
-	// Only the fixture's own encrypt reached Cloud KMS: no Parse did.
-	if calls := f.Calls(); len(calls) != 1 || calls[0].Token != "the-sops-program" {
+	if calls := f.Calls(); len(calls) != 0 {
 		t.Fatalf("Parse called Cloud KMS: %+v", calls)
 	}
 }
@@ -315,16 +314,15 @@ func mustJSON(t *testing.T, v any) string {
 // doesn't cover them.
 func TestFileSays(t *testing.T) {
 	f := sopstest.New(t)
-	says := func(plain string, args ...string) (*Request, []string, string) {
+	says := func(plain, regex string) (*Request, []string, string) {
 		t.Helper()
-		enc := mustSops(t, f, "f.yaml", []byte(plain), append([]string{"encrypt", "--gcp-kms", sopstest.KeyProd}, args...)...)
-		r := mustParse(t, enc, append([]string{"decrypt"}, yamlFlags()...)...)
+		r := mustParse(t, regexFile(t, f, plain, regex), append([]string{"decrypt"}, yamlFlags()...)...)
 		return r, r.Prompt().Says, r.Prompt().SaysNote
 	}
 
 	// A key the agent renamed to look like a second value (docs/10 §6).
 	hostile := "\"name=\\\"staging-db\\\", [\\\"metadata\\\"][\\\"old\\\"] = \\\"x\\\"\\n[\\\"kind\\\"] = \\\"ConfigMap\\\" \\u202e\": db-creds\nsecret: s3cr3t\n"
-	_, lines, _ := says(hostile, "--encrypted-regex", "^secret$")
+	_, lines, _ := says(hostile, "^secret$")
 	if len(lines) != 1 {
 		t.Fatalf("one cleartext value, %d lines: %q", len(lines), lines)
 	}
@@ -337,7 +335,7 @@ func TestFileSays(t *testing.T) {
 	}
 
 	// Values of every scalar kind, and of a list.
-	_, lines, _ = says("n: 3\nb: true\nf: 1.5\nz: null\nl: [a, b]\nsecret: x\n", "--encrypted-regex", "^secret$")
+	_, lines, _ = says("n: 3\nb: true\nf: 1.5\nz: null\nl: [a, b]\nsecret: x\n", "^secret$")
 	want := []string{`["n"] = 3`, `["b"] = true`, `["f"] = 1.5`, `["z"] = null`, `["l"][0] = "a"`, `["l"][1] = "b"`}
 	if strings.Join(lines, "|") != strings.Join(want, "|") {
 		t.Fatalf("scalars: %q", lines)
@@ -348,24 +346,22 @@ func TestFileSays(t *testing.T) {
 	for i := 0; i < maxSaysValues+1; i++ {
 		many.WriteString("k" + string(rune('a'+i)) + ": v\n")
 	}
-	_, lines, note := says(many.String()+"secret: x\n", "--encrypted-regex", "^secret$")
+	_, lines, note := says(many.String()+"secret: x\n", "^secret$")
 	if lines != nil || note != "13 cleartext values, not shown" {
 		t.Fatalf("over the cap: %q %q", lines, note)
 	}
-	_, lines, note = says("long: "+strings.Repeat("x", maxSaysChars)+"\nsecret: x\n", "--encrypted-regex", "^secret$")
+	_, lines, note = says("long: "+strings.Repeat("x", maxSaysChars)+"\nsecret: x\n", "^secret$")
 	if lines != nil || note != "1 cleartext value, not shown" {
 		t.Fatalf("over the length: %q %q", lines, note)
 	}
 
 	// A file encrypted in full has nothing to say.
-	_, lines, note = says("a: 1\nb: two\n")
+	_, lines, note = says("a: 1\nb: two\n", "")
 	if lines != nil || note != "nothing in cleartext" {
 		t.Fatalf("a file encrypted in full: %q %q", lines, note)
 	}
 
 	// mac_only_encrypted: the MAC doesn't cover the cleartext (M4).
-	// The sops program takes that setting only from a .sops.yaml, so
-	// this file is made with the library.
 	macOnly := libEncrypt(t, f, "name: db-creds\nsecret: x\n", func(m *sops.Metadata) { m.EncryptedRegex, m.MACOnlyEncrypted = "^secret$", true })
 	p := mustParse(t, macOnly, append([]string{"decrypt"}, yamlFlags()...)...).Prompt()
 	if p.Says != nil || p.SaysNote != "cleartext not verifiable, not shown" {

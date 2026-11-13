@@ -333,6 +333,12 @@ the doc.
   is dotenv, `secret.dotenv` is binary. And `mac_only_encrypted` can be
   set only from a `.sops.yaml`, not by a flag.
   ([docs/10](10-sops-target.md) §10, `internal/sopstarget` tests)
+- **Linking the SOPS library into a test binary adds about 60 MB with
+  the race detector, and building a program inside a test run adds its
+  whole compile to the run's disk peak.** CI's runners ran out of disk.
+  Keep the library out of test binaries that don't need it, and build
+  helper programs in a step of their own.
+  ([docs/10](10-sops-target.md) §10, `scripts/gates.sh`)
 - **`go-licenses save` copies an MPL-2.0 module's whole source**, not
   only its licence text: about 5 MB for SOPS and the Vault client.
   ([docs/10](10-sops-target.md) M18)
