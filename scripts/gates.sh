@@ -37,7 +37,12 @@ gate() {
       vet)         go vet ./... ;;
       staticcheck) staticcheck ./... ;;
       tidy)        go mod tidy -diff ;;
-      test)        go test -race -count=1 ./...
+      test)        # -p 2: at most two packages are built and linked at a time. The
+                   # race test binaries are 100 to 230 MB each since the SOPS
+                   # library (docs/10), and one link per CPU ran CI's runners out
+                   # of disk (#75). The same in the coverage gate, whose binaries
+                   # each hold every package.
+                   go test -race -count=1 -p 2 ./...
                    # The SOPS target against the sops program go.mod pins as a
                    # tool, at the library's version (docs/10 G3). After the suite,
                    # not inside it: building the program next to the suite's own
@@ -64,7 +69,7 @@ gate() {
                    # refuse the exec of a file another process still holds open for
                    # writing ("text file busy", golang/go#22315; CI, #54).
                    go tool -n covdata >/dev/null
-                   go test -count=1 -coverpkg=./... -coverprofile="$prof" ./...
+                   go test -count=1 -p 2 -coverpkg=./... -coverprofile="$prof" ./...
                    [ "$(grep -vc '^mode:' "$prof")" -gt 0 ] || { echo "coverage: the profile has no blocks"; exit 1; }
                    total=$(go tool cover -func="$prof" | awk '$1 == "total:" { print $NF }')
                    [[ $total =~ ^[0-9]+(\.[0-9]+)?%$ ]] || { echo "coverage: could not read the total from '$total'"; exit 1; }

@@ -186,8 +186,8 @@ v8.30.1, kubeconform v0.8.0.
 | vet | `go vet ./...` |
 | staticcheck | `staticcheck ./...` |
 | tidy | `go mod tidy -diff` |
-| tests | `go test -race -count=1 ./...` |
-| coverage | `go test -count=1 -coverpkg=./... -coverprofile=… ./...`; the total from `go tool cover -func` must not be below `coverage-floor.txt` (docs/09 D5). It fails closed: a missing or malformed floor, an empty profile or an unreadable total fails |
+| tests | `go test -race -count=1 -p 2 ./...`, then the SOPS target against the pinned `sops` program (docs/10 G3). `-p 2` bounds how many test binaries are linked at once: they are 100 to 230 MB each, and one per CPU ran CI out of disk (#75) |
+| coverage | `go test -count=1 -p 2 -coverpkg=./... -coverprofile=… ./...`; the total from `go tool cover -func` must not be below `coverage-floor.txt` (docs/09 D5). It fails closed: a missing or malformed floor, an empty profile or an unreadable total fails |
 | vulnerabilities | `govulncheck ./...` |
 | licences | `go-licenses check ./... --allowed_licenses=MIT,BSD-2-Clause,BSD-3-Clause,Apache-2.0,ISC`, ignoring hand-reviewed modules, whose LICENSE hashes are pinned in `scripts/pinned-licenses` |
 | secrets | `gitleaks dir . --redact --config .gitleaks.toml` (it also matches elevation handles and stream tickets) |
