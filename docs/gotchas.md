@@ -316,6 +316,12 @@ the doc.
   `GOOGLE_CLOUD_UNIVERSE_DOMAIN` and the `GOOGLE_API_USE_MTLS…` and
   `GOOGLE_API_USE_CLIENT_CERTIFICATE` variables. `nyyrikkid` refuses to
   start with any of them set. ([docs/10](10-sops-target.md) M16, `internal/sopstarget`)
+- **Checking a JSON file through a map, then handing the bytes to a
+  library that decodes them into a struct, checks different fields.**
+  `encoding/json` matches a struct field whatever the key's letter case
+  (`Token_URI`, and `ſ` for `s`), and the last of two wins; a map lookup
+  is exact. Refuse names that aren't in the form you look up.
+  ([docs/10](10-sops-target.md) D6, `internal/sopstarget/creds.go`)
 - **SOPS goes on to the next key after a key service error, and reports
   failures only as text.** A key service that refuses a key hasn't
   stopped the run: keep a record and a latch, and check them when the

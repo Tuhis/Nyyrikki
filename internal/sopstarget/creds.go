@@ -84,6 +84,21 @@ func impersonationURL(raw json.RawMessage) bool {
 		strings.HasPrefix(u.Path, "/v1/") && strings.HasSuffix(u.Path, googleIAMCallName)
 }
 
+// plainName reports whether a field name is lower-case ASCII letters,
+// digits and "_", as every name gcloud writes is. The Google library
+// decodes the file with encoding/json, which matches a field whatever
+// its letter case (and "ſ" for "s", "K" for "k") and takes the last of
+// two: a name these checks don't read must not be one it does.
+func plainName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return name != ""
+}
+
 // ValidateCredentials checks that b is one of the two kinds of Google
 // credential file a SOPS target takes (docs/10 D6): a service account
 // key, or a Workload Identity Federation configuration whose subject
@@ -100,6 +115,11 @@ func ValidateCredentials(b []byte) (kind string, err error) {
 	}
 	if err := json.Unmarshal(top["type"], &kind); err != nil {
 		return "", errors.New("the credential file has no type")
+	}
+	for name := range top {
+		if !plainName(name) {
+			return "", errors.New("the credential file holds a field whose name isn't lower-case letters, digits and _")
+		}
 	}
 	switch kind {
 	case credServiceAccount:

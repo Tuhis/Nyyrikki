@@ -37,10 +37,19 @@ func TestValidateCredentials(t *testing.T) {
 	// Where the token exchange is sent is the file's to say, and the
 	// subject token goes with it: only Google's own are taken (M16).
 	elsewhere := map[string]string{
-		"a key's token_uri elsewhere":      sa(`,"token_uri":"https://evil.example/token"`),
-		"a key's token_uri over http":      sa(`,"token_uri":"http://oauth2.googleapis.com/token"`),
-		"a key's token_uri not a string":   sa(`,"token_uri":7`),
-		"a key in another universe":        sa(`,"universe_domain":"evil.example"`),
+		"a key's token_uri elsewhere":    sa(`,"token_uri":"https://evil.example/token"`),
+		"a key's token_uri over http":    sa(`,"token_uri":"http://oauth2.googleapis.com/token"`),
+		"a key's token_uri not a string": sa(`,"token_uri":7`),
+		"a key in another universe":      sa(`,"universe_domain":"evil.example"`),
+		// The Google library reads the file's fields whatever their
+		// letter case, and takes the last of two: a name the check
+		// doesn't read must not be one the library does.
+		"a key's Token_URI":                sa(`,"Token_URI":"https://evil.example/token"`),
+		"a key's Token_URI after a good":   sa(`,"token_uri":"https://oauth2.googleapis.com/token","Token_URI":"https://evil.example/token"`),
+		"a key's Universe_Domain":          sa(`,"Universe_Domain":"evil.example"`),
+		"a key's univerſe_domain":          sa(`,"univer\u017fe_domain":"evil.example"`),
+		"a key's to\u212aen_uri":           sa(`,"to\u212aen_uri":"https://evil.example/token"`),
+		"a federation's Token_URL":         wifAt("https://sts.googleapis.com/v1/token", `,"Token_URL":"https://evil.example/v1/token"`),
 		"an STS elsewhere":                 wifAt("https://evil.example/v1/token", ``),
 		"an STS that only starts right":    wifAt("https://sts.googleapis.com.evil.example/v1/token", ``),
 		"an STS with a user part":          wifAt("https://sts.googleapis.com@evil.example/v1/token", ``),
