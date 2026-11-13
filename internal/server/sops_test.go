@@ -35,7 +35,9 @@ func startSOPS(t *testing.T, opts ...servertest.Option) (*servertest.Env, *sopst
 		c.Targets = append(c.Targets, config.Target{Name: "sops-prod", Description: "Flux secrets", Humans: []string{"owner"},
 			SOPS: &config.SOPSTarget{GCPKMS: config.SOPSGCPKMS{CredentialsFile: creds, Keys: []string{sopstest.KeyProd}}}})
 	}}, opts...)
-	e := servertest.StartWithOptions(t, func(o *server.Options) { o.SOPSClientOptions = f.ClientOptions() }, opts...)
+	e := servertest.StartWithOptions(t, func(o *server.Options) {
+		o.SOPSClientOptions, o.SOPSTokenHTTPClient = f.ClientOptions(), f.TokenHTTPClient()
+	}, opts...)
 	enc := f.EncryptYAMLRegex(t, sopsPlain, sopstest.KeyProd, "^(data|stringData)$")
 	return e, f, string(enc)
 }

@@ -26,6 +26,40 @@ func TestValidateCredentials(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	sa := func(extra string) string {
+		return `{"type":"service_account","client_email":"a@b","private_key":"k"` + extra + `}`
+	}
+	good["a key without a token_uri"] = sa(``)
+	good["a key with a universe domain"] = sa(`,"universe_domain":"googleapis.com"`)
+	wifAt := func(tokenURL, extra string) string {
+		return `{"type":"external_account","audience":"//iam.googleapis.com/x","subject_token_type":"urn:ietf:params:oauth:token-type:jwt","token_url":"` + tokenURL + `","credential_source":{"file":"/t"}` + extra + `}`
+	}
+	// Where the token exchange is sent is the file's to say, and the
+	// subject token goes with it: only Google's own are taken (M16).
+	elsewhere := map[string]string{
+		"a key's token_uri elsewhere":      sa(`,"token_uri":"https://evil.example/token"`),
+		"a key's token_uri over http":      sa(`,"token_uri":"http://oauth2.googleapis.com/token"`),
+		"a key's token_uri not a string":   sa(`,"token_uri":7`),
+		"a key in another universe":        sa(`,"universe_domain":"evil.example"`),
+		"an STS elsewhere":                 wifAt("https://evil.example/v1/token", ``),
+		"an STS that only starts right":    wifAt("https://sts.googleapis.com.evil.example/v1/token", ``),
+		"an STS with a user part":          wifAt("https://sts.googleapis.com@evil.example/v1/token", ``),
+		"an STS over http":                 wifAt("http://sts.googleapis.com/v1/token", ``),
+		"no STS":                           `{"type":"external_account","audience":"a","subject_token_type":"t","credential_source":{"file":"/t"}}`,
+		"another universe":                 wifAt("https://sts.googleapis.com/v1/token", `,"universe_domain":"evil.example"`),
+		"a token_info_url elsewhere":       wifAt("https://sts.googleapis.com/v1/token", `,"token_info_url":"https://evil.example/v1/introspect"`),
+		"an impersonation elsewhere":       wifAt("https://sts.googleapis.com/v1/token", `,"service_account_impersonation_url":"https://evil.example/v1/projects/-/serviceAccounts/a@b:generateAccessToken"`),
+		"an impersonation with a user":     wifAt("https://sts.googleapis.com/v1/token", `,"service_account_impersonation_url":"https://iamcredentials.googleapis.com@evil.example/v1/x:generateAccessToken"`),
+		"an impersonation of another call": wifAt("https://sts.googleapis.com/v1/token", `,"service_account_impersonation_url":"https://iamcredentials.googleapis.com/v1/x:signBlob"`),
+		"an impersonation with a query":    wifAt("https://sts.googleapis.com/v1/token", `,"service_account_impersonation_url":"https://iamcredentials.googleapis.com/v1/x:generateAccessToken?a=b"`),
+	}
+	for name, c := range elsewhere {
+		if _, err := ValidateCredentials([]byte(c)); err == nil {
+			t.Errorf("%s: accepted", name)
+		} else if strings.Contains(err.Error(), "evil") {
+			t.Errorf("%s: the error holds the URL: %v", name, err)
+		}
+	}
 	bad := map[string]string{
 		"not JSON":                    `private-key-material`,
 		"an array":                    `[]`,

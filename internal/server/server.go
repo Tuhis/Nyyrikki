@@ -61,6 +61,9 @@ type Options struct {
 	// SOPSClientOptions are added to the SOPS runner's Cloud KMS clients
 	// (tests: a fake KMS's endpoint).
 	SOPSClientOptions []option.ClientOption
+	// SOPSTokenHTTPClient replaces the HTTP client of the SOPS runner's
+	// token exchanges (tests: a fake token endpoint).
+	SOPSTokenHTTPClient *http.Client
 }
 
 // newSOPSRunner builds the SOPS runner from the SOPS targets (docs/10
@@ -84,7 +87,7 @@ func newSOPSRunner(cfg *config.Config, aw audit.Appender, log *slog.Logger, o Op
 		},
 		Audit:         aw,
 		Logger:        log,
-		ClientOptions: o.SOPSClientOptions,
+		ClientOptions: o.SOPSClientOptions, TokenHTTPClient: o.SOPSTokenHTTPClient,
 	})
 }
 

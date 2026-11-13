@@ -29,7 +29,7 @@ LICENSE_IGNORE+=(
 )
 
 gate() {
-  local name=$1 dir=${2:-.}
+  local name=$1 dir=${2:-.} root=$PWD
   ( cd "$dir"
     case $name in
       fmt)         out=$(find . -name '*.go' -not -path './test/canaries/*' -print0 | xargs -0 gofmt -l
@@ -43,16 +43,19 @@ gate() {
                    # of disk (#75). The same in the coverage gate, whose binaries
                    # each hold every package.
                    go test -race -count=1 -p 2 ./...
-                   # The SOPS target against the sops program go.mod pins as a
-                   # tool, at the library's version (docs/10 G3). After the suite,
-                   # not inside it: building the program next to the suite's own
-                   # links ran CI's runners out of disk (#75). -v, the count and
-                   # the SKIP check: a run that matched no test, or skipped any,
-                   # fails.
-                   [ "$dir" = . ] || exit 0
+                   # Then the SOPS target against the sops program. After the
+                   # suite, not inside it: building the program next to the
+                   # suite's own links ran CI's runners out of disk (#75).
+                   [ "$dir" != . ] || gate sops-program ;;
+      sops-program) # The SOPS target against the sops program go.mod pins as a
+                   # tool, at the library's version (docs/10 G3). Part of the
+                   # test gate; a gate of its own so that it has canaries. -v,
+                   # the count and the SKIP check: a run that matched no test,
+                   # or skipped any, fails.
+                   pkg=./internal/sopstarget/; [ "$dir" = . ] || pkg=./...
                    bin=$(mktemp -d); trap 'rm -rf "$bin"' EXIT
-                   go build -o "$bin/sops" github.com/getsops/sops/v3/cmd/sops
-                   out=$(NYYRIKKI_SOPS_PROGRAM="$bin/sops" go test -race -count=1 -v -run '^TestSOPSProgram' ./internal/sopstarget/) \
+                   ( cd "$root" && go build -o "$bin/sops" github.com/getsops/sops/v3/cmd/sops )
+                   out=$(NYYRIKKI_SOPS_PROGRAM="$bin/sops" go test -race -count=1 -v -run '^TestSOPSProgram' "$pkg") \
                      || { echo "$out"; exit 1; }
                    n=$(grep -c '^--- PASS: TestSOPSProgram' <<<"$out" || true)
                    [ "$n" -ge 2 ] || { echo "$out"; echo "test: only $n of the sops program tests passed"; exit 1; }

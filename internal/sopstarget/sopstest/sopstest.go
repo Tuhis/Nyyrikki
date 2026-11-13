@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -186,7 +187,7 @@ func apiError(w http.ResponseWriter, status int, msg string) {
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
-	case "/token", "/sts":
+	case "/token", stsPath:
 		f.token(w, r)
 		return
 	}
@@ -264,10 +265,38 @@ func (f *Fake) token(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	out := map[string]any{"access_token": fmt.Sprintf("fake-access-token-%d", n), "token_type": "Bearer", "expires_in": 3600}
-	if r.URL.Path == "/sts" {
+	if r.URL.Path == stsPath {
 		out["issued_token_type"] = "urn:ietf:params:oauth:token-type:access_token"
 	}
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// stsPath is the path of Google's token exchange.
+const stsPath = "/v1/token"
+
+// TokenHTTPClient is an HTTP client that sends a request for one of
+// Google's token endpoints to the fake, and fails any other. The
+// credential files name Google's real endpoints, the only ones a
+// credential file may name.
+func (f *Fake) TokenHTTPClient() *http.Client {
+	return &http.Client{Transport: tokenTransport{f}}
+}
+
+type tokenTransport struct{ f *Fake }
+
+func (t tokenTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	switch r.URL.Host {
+	case "oauth2.googleapis.com", "sts.googleapis.com":
+	default:
+		return nil, fmt.Errorf("sopstest: a token request for %s", r.URL.Host)
+	}
+	to, err := url.Parse(t.f.srv.URL)
+	if err != nil {
+		return nil, err
+	}
+	r = r.Clone(r.Context())
+	r.URL.Scheme, r.URL.Host, r.Host = to.Scheme, to.Host, to.Host
+	return http.DefaultTransport.RoundTrip(r)
 }
 
 // ServiceAccountFile writes a service account key whose tokens come from
@@ -286,7 +315,7 @@ func (f *Fake) ServiceAccountFile(t testing.TB, dir string) string {
 		"type": "service_account", "project_id": "acme", "private_key_id": "k1",
 		"private_key":  string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
 		"client_email": "nyyrikki-sops@acme.iam.gserviceaccount.com", "client_id": "1",
-		"token_uri": f.srv.URL + "/token",
+		"token_uri": "https://oauth2.googleapis.com/token",
 	})
 	return writeFile(t, dir, "sa.json", b)
 }
@@ -301,7 +330,7 @@ func (f *Fake) ExternalAccountFile(t testing.TB, dir string) string {
 		"type":               "external_account",
 		"audience":           "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/c",
 		"subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-		"token_url":          f.srv.URL + "/sts",
+		"token_url":          "https://sts.googleapis.com" + stsPath,
 		"credential_source":  map[string]any{"file": sub},
 	})
 	return writeFile(t, dir, "wif.json", b)

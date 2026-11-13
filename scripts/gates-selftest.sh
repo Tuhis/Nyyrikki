@@ -14,6 +14,8 @@ canaries=(
   "staticcheck|staticcheck|SA4017"
   "tidy|tidy|^-require github\.com/oklog/ulid"
   "test|test|planted failure"
+  "sops-program-skip|sops-program|^test: a sops program test was skipped"
+  "sops-program-none|sops-program|^test: only 0 of the sops program tests passed"
   "coverage|coverage|coverage: total [0-9.]+% is below the floor 90%"
   "vuln|vuln|GO-2022-1059"
   "licenses|licenses|Not allowed license 'GPL-3\.0' found for library 'example\.com/gpl'"

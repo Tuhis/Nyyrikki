@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,10 +43,52 @@ var externalAccountFields = map[string]bool{
 	"credential_source": true, "universe_domain": true,
 }
 
+// Where a credential file may send the token exchange (docs/10 D6,
+// M16). The file names these itself, and the subject token or the
+// signed assertion goes with the request: only Google's own endpoints
+// are taken, written as gcloud writes them.
+const (
+	googleUniverse    = "googleapis.com"
+	googleTokenURI    = "https://oauth2.googleapis.com/token"
+	googleSTSToken    = "https://sts.googleapis.com/v1/token"
+	googleSTSInfo     = "https://sts.googleapis.com/v1/introspect"
+	googleIAMHost     = "iamcredentials.googleapis.com"
+	googleIAMCallName = ":generateAccessToken"
+)
+
+var errElsewhere = errors.New("the credential file names an endpoint that isn't Google's own (docs/setup/sops.md lists what is accepted)")
+
+// oneOf reports whether the field is absent (when optional) or a JSON
+// string equal to want.
+func oneOf(raw json.RawMessage, want string, optional bool) bool {
+	if raw == nil {
+		return optional
+	}
+	var s string
+	return json.Unmarshal(raw, &s) == nil && s == want
+}
+
+// impersonationURL reports whether raw is absent or a
+// generateAccessToken call on Google's IAM credentials API.
+func impersonationURL(raw json.RawMessage) bool {
+	if raw == nil {
+		return true
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return false
+	}
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "https" && u.Host == googleIAMHost && u.User == nil && u.Opaque == "" &&
+		u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" &&
+		strings.HasPrefix(u.Path, "/v1/") && strings.HasSuffix(u.Path, googleIAMCallName)
+}
+
 // ValidateCredentials checks that b is one of the two kinds of Google
 // credential file a SOPS target takes (docs/10 D6): a service account
 // key, or a Workload Identity Federation configuration whose subject
-// token comes from a file. The error never holds anything from the
+// token comes from a file, either sending its token exchange only to
+// Google's own endpoints. The error never holds anything from the
 // file.
 func ValidateCredentials(b []byte) (kind string, err error) {
 	if len(b) > maxCredentialsFile {
@@ -59,6 +103,9 @@ func ValidateCredentials(b []byte) (kind string, err error) {
 	}
 	switch kind {
 	case credServiceAccount:
+		if !oneOf(top["token_uri"], googleTokenURI, true) || !oneOf(top["universe_domain"], googleUniverse, true) {
+			return "", errElsewhere
+		}
 		return kind, nil
 	case credExternalAccount:
 	default:
@@ -70,6 +117,10 @@ func ValidateCredentials(b []byte) (kind string, err error) {
 			// what it should be holds nobody knows what.
 			return "", errors.New("an external_account credential file holds a field Nyyrikki doesn't accept (docs/setup/sops.md lists them)")
 		}
+	}
+	if !oneOf(top["token_url"], googleSTSToken, false) || !oneOf(top["token_info_url"], googleSTSInfo, true) ||
+		!oneOf(top["universe_domain"], googleUniverse, true) || !impersonationURL(top["service_account_impersonation_url"]) {
+		return "", errElsewhere
 	}
 	var src map[string]json.RawMessage
 	if err := json.Unmarshal(top["credential_source"], &src); err != nil {

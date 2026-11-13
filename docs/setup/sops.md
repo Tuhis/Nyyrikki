@@ -153,6 +153,21 @@ Don't set `SOPS_GCP_KMS_ENDPOINT`, `SOPS_GCP_KMS_UNIVERSE_DOMAIN`,
 they decide where the calls, and the access token with them, are sent,
 so Nyyrikki refuses to start with any of them set.
 
+The credential file says where its token exchange is sent, too. Nyyrikki
+accepts only Google's own endpoints, as `gcloud` writes them:
+`https://sts.googleapis.com/v1/token`,
+`https://sts.googleapis.com/v1/introspect`,
+`https://iamcredentials.googleapis.com/v1/…:generateAccessToken`,
+`https://oauth2.googleapis.com/token` and the universe domain
+`googleapis.com`. A file that names a regional or mTLS endpoint, another
+universe or anything else is refused.
+
+`HTTPS_PROXY`, `NO_PROXY`, `SSL_CERT_FILE` and `SSL_CERT_DIR` work as
+they do for any Go program, and Nyyrikki doesn't refuse them. A proxy
+sees only TLS to Google. A root certificate you add is one Nyyrikki
+trusts for those calls: with a proxy that uses it, the proxy reads the
+access token and the data keys.
+
 ## 5. Check it
 
 At start, Nyyrikki reads each target's credential file and logs an error

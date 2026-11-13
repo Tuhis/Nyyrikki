@@ -181,8 +181,8 @@ func newEnvWith(t *testing.T, f *sopstest.Fake, credsFile string) *env {
 		Limits:        Limits{DefaultTimeout: 10 * time.Second, MaxTimeout: 20 * time.Second, MaxOutput: 1 << 20},
 		Audit:         e.audit,
 		Logger:        slog.New(slog.NewTextHandler(e.log, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		ClientOptions: f.ClientOptions(),
-		Getenv:        func(string) string { return "" },
+		ClientOptions: f.ClientOptions(), TokenHTTPClient: f.TokenHTTPClient(),
+		Getenv: func(string) string { return "" },
 	})
 	if err != nil {
 		t.Fatal(err)
