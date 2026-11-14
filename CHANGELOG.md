@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0](https://github.com/Tuhis/Nyyrikki/compare/v0.5.0...v0.6.0) (2026-11-14)
+
+
+### Features
+
+* **deploy:** licence notices in the image and the CLI release (docs/09 PB2) ([#52](https://github.com/Tuhis/Nyyrikki/issues/52)) ([e799d69](https://github.com/Tuhis/Nyyrikki/commit/e799d69b32efc610b73ee0ef47280fa5db2eb436))
+* **deploy:** local quickstart on kind with a real Telegram bot (docs/09 PB5) ([#56](https://github.com/Tuhis/Nyyrikki/issues/56)) ([7f8e64f](https://github.com/Tuhis/Nyyrikki/commit/7f8e64f4ed46a97713212d05f30d71fef9f4d302))
+* SOPS files encrypted with Google Cloud KMS as a third target type (R14, docs/10 SO1–SO5) ([#75](https://github.com/Tuhis/Nyyrikki/issues/75)) ([940a833](https://github.com/Tuhis/Nyyrikki/commit/940a833ed0bb18a194cfa9caae9328d3433dc255))
+
+
+### Bug Fixes
+
+* **ci:** build go tool covdata before the coverage gate's test run ([#57](https://github.com/Tuhis/Nyyrikki/issues/57)) ([5458bde](https://github.com/Tuhis/Nyyrikki/commit/5458bde4d96e6d92fa2c138fab7c6fe9234f078a))
+* **test:** servertest starts again on another port when its free port was taken ([#62](https://github.com/Tuhis/Nyyrikki/issues/62)) ([fc2a68a](https://github.com/Tuhis/Nyyrikki/commit/fc2a68a59bb72cbd7403cb858f28a426c9f76cb9))
+
 ## [0.5.0](https://github.com/Tuhis/Nyyrikki/compare/v0.4.0...v0.5.0) (2026-11-01)
 
 
