@@ -17,8 +17,8 @@ CLI, with each escalation approved by a human on Telegram.
 
 An agent connects to Nyyrikki as an MCP server, or calls its command-line
 client from a shell, and asks it to do things the agent can't do itself,
-such as deleting a pod with `kubectl` or running a command on a server
-over SSH. Nyyrikki passes the agent's request through to the target
+such as deleting a pod with `kubectl`, running a command on a server
+over SSH or decrypting a SOPS file. Nyyrikki passes the agent's request through to the target
 system, using credentials that only Nyyrikki holds. Nothing privileged
 runs without a person's approval. The agent can ask for one request to be
 approved, or ask for a short window (up to 30 minutes) on one or more
@@ -49,6 +49,7 @@ flowchart LR
     subgraph Targets
         K8S["Kubernetes<br/>impersonating you"]
         SSH["SSH hosts<br/>an account per human"]
+        SOPS["SOPS files<br/>Google Cloud KMS"]
     end
     A -- "request + reason" --> N
     K -. "signs the agent in" .-> A
@@ -57,6 +58,7 @@ flowchart LR
     T -- "Approve / Deny" --> N
     N -- "runs exactly that, as you" --> K8S
     N --> SSH
+    N --> SOPS
 ```
 
 1. The agent signs in once, through an OAuth device or browser flow that
@@ -105,6 +107,11 @@ Answer by: 12:05:00 UTC
 - **SSH hosts**, enrolled with one command on the host and one tap on
   Telegram, trusted through a host CA that rotates without visiting
   every host.
+- **SOPS files** encrypted with Google Cloud KMS: decrypting, changing
+  one value or encrypting a new file, done inside Nyyrikki, so neither
+  the file's data key nor the Google credential reaches the agent.
+  Cloud KMS can't act as a person, so Google's log shows Nyyrikki and a
+  reason naming the run.
 - **MCP and CLI as equal clients** of one API: the CLI lets an agent pipe
   output through its shell, and MCP harnesses sign in with their own
   OAuth flow.

@@ -307,3 +307,47 @@ the doc.
   processes exec it (golang/go#22315). Build it first with
   `go tool -n covdata`. ([docs/09](09-public-release.md) §10,
   `scripts/gates.sh`)
+- **The SOPS library takes its Cloud KMS endpoint from the
+  environment, whatever credential you hand it.** `gcpkms.MasterKey`
+  reads `SOPS_GCP_KMS_ENDPOINT` and `SOPS_GCP_KMS_UNIVERSE_DOMAIN` on
+  every call, even with a token source set, and sends the request, and
+  the access token, there, after every option it was given, so no
+  option overrides them. The Google client under it reads
+  `GOOGLE_CLOUD_UNIVERSE_DOMAIN` and the `GOOGLE_API_USE_MTLS…` and
+  `GOOGLE_API_USE_CLIENT_CERTIFICATE` variables. `nyyrikkid` refuses to
+  start with any of them set. ([docs/10](10-sops-target.md) M16, `internal/sopstarget`)
+- **Checking a JSON file through a map, then handing the bytes to a
+  library that decodes them into a struct, checks different fields.**
+  `encoding/json` matches a struct field whatever the key's letter case
+  (`Token_URI`, and `ſ` for `s`), and the last of two wins; a map lookup
+  is exact. Refuse names that aren't in the form you look up.
+  ([docs/10](10-sops-target.md) D6, `internal/sopstarget/creds.go`)
+- **SOPS goes on to the next key after a key service error, and reports
+  failures only as text.** A key service that refuses a key hasn't
+  stopped the run: keep a record and a latch, and check them when the
+  library returns. ([docs/10](10-sops-target.md) M15, D5)
+- **SOPS's MAC error prints hashes of the file's plaintext.** No error
+  of the library's may reach an agent, a log or the audit record; map
+  its exit code to a fixed word instead.
+  ([docs/10](10-sops-target.md) M5, D9)
+- **SOPS's key group lookup and `Truncate` panic on some inputs** (a
+  path through a scalar is a failed type assertion). Every call into
+  the library on an agent's file runs under `recover`.
+  ([docs/10](10-sops-target.md) §10, `internal/sopstarget`)
+- **Importing the SOPS library runs its `audit` package's `init`**,
+  which reads `/etc/sops/audit.yaml`, panics if it doesn't parse and
+  connects to the PostgreSQL servers it names. Keep that file out of
+  the image. ([docs/10](10-sops-target.md) M17)
+- **The `sops` program reads a file's type from its name**: `secret.env`
+  is dotenv, `secret.dotenv` is binary. And `mac_only_encrypted` can be
+  set only from a `.sops.yaml`, not by a flag.
+  ([docs/10](10-sops-target.md) §10, `internal/sopstarget` tests)
+- **Linking the SOPS library into a test binary adds about 60 MB with
+  the race detector, and building a program inside a test run adds its
+  whole compile to the run's disk peak.** CI's runners ran out of disk.
+  Keep the library out of test binaries that don't need it, and build
+  helper programs in a step of their own.
+  ([docs/10](10-sops-target.md) §10, `scripts/gates.sh`)
+- **`go-licenses save` copies an MPL-2.0 module's whole source**, not
+  only its licence text: about 5 MB for SOPS and the Vault client.
+  ([docs/10](10-sops-target.md) M18)

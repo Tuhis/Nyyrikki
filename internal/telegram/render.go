@@ -210,6 +210,9 @@ func renderRun(p approval.RunPrompt) string {
 	if p.SSH != nil {
 		return renderSSHRun(p)
 	}
+	if p.SOPS != nil {
+		return renderSOPSRun(p)
+	}
 	var sb strings.Builder
 	sb.WriteString("<b>Run request</b> on ")
 	sb.WriteString(code(p.Target))
@@ -270,6 +273,61 @@ func renderSSHRun(p approval.RunPrompt) string {
 	return sb.String()
 }
 
+// Fixed texts of docs/10 D8, one definition each.
+const (
+	sopsFileClaim  = "File (agent's claim):"
+	sopsFileSays   = "The file says:"
+	sopsElevation  = "decrypts and changes any file encrypted with:"
+	sopsKeyHeading = "KMS key:"
+)
+
+// renderSOPSRun renders a one-off prompt for a SOPS target (docs/10 D8,
+// §5.3). It leads with what is asked, in Nyyrikki's own wording, then
+// says which file: its name, which is the agent's claim and is marked
+// so, and the file's own cleartext values, each on a line of its own
+// inside <pre>, where no value can start another line of the message.
+// The file itself is never shown, only its size and hash, and an
+// encrypt shows no value at all.
+func renderSOPSRun(p approval.RunPrompt) string {
+	s := p.SOPS
+	var sb strings.Builder
+	sb.WriteString("<b>Run request</b> on ")
+	sb.WriteString(code(p.Target))
+	sb.WriteString("\n<b>")
+	sb.WriteString(show(s.Asks, false))
+	sb.WriteString("</b>\n<b>" + escapeHTML(sopsFileClaim) + "</b> ")
+	sb.WriteString(code(s.FileName))
+	sb.WriteString("\n")
+	if s.ShowSays {
+		sb.WriteString("<b>" + sopsFileSays + "</b>")
+		if len(s.Says) > 0 {
+			sb.WriteString("\n<pre>")
+			for i, line := range s.Says {
+				if i > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(show(line, false))
+			}
+			sb.WriteString("</pre>\n")
+		} else {
+			sb.WriteString(" <i>" + show(s.SaysNote, false) + "</i>\n")
+		}
+	}
+	renderRunAs(&sb, p.RunAs)
+	for _, k := range s.KMSKeys {
+		sb.WriteString("<b>" + sopsKeyHeading + "</b> " + code(k) + "\n")
+	}
+	renderAgent(&sb, p.Agent)
+	sb.WriteString("\n<b>Request:</b>\n<pre>")
+	sb.WriteString(show(p.Argv, false))
+	sb.WriteString("</pre>\n<b>File:</b> ")
+	sb.WriteString(code(p.Stdin))
+	sb.WriteString("\n\n")
+	renderReason(&sb, p.Reason)
+	sb.WriteString("\n<b>Answer by:</b> " + clock(p.ExpiresAt) + " UTC")
+	return sb.String()
+}
+
 // renderElevation renders the elevation prompt of docs/05 D7. Each SSH
 // target gets its own line, saying whether the window is one of root
 // there (docs/07 D12). Every target is listed, and each group the agent
@@ -286,8 +344,15 @@ func renderElevation(p approval.ElevationPrompt) string {
 		sb.WriteString("\n")
 	}
 	sb.WriteString("<b>Duration:</b> " + duration(p.Duration) + "\n")
-	if len(p.SSH) < len(p.Targets) {
+	if len(p.SSH)+len(p.SOPS) < len(p.Targets) {
 		renderRunAs(&sb, p.RunAs)
+	}
+	// docs/10 D8: a window on a SOPS target is a window on every file
+	// its keys protect.
+	for _, st := range p.SOPS {
+		sb.WriteString("<b>On</b> " + code(st.Target) + ": <b>" + sopsElevation + "</b> ")
+		codeList(&sb, st.Keys)
+		sb.WriteString("\n")
 	}
 	for _, h := range p.SSH {
 		sb.WriteString("<b>On</b> " + code(h.Target) + ": " + code(h.Account) + " on " + code(h.Address))

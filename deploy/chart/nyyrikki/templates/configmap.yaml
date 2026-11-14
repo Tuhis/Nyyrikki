@@ -14,6 +14,16 @@
 {{- $t := dict "name" .name "description" (.description | default "") "humans" (list $.Values.human.id) "ssh" $s -}}
 {{- if .clients }}{{- $_ := set $t "clients" .clients -}}{{- end -}}
 {{- $targets = append $targets $t -}}
+{{- else if .sops -}}
+{{- /* A SOPS target (docs/10 §5.4): its Google credential is a Secret mounted at a fixed path, and keys are the only Cloud KMS keys it uses. */ -}}
+{{- $g := .sops.gcpKMS | default dict -}}
+{{- $_ := required (printf "targets[%s].sops.gcpKMS.secretName is required" .name) $g.secretName -}}
+{{- $s := dict "gcp_kms" (dict
+  "credentials_file" (printf "/etc/nyyrikki/gcp/%s/credentials.json" .name)
+  "keys" (required (printf "targets[%s].sops.gcpKMS.keys is required" .name) $g.keys)) -}}
+{{- $t := dict "name" .name "description" (.description | default "") "humans" (list $.Values.human.id) "sops" $s -}}
+{{- if .clients }}{{- $_ := set $t "clients" .clients -}}{{- end -}}
+{{- $targets = append $targets $t -}}
 {{- else -}}
 {{- $k := dict -}}
 {{- if .inCluster -}}{{- $_ := set $k "in_cluster" true -}}

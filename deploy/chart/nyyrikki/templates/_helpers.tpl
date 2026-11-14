@@ -20,6 +20,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if $in }}true{{ end -}}
 {{- end -}}
 
+{{/* "true" when any target is a SOPS target (docs/10 §5.4). */}}
+{{- define "nyyrikki.hasSOPS" -}}
+{{- $sops := false -}}
+{{- range .Values.targets }}{{ if .sops }}{{ $sops = true }}{{ end }}{{ end -}}
+{{- $sops -}}
+{{- end -}}
+
 {{/* "true" when any target is an SSH target (docs/07 §5.5). */}}
 {{- define "nyyrikki.hasSSH" -}}
 {{- $ssh := false -}}

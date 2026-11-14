@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -91,22 +92,83 @@ type Target struct {
 	Kubernetes  KubeTarget `yaml:"kubernetes"`
 	// SSH is set for an SSH target, instead of Kubernetes (docs/07 D13).
 	SSH *SSHTarget `yaml:"ssh"`
+	// SOPS is set for a SOPS target, instead of Kubernetes or SSH
+	// (docs/10 D1).
+	SOPS *SOPSTarget `yaml:"sops"`
 }
 
-// Type is the target's type (codes.TypeKubernetes or codes.TypeSSH).
+// Type is the target's type (codes.TypeKubernetes, codes.TypeSSH or
+// codes.TypeSOPS).
 func (t *Target) Type() string {
-	if t.SSH != nil {
+	switch {
+	case t.SSH != nil:
 		return typeSSH
+	case t.SOPS != nil:
+		return typeSOPS
 	}
 	return typeKubernetes
 }
 
-// The values of codes.TypeKubernetes and codes.TypeSSH; config doesn't
-// import codes, and TestTypesMatchCodes keeps them equal.
+// The values of codes.TypeKubernetes, codes.TypeSSH and codes.TypeSOPS;
+// config doesn't import codes, and TestTypesMatchCodes keeps them equal.
 const (
 	typeKubernetes = "kubernetes"
 	typeSSH        = "ssh"
+	typeSOPS       = "sops"
 )
+
+// SOPSTarget says which Google credential a SOPS target uses and which
+// Cloud KMS keys it may use it on (docs/10 D1, §5.4).
+type SOPSTarget struct {
+	GCPKMS SOPSGCPKMS `yaml:"gcp_kms"`
+}
+
+// SOPSGCPKMS is a SOPS target's Google Cloud KMS block (docs/10 §5.4).
+type SOPSGCPKMS struct {
+	// CredentialsFile is the target's Google credential, a mounted
+	// Secret (docs/10 D6): a Workload Identity Federation configuration
+	// or a service account key. It is read on each use.
+	CredentialsFile string `yaml:"credentials_file"`
+	// Keys are the only CryptoKeys the target uses, as full resource
+	// names (docs/10 D4, D5).
+	Keys []string `yaml:"keys"`
+}
+
+// SOPSRunAs is who a run on a SOPS target runs as, for human: Nyyrikki's
+// own Google credential, since Cloud KMS can't act as a human (docs/10
+// OD3, D8). It is the one definition of the text.
+func SOPSRunAs(human string) string { return "Nyyrikki's Google credential, for " + human }
+
+// kmsKeyName is a Cloud KMS CryptoKey resource name: no version, no
+// query, no path segment of dots, and no character that could start
+// another name (docs/10 §5.4).
+var kmsKeyName = regexp.MustCompile(`^projects/[A-Za-z0-9][A-Za-z0-9_.:-]{0,62}/locations/[a-z0-9-]{1,63}/keyRings/[A-Za-z0-9_-]{1,63}/cryptoKeys/[A-Za-z0-9_-]{1,63}$`)
+
+// IsKMSKeyName reports whether s is a full Cloud KMS CryptoKey resource
+// name (docs/10 §5.4).
+func IsKMSKeyName(s string) bool { return kmsKeyName.MatchString(s) }
+
+// validateSOPSTarget reports what is wrong with a target's sops block.
+func validateSOPSTarget(s *SOPSTarget) []error {
+	var errs []error
+	if !filepath.IsAbs(s.GCPKMS.CredentialsFile) {
+		errs = append(errs, errors.New("gcp_kms.credentials_file is required and must be an absolute path"))
+	}
+	if len(s.GCPKMS.Keys) == 0 {
+		errs = append(errs, errors.New("gcp_kms.keys is required"))
+	}
+	seen := map[string]bool{}
+	for _, k := range s.GCPKMS.Keys {
+		if !IsKMSKeyName(k) {
+			errs = append(errs, fmt.Errorf("gcp_kms.keys: %q is not a CryptoKey resource name (projects/…/locations/…/keyRings/…/cryptoKeys/…)", k))
+		}
+		if seen[k] {
+			errs = append(errs, fmt.Errorf("gcp_kms.keys names %q twice", k))
+		}
+		seen[k] = true
+	}
+	return errs
+}
 
 // Group is a named set of targets of any type (docs/08 D11). It only
 // names the targets of an elevation: elevate expands it into its members
@@ -429,6 +491,15 @@ func (c *Config) Validate() error {
 			if !humans[h] {
 				bad("targets[%d].humans names unknown human %q", i, h)
 			}
+		}
+		if t.SOPS != nil {
+			if t.Kubernetes != (KubeTarget{}) || t.SSH != nil {
+				bad("targets[%d] has sops and another target type", i)
+			}
+			for _, e := range validateSOPSTarget(t.SOPS) {
+				bad("targets[%d].sops: %v", i, e)
+			}
+			continue
 		}
 		if t.SSH != nil {
 			if t.Kubernetes != (KubeTarget{}) {

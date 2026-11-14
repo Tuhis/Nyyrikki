@@ -1,0 +1,18 @@
+# Used with test-values.yaml by the chart gate: a SOPS target with
+# Workload Identity Federation, so its mounts are rendered and validated
+# too.
+targets:
+  - name: this-cluster
+    inCluster: true
+  - name: lab
+    server: https://lab.example.com:6443
+    secretName: nyyrikki-target-lab
+  - name: sops-prod
+    description: Flux secrets of the prod cluster
+    sops:
+      gcpKMS:
+        secretName: nyyrikki-gcp-sops-prod
+        keys:
+          - projects/acme/locations/europe-north1/keyRings/flux/cryptoKeys/prod
+gcp:
+  workloadIdentityAudience: https://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/nyyrikki/providers/cluster

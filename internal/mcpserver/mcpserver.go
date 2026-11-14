@@ -23,6 +23,7 @@ import (
 	"github.com/Tuhis/Nyyrikki/internal/config"
 	"github.com/Tuhis/Nyyrikki/internal/decision"
 	"github.com/Tuhis/Nyyrikki/internal/kubectl/request"
+	"github.com/Tuhis/Nyyrikki/internal/sopstarget"
 	"github.com/Tuhis/Nyyrikki/internal/sshtarget"
 	"github.com/Tuhis/Nyyrikki/internal/target"
 )
@@ -69,7 +70,7 @@ func New(d Deps) *Server {
 		// (docs/01 D4).
 		Capabilities: &mcp.ServerCapabilities{},
 		Instructions: "Nyyrikki runs privileged requests on target systems after a human approves them on Telegram: " +
-			"kubectl requests on Kubernetes targets, shell commands on SSH hosts. " +
+			"kubectl requests on Kubernetes targets, shell commands on SSH hosts, SOPS operations on files encrypted with Google Cloud KMS. " +
 			"Call list_targets first; its 'type' says how run reads 'args'. run waits for approval. " +
 			"elevate asks for a window of up to 30 minutes; pass its handle as 'elevation' to run without asking again.",
 	})
@@ -85,7 +86,10 @@ func New(d Deps) *Server {
 			"On a kubernetes target, 'args' are the kubectl arguments without 'kubectl', and 'stdin' is sent to commands that read it ('-f -', or exec/attach with -i). " +
 			"On an ssh target, 'args' are joined with single spaces into one command string, as ssh does, which the host's shell runs. " +
 			"The approver never sees stdin, only its size and hash, and will deny a command that runs what it reads (sh, bash -s, python3 -): " +
-			"put anything the approver must read, such as a script, in the command itself, for example as a heredoc.",
+			"put anything the approver must read, such as a script, in the command itself, for example as a heredoc. " +
+			"On a sops target, 'args' are a sops command line without 'sops': decrypt [--extract PATH] [--output-type T], set PATH VALUE, unset PATH, " +
+			"or encrypt --gcp-kms KEY [--encrypted-regex R]; each needs --input-type (yaml, json or dotenv) and --filename-override with the file's path in your repository, " +
+			"which the approver is shown as your claim. 'stdin' is the file itself; the result comes back on stdout and nothing is written anywhere.",
 	}, s.run)
 	mcp.AddTool(s.mcp, &mcp.Tool{
 		Name: api.ToolElevate,
@@ -258,7 +262,11 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 	// target, or one this agent may not see, is read as kubectl and the
 	// decision point refuses it: both answer the same (docs/02 D5).
 	t, _ := s.d.Config.TargetByName(in.Target)
-	isSSH := t != nil && t.Visible(p.Human, p.ClientID) && t.Type() == codes.TypeSSH
+	typ := codes.TypeKubernetes
+	if t != nil && t.Visible(p.Human, p.ClientID) {
+		typ = t.Type()
+	}
+	isSSH := typ == codes.TypeSSH
 	timeout, err := validateRun(in, isSSH)
 	if err != nil {
 		r, b := errOut(s.invalid(ctx, p, []string{in.Target}, err))
@@ -268,7 +276,7 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 	if in.Stdin != "" {
 		stdin = []byte(in.Stdin)
 	}
-	c, err := buildRequest(isSSH, in.Args, stdin, in.Interactive)
+	c, err := buildRequest(typ, t, in.Args, stdin, in.Interactive)
 	if err != nil {
 		r, b := errOut(s.invalid(ctx, p, []string{in.Target}, err))
 		return r, api.RunOut{Error: b}, nil
@@ -331,9 +339,14 @@ func (s *Server) run(ctx context.Context, req *mcp.CallToolRequest, in api.RunIn
 
 // buildRequest parses args for the target's type, once, before the
 // decision (CODE-REVIEW.md: what is forwarded is what was approved).
-func buildRequest(ssh bool, args []string, stdin []byte, interactive bool) (target.Request, error) {
-	if ssh {
+func buildRequest(typ string, t *config.Target, args []string, stdin []byte, interactive bool) (target.Request, error) {
+	switch typ {
+	case codes.TypeSSH:
 		return sshtarget.Build(args, stdin, interactive)
+	case codes.TypeSOPS:
+		// The file is checked here, without any key (docs/10 D4): a
+		// request nobody could run never reaches the approver.
+		return sopstarget.Parse(args, stdin, interactive, t.SOPS.GCPKMS.Keys)
 	}
 	c, err := request.Parse(args, stdin, interactive)
 	if err != nil {

@@ -52,8 +52,11 @@ jobs:
           for b in bin/*; do
             file "$b" | grep -q "statically linked" || { echo "$b is not static"; exit 1; }
           done
+      # -p 2: at most two packages are built and linked at a time. The
+      # race test binaries are 100 to 230 MB each since the SOPS library
+      # (docs/10), and one link per CPU ran the runners out of disk (#75).
       - name: Test
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -p 2 ./...
 
   gates:
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest') || vars.RUNNER_LABEL || 'ubuntu-latest' }}

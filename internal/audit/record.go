@@ -52,6 +52,10 @@ type Record struct {
 	// CertSerial is the serial of the SSH certificate a run was issued
 	// (docs/07 D5), in decimal; its key ID is "nyyrikki:" and the run ID.
 	CertSerial string `json:"cert_serial,omitempty"`
+	// KMSKeys are the Cloud KMS keys a run on a SOPS target called, by
+	// resource name; on the record of one call, the key of that call
+	// (docs/10 D10).
+	KMSKeys []string `json:"kms_keys,omitempty"`
 	// HostKey is the SHA256 fingerprint of an enrolled host's key
 	// (docs/08 D7).
 	HostKey string `json:"host_key,omitempty"`

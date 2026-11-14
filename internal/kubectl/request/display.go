@@ -120,49 +120,9 @@ func (c *Canonical) manifestStdin() bool {
 	return ok && len(v) == 1 && v[0] == "-"
 }
 
-// safeShellChars are the characters that need no quoting (docs/04 §5.2).
-func safeShellRune(r rune) bool {
-	return r < utf8.RuneSelf && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
-		strings.ContainsRune("@%+=:,./_-", r))
-}
-
-// quote shell-quotes s for display, escaping invisible characters.
-func quote(s string) string {
-	needs := s == ""
-	for _, r := range s {
-		if !safeShellRune(r) {
-			needs = true
-			break
-		}
-	}
-	if !needs {
-		return s
-	}
-	var b strings.Builder
-	b.WriteByte('\'')
-	run := 0 // consecutive combining marks
-	for i := 0; i < len(s); {
-		r, size := utf8.DecodeRuneInString(s[i:])
-		if isCombining(r) {
-			run++
-		} else {
-			run = 0
-		}
-		switch {
-		case r == utf8.RuneError && size == 1:
-			fmt.Fprintf(&b, `\x{%02x}`, s[i])
-		case r == '\'':
-			b.WriteString(`'\''`)
-		case invisible(r) || run > maxCombiningRun:
-			fmt.Fprintf(&b, `\u{%x}`, r)
-		default:
-			b.WriteRune(r)
-		}
-		i += size
-	}
-	b.WriteByte('\'')
-	return b.String()
-}
+// quote shell-quotes s for display, escaping invisible characters
+// (docs/04 §5.2).
+func quote(s string) string { return textsafe.Quote(s) }
 
 func invisible(r rune) bool { return textsafe.Invisible(r) }
 

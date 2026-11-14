@@ -9,7 +9,7 @@ import (
 )
 
 func TestTypesMatchCodes(t *testing.T) {
-	if typeKubernetes != codes.TypeKubernetes || typeSSH != codes.TypeSSH {
+	if typeKubernetes != codes.TypeKubernetes || typeSSH != codes.TypeSSH || typeSOPS != codes.TypeSOPS {
 		t.Fatal("config's target types differ from codes'")
 	}
 }

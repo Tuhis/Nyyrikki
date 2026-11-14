@@ -61,9 +61,19 @@ spec:
             {{- if .Values.trustedCA.configMap }}
             - {name: trusted-ca, mountPath: /etc/nyyrikki/trusted-ca, readOnly: true}
             {{- end }}
-            {{- range .Values.targets }}{{ if not (or .inCluster .ssh) }}
+            {{- range .Values.targets }}{{ if not (or .inCluster .ssh .sops) }}
             - {name: target-{{ .name }}, mountPath: /etc/nyyrikki/targets/{{ .name }}, readOnly: true}
             {{- end }}{{ end }}
+            {{- range .Values.targets }}{{ if .sops }}
+            # A SOPS target's Google credential (docs/10 D6), read on
+            # each use, so a replaced Secret applies without a rollout.
+            - {name: gcp-{{ .name }}, mountPath: /etc/nyyrikki/gcp/{{ .name }}, readOnly: true}
+            {{- end }}{{ end }}
+            {{- if and (eq (include "nyyrikki.hasSOPS" .) "true") .Values.gcp.workloadIdentityAudience }}
+            # The token Workload Identity Federation exchanges (docs/10
+            # D6): for Google's audience only, so it opens nothing here.
+            - {name: gcp-token, mountPath: /var/run/secrets/nyyrikki/gcp, readOnly: true}
+            {{- end }}
             {{- if eq (include "nyyrikki.hasSSH" .) "true" }}
             # The SSH CA keys (docs/08 D1), read on each use, so a rotated
             # Secret applies without a rollout.
@@ -112,7 +122,23 @@ spec:
             defaultMode: 0400
             {{- end }}
         {{- end }}
-        {{- range .Values.targets }}{{ if not (or .inCluster .ssh) }}
+        {{- range .Values.targets }}{{ if .sops }}
+        - name: gcp-{{ .name }}
+          secret:
+            secretName: {{ required (printf "targets[%s].sops.gcpKMS.secretName is required" .name) (dig "gcpKMS" "secretName" "" .sops) }}
+            defaultMode: 0400
+            items: [{key: credentials.json, path: credentials.json}]
+        {{- end }}{{ end }}
+        {{- if and (eq (include "nyyrikki.hasSOPS" .) "true") .Values.gcp.workloadIdentityAudience }}
+        - name: gcp-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ .Values.gcp.workloadIdentityAudience | quote }}
+                  expirationSeconds: 3600
+                  path: token
+        {{- end }}
+        {{- range .Values.targets }}{{ if not (or .inCluster .ssh .sops) }}
         - name: target-{{ .name }}
           secret:
             secretName: {{ required (printf "targets[%s].secretName is required" .name) .secretName }}

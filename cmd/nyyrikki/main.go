@@ -40,10 +40,15 @@ const usage = `usage:
   nyyrikki targets
   nyyrikki run [--reason TEXT] [--elevation HANDLE] [--timeout D] [-i] [-t] TARGET -- KUBECTL-ARGS...
   nyyrikki run [--reason TEXT] [--elevation HANDLE] [--timeout D] [-i] [-t] SSH-TARGET [-- COMMAND...]
+  nyyrikki run [--reason TEXT] [--elevation HANDLE] [--timeout D] -i SOPS-TARGET -- SOPS-ARGS... < FILE
 
   On an SSH target, stdin is sent only with -i, and the approver sees only its
   size and hash: put a script the approver must read in the command (a heredoc).
   -t with no command opens a login shell.
+  On a sops target, stdin (with -i) is the file and stdout the result:
+  decrypt [--extract PATH] [--output-type T], set PATH VALUE, unset PATH or
+  encrypt --gcp-kms KEY, each with --input-type yaml|json|dotenv and
+  --filename-override NAME, the file's path, shown to the approver as your claim.
   ssh is run on an SSH target only: with no command on a terminal it is
   run -t SSH-TARGET (a login shell), otherwise run SSH-TARGET -- COMMAND...
   elevate takes group names from targets too, and covers their members.
