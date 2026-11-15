@@ -342,6 +342,12 @@ the doc.
   is dotenv, `secret.dotenv` is binary. And `mac_only_encrypted` can be
   set only from a `.sops.yaml`, not by a flag.
   ([docs/10](10-sops-target.md) §10, `internal/sopstarget` tests)
+- **Google's audit log holds the request reason base64-encoded**, in a
+  short binary envelope with the text in it twice, not as the text of
+  the `X-Goog-Request-Reason` header. `base64 -d | strings` reads it.
+  And Cloud KMS's Data Access logs are off until enabled: calls made
+  before that leave no entry at all.
+  ([docs/10](10-sops-target.md) M10, M11, measured 2026-11-15)
 - **Linking the SOPS library into a test binary adds about 60 MB with
   the race detector, and building a program inside a test run adds its
   whole compile to the run's disk peak.** CI's runners ran out of disk.

@@ -7,12 +7,14 @@ changing or removing one value, or encrypting a new file
 does the work with its own Google credential and returns the result. The
 file's data key and the credential never reach the agent.
 
-> **Not yet verified against Google.** Everything below is tested
-> against a fake Cloud KMS and a fake token service, in the same process
-> as the tests. Workload Identity Federation from a real cluster and a
-> real Cloud KMS call are the manual check that is still open
-> (docs/10 G9, M12). Read the `gcloud` commands as the intended steps,
-> and tell the maintainer where they are wrong.
+> **Checked against Google once, by hand.** On 2026-11-14 and
+> 2026-11-15 the federation steps below (1, 2, 3a with
+> `--jwk-json-path`, 4 and 5) were followed on one cluster, and an
+> encrypt and a decrypt ran against the real Cloud KMS (docs/10 G9,
+> M12). The service account key of 3b and a provider that reads the
+> cluster's issuer itself were not tried. The automated tests use a fake
+> Cloud KMS and a fake token service. Tell the maintainer where a step
+> is wrong.
 
 ## What you decide first
 
@@ -57,10 +59,35 @@ Cloud KMS's decrypt and encrypt calls are Data Access logs, which are
 written only once you enable them: in the console, **IAM & Admin → Audit
 Logs → Cloud Key Management Service (KMS) API → Data Read**. Without
 this, Google keeps no record of the calls, and the reason Nyyrikki sends
-goes nowhere.
+goes nowhere. Calls made before it is on are never logged.
+
+From a shell, the same setting is one entry in the project's IAM
+policy (this replaces an entry the project already has for Cloud KMS):
+
+```sh
+gcloud projects get-iam-policy PROJECT --format=json > policy.json
+jq '.auditConfigs = ((.auditConfigs // []) | map(select(.service != "cloudkms.googleapis.com")))
+    + [{"service":"cloudkms.googleapis.com","auditLogConfigs":[{"logType":"DATA_READ"}]}]' \
+  policy.json > policy.new.json
+gcloud projects set-iam-policy PROJECT policy.new.json
+```
 
 The reason is in each entry's
-`protoPayload.requestMetadata.requestAttributes.reason`.
+`protoPayload.requestMetadata.requestAttributes.reason`. Google stores
+it base64-encoded, inside a short binary envelope that holds the text
+twice, so decode it to read it:
+
+```sh
+gcloud logging read '
+  protoPayload.serviceName="cloudkms.googleapis.com"
+  AND protoPayload.authenticationInfo.principalEmail="nyyrikki-sops@PROJECT.iam.gserviceaccount.com"' \
+  --project PROJECT --limit 1 \
+  --format='value(protoPayload.requestMetadata.requestAttributes.reason)' \
+  | base64 -d 2>/dev/null | strings
+```
+
+With federation, the entry's `principalEmail` is the service account,
+and `serviceAccountDelegationInfo` names Nyyrikki's ServiceAccount.
 
 ## 3a. Workload Identity Federation
 
@@ -86,8 +113,16 @@ gcloud iam service-accounts add-iam-policy-binding \
 
 `ISSUER` is your cluster's ServiceAccount issuer
 (`kubectl get --raw /.well-known/openid-configuration`). If Google can't
-reach it, give the provider the cluster's keys instead, with
-`--jwk-json-path` and the output of `kubectl get --raw /openid/v1/jwks`.
+reach it, as with the default `https://kubernetes.default.svc.cluster.local`,
+give the provider the cluster's keys instead: add
+`--jwk-json-path jwks.json` to the provider command, with
+`kubectl get --raw /openid/v1/jwks > jwks.json`. Google then trusts
+those keys only. When the apiserver's signing key is replaced, give the
+provider the new ones (`providers update-oidc … --jwk-json-path`), or
+every run fails with `credentials_unavailable`.
+
+A pool stands for where the identities come from, so name it after the
+cluster if other workloads may use it later; its name can't be changed.
 
 Then make the credential configuration. It names the file the chart
 puts the pod's token in, and holds no secret:

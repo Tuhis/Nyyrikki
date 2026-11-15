@@ -1,7 +1,8 @@
 # R14 — SOPS target: files encrypted with Google Cloud KMS (docs/10)
 
-**Status**: implemented 2026-11-13 (§10), SO1–SO5; open: the manual
-check G9 and M12, against the real Cloud KMS. Drafted 2026-11-12. Owner decisions OD1 and OD2 taken the
+**Status**: implemented 2026-11-13 (§10), SO1–SO5; G9 and M12 checked
+against the real Cloud KMS on 2026-11-14 and 2026-11-15, except G9's
+denied request (§10). Drafted 2026-11-12. Owner decisions OD1 and OD2 taken the
 same day; OD3, OD5, OD6 and OD7 taken 2026-11-12 on the draft, OD4 on
 2026-11-13. Approved 2026-11-13, when the PR that added it (#74)
 merged. Status lives in
@@ -61,8 +62,8 @@ Google credential never leave Nyyrikki.
 Measured on 2026-11-12 with a Go probe on Go 1.26.8 against
 `github.com/getsops/sops/v3` v3.13.3 and `google.golang.org/api`
 v0.289.0, with a fake key service and a fake KMS HTTP server. Nothing
-here was run against the real Cloud KMS; M10–M12 say what is still to
-measure. SO4 turns M1–M8 and M15 into tests.
+here was run against the real Cloud KMS then; M10–M12 were measured
+against it on 2026-11-14 and 2026-11-15, as their rows say. SO4 turns M1–M8 and M15 into tests.
 
 | # | Claim | How | Result |
 |---|---|---|---|
@@ -75,9 +76,9 @@ measure. SO4 turns M1–M8 and M15 into tests.
 | M7 | `gcpkms.MasterKey` takes a token source and client options from the caller (`NewTokenSource`, `ClientOptions`, `UseRESTClient`). With a token source set it doesn't read `GOOGLE_CREDENTIALS` or `GOOGLE_OAUTH_ACCESS_TOKEN` | probe with `GOOGLE_OAUTH_ACCESS_TOKEN` set in the environment: the fake KMS saw the token source's token | Confirmed. D5, D6 |
 | M8 | `option.WithRequestReason` reaches the wire through SOPS's key source as the `X-Goog-Request-Reason` header (REST), or `x-goog-request-reason` metadata (gRPC) | probe: the fake KMS received `POST /v1/…/cryptoKeys/k:decrypt` with the header; read `transport/grpc/dial.go` | Confirmed. D7 |
 | M9 | Linking the SOPS library adds 106 modules to `nyyrikkid`, which has 97 today: the AWS, Azure, Vault and HuaweiCloud SDKs, age and PGP among them. Eleven are MPL-2.0 (`getsops/sops`, `hashicorp/vault/api` and nine `hashicorp/*` helpers), which docs/01 D14's allowlist doesn't hold. The probe binary is 64 MB | `go list -deps` on the probe and on `./cmd/nyyrikkid`; the first line of each module's licence file | Confirmed. OD5, OD6. `go-licenses` itself not yet run on them: SO1 |
-| M10 | Cloud Audit Logs record the request reason in `protoPayload.requestMetadata.requestAttributes.reason` | the field's definition in `google.golang.org/genproto` (`AttributeContext.Request.reason`: "used by security systems to associate auditing information with a request") | Field exists. **Not yet measured** that a KMS decrypt's log entry carries it: G9, manual |
-| M11 | Cloud KMS `Decrypt` and `Encrypt` are Data Access audit logs of type `DATA_READ`, which have to be enabled | [Cloud KMS audit logging](https://docs.cloud.google.com/kms/docs/audit-logging), read 2026-11-12 | Confirmed from the docs. That they are off by default is Google's general rule for Data Access logs, not re-read here: the setup doc says to enable them either way |
-| M12 | When a federated workload identity impersonates a service account, the audit log's `principalEmail` is the service account and `serviceAccountDelegationInfo` holds the federated subject | [IAM audit log examples](https://docs.cloud.google.com/iam/docs/audit-logging/examples-workload-identity), read 2026-11-12 | Confirmed from the docs. **Not yet measured**: Workload Identity Federation from a pod's projected ServiceAccount token, end to end. SO5 |
+| M10 | Cloud Audit Logs record the request reason in `protoPayload.requestMetadata.requestAttributes.reason` | the field's definition in `google.golang.org/genproto` (`AttributeContext.Request.reason`: "used by security systems to associate auditing information with a request") | Field exists. **Measured 2026-11-15** (revised from "not yet measured"): a KMS `Decrypt` entry carries the reason, but not as the text sent. The field holds base64 of a binary envelope with the text in it twice; `base64 -d \| strings` shows `nyyrikki run=… human=… covered_by=…`. Nyyrikki sends the header once, as text |
+| M11 | Cloud KMS `Decrypt` and `Encrypt` are Data Access audit logs of type `DATA_READ`, which have to be enabled | [Cloud KMS audit logging](https://docs.cloud.google.com/kms/docs/audit-logging), read 2026-11-12 | Confirmed from the docs. That they are off by default is Google's general rule for Data Access logs, not re-read here: the setup doc says to enable them either way. **Measured 2026-11-14 and 2026-11-15**: with no audit configuration on the project, two encrypts and two decrypts left no entry; with `DATA_READ` enabled for `cloudkms.googleapis.com`, a decrypt's entry has `permissionType: DATA_READ` |
+| M12 | When a federated workload identity impersonates a service account, the audit log's `principalEmail` is the service account and `serviceAccountDelegationInfo` holds the federated subject | [IAM audit log examples](https://docs.cloud.google.com/iam/docs/audit-logging/examples-workload-identity), read 2026-11-12 | Confirmed from the docs. **Measured 2026-11-14 and 2026-11-15** (revised from "not yet measured"), from a pod's projected ServiceAccount token on the owner's cluster, release 0.6.0: encrypt and decrypt succeed, `principalEmail` is the service account, and `serviceAccountDelegationInfo` holds `principal://iam.googleapis.com/projects/NUMBER/locations/global/workloadIdentityPools/POOL/subject/system:serviceaccount:NAMESPACE:SA`. The cluster's issuer is `https://kubernetes.default.svc.cluster.local`, which Google can't reach, so the provider was given the keys with `--jwk-json-path` |
 | M13 | SOPS's built-in key service (`keyservice.Server`, behind `NewLocalClient`) builds its Google key as `gcpkms.MasterKey{ResourceID: …}` with no token source and no client options, and calls `Decrypt()` without the caller's context. So it uses whatever credential the process environment gives (`GOOGLE_CREDENTIALS`, `GOOGLE_OAUTH_ACCESS_TOKEN`, then Application Default Credentials), can't add a request reason, can't use one credential per target, and can't be cut. It also serves every key type, and a Vault key's address comes from the file | read `keyservice/server.go` and `gcpkms/keysource.go` | Confirmed. D5: it can't be used as it is |
 | M14 | `sops decrypt` and `sops encrypt` have `--filename-override`, for a file read from stdin; `sops set` and `sops unset` don't, and take the file as their first argument | read `cmd/sops/main.go` | Confirmed. D2 |
 | M15 | SOPS tries every key of a key group in turn and treats a key service's error as "try the next key": `decryptKeyGroup` collects the errors, returns the first success, and reports the errors only together, as text, when every key failed | read `sops.go` (`decryptKeyGroup`, `decryptKey`), 2026-11-13 (review round 1 of #74) | Confirmed. D5, D9: an error from the wrapper doesn't by itself fail the run, and the reason a call failed can't be taken from SOPS's error |
@@ -353,10 +354,15 @@ can land with it.
   `ClientOptions`), which are outside the one package SOPS calls
   stable (`decrypt`). A SOPS release can change them; the tests of G3
   and G6 catch it at the Renovate PR.
-- **Workload Identity Federation from the owner's cluster** is not
-  measured (M12): Google has to be able to read the cluster issuer's
-  keys, or be given them. If it can't, the key file is the fallback.
-- **The request reason in a real log entry** is not measured (M10).
+- **Workload Identity Federation from the owner's cluster** works with
+  the cluster's keys given to the provider (M12, measured 2026-11-14;
+  this bullet said "not measured" before). Google can't read that
+  cluster's issuer, so the keys have to be given again whenever the
+  apiserver's signing key is replaced; until then every run fails with
+  `credentials_unavailable`.
+- **The request reason in a real log entry** is there, base64-encoded
+  in an envelope (M10, measured 2026-11-15; "not measured" before).
+  Someone reading Google's log has to decode it.
 - **Files that also list age, PGP or another cloud's keys are refused**
   (D4), though their Google key alone could decrypt them. Accepting them
   means making sure no other key source is ever tried.
@@ -415,16 +421,20 @@ what was built and where each goal is tested.
 | G6 | `sopstarget`: `TestDecrypt` (reason, token, `kms_keys`), `TestCut`; `server`: `TestSOPSElevationAndCLI` |
 | G7 | `sopstarget`: `TestValidateCredentials`, `TestFederationAndReload`, `TestDependencyFailures`, `TestNewRunner`; `server`: `TestSOPSCredentialUnavailable`; `chart`: `TestChartSOPSTarget` |
 | G8 | the licence gate and its canary; `scripts/pinned-licenses` |
-| G9 | **open**: manual, by the owner |
+| G9 | manual, on the owner's cluster, 2026-11-14 and 2026-11-15 (was open): through `/mcp` on release 0.6.0 with federation, an `encrypt` and a `decrypt` of a file made for the check, each approved on a real phone, returned the encrypted file and the plaintext; Google's Data Access log has the `Decrypt` with the service account, the federated subject and the run's reason (M10, M12). **Still open**: the denied request. That a denial makes no KMS call is tested against the fake only (G2) |
 
 **What was not built or not measured.**
 
 - No end-to-end test on kind: Cloud KMS has no emulator to put in the
   cluster, and the fake is in-process. The integration tests run the
   whole path from the MCP call to the fake KMS in one process.
-- Nothing was run against Google: G9 and M12 are open, and
-  `docs/setup/sops.md` says so at its top. The federation exchange is
-  tested against a fake token service only (M19).
+- Against Google (revised 2026-11-15; before, nothing had been run
+  against it): G9 and M12 were checked by hand on the owner's cluster,
+  with federation. Not run against Google: a denied request, `set` and
+  `unset`, a file written by the `sops` program, a service account key,
+  and a provider that reads the cluster's issuer itself. No automated
+  test reaches Google; the federation exchange in the suite is against
+  a fake token service (M19).
 - Per-human service accounts (OD3) and binding a file's name to the
   file (§9) are not built.
 
