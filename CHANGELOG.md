@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/Tuhis/Nyyrikki/compare/v0.6.0...v0.7.0) (2026-11-16)
+
+
+### Features
+
+* **gateway:** tell agents to use their own access before Nyyrikki ([#76](https://github.com/Tuhis/Nyyrikki/issues/76)) ([bdaf294](https://github.com/Tuhis/Nyyrikki/commit/bdaf294a20460e206534c49c992e827061e60343))
+
 ## [0.6.0](https://github.com/Tuhis/Nyyrikki/compare/v0.5.0...v0.6.0) (2026-11-14)
 
 
