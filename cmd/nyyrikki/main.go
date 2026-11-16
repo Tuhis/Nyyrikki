@@ -42,6 +42,9 @@ const usage = `usage:
   nyyrikki run [--reason TEXT] [--elevation HANDLE] [--timeout D] [-i] [-t] SSH-TARGET [-- COMMAND...]
   nyyrikki run [--reason TEXT] [--elevation HANDLE] [--timeout D] -i SOPS-TARGET -- SOPS-ARGS... < FILE
 
+  Use nyyrikki only for what your own access can't do: every request waits for
+  a human. With read-only Kubernetes access, for example, run kubectl get,
+  describe and logs yourself, and nyyrikki run only for apply, delete, exec...
   On an SSH target, stdin is sent only with -i, and the approver sees only its
   size and hash: put a script the approver must read in the command (a heredoc).
   -t with no command opens a login shell.
