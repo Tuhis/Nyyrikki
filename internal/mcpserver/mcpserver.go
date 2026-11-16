@@ -71,6 +71,10 @@ func New(d Deps) *Server {
 		Capabilities: &mcp.ServerCapabilities{},
 		Instructions: "Nyyrikki runs privileged requests on target systems after a human approves them on Telegram: " +
 			"kubectl requests on Kubernetes targets, shell commands on SSH hosts, SOPS operations on files encrypted with Google Cloud KMS. " +
+			"Use it only for what you can't do with your own access: every request costs a human's attention. " +
+			"Before calling run, check whether you can make the request without Nyyrikki. " +
+			"For example, agents usually have read-only Kubernetes access, so run kubectl get, describe and logs yourself, " +
+			"and use Nyyrikki only for what your own access denies, such as apply, delete, rollout restart or exec. " +
 			"Call list_targets first; its 'type' says how run reads 'args'. run waits for approval. " +
 			"elevate asks for a window of up to 30 minutes; pass its handle as 'elevation' to run without asking again.",
 	})
