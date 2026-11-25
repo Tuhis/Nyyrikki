@@ -58,7 +58,7 @@ jobs:
       # The installer checks the bootstrap cosign against digests in the
       # action itself, then the requested version's key-less signature.
       # Bumped by hand, like BuildKit below.
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
         with:
           cosign-release: v3.1.4
       # The CLI's licence notices (docs/09 D3, §5.3), before the image is
