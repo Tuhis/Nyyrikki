@@ -18,11 +18,11 @@ require (
 	golang.org/x/term v0.47.0
 	google.golang.org/api v0.289.0
 	google.golang.org/grpc v1.83.1
-	k8s.io/api v0.37.1
-	k8s.io/apimachinery v0.37.1
-	k8s.io/cli-runtime v0.37.1
-	k8s.io/client-go v0.37.1
-	k8s.io/kubectl v0.37.1
+	k8s.io/api v0.37.3
+	k8s.io/apimachinery v0.37.3
+	k8s.io/cli-runtime v0.37.3
+	k8s.io/client-go v0.37.3
+	k8s.io/kubectl v0.37.3
 	modernc.org/sqlite v1.61.0
 	sigs.k8s.io/yaml v1.6.0
 )
@@ -195,12 +195,12 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
-	k8s.io/component-base v0.37.1 // indirect
-	k8s.io/component-helpers v0.37.1 // indirect
+	k8s.io/component-base v0.37.3 // indirect
+	k8s.io/component-helpers v0.37.3 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
-	k8s.io/metrics v0.37.1 // indirect
-	k8s.io/streaming v0.37.1 // indirect
+	k8s.io/metrics v0.37.3 // indirect
+	k8s.io/streaming v0.37.3 // indirect
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd // indirect
 	modernc.org/libc v1.79.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
